@@ -27,6 +27,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test:foundation
-      - run: pnpm exec turbo run test
+      - run: pnpm --filter @sheet-agent/addin test
+      - run: pnpm exec turbo run test --filter='!@sheet-agent/addin'
       - run: pnpm validate:manifest
       - run: pnpm build
