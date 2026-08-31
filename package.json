@@ -7,7 +7,7 @@
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "eslint .",
-    "test": "node --test tests/foundation/*.test.mjs tests/addin-shell/*.test.mjs && pnpm --filter @sheet-agent/addin test && turbo run test --filter='!@sheet-agent/addin'",
+    "test": "node --test tests/foundation/*.test.mjs tests/addin-shell/*.test.mjs && pnpm -r --if-present test",
     "test:foundation": "node --test tests/foundation/*.test.mjs",
     "typecheck": "tsc -b && turbo run typecheck",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
