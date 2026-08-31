@@ -155,7 +155,7 @@ test("Office.js imports are confined to the Office.js adapter and add-in host", 
   for (const file of sourceFiles) {
     const source = await readFile(file, "utf8");
     if (!/(?:from\s+["']office-js["']|Office\.context|Excel\.run)/.test(source)) continue;
-    const path = relative(root, file);
+    const path = relative(root, file).replaceAll("\\", "/");
     if (!path.startsWith("packages/excel-adapter-officejs/") && !path.startsWith("apps/addin/")) {
       violations.push(path);
     }
