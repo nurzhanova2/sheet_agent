@@ -7,5 +7,6 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     restoreMocks: true,
+    server: { deps: { inline: ["@fluentui/react-components", "@fluentui/react-tabster", "tabster"] } },
   },
 });
