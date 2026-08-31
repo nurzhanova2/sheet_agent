@@ -44,6 +44,9 @@ importers:
       '@sheet-agent/excel-adapter-officejs':
         specifier: workspace:*
         version: link:../../packages/excel-adapter-officejs
+      '@sheet-agent/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       react:
         specifier: ^19.1.1
         version: 19.2.8
@@ -160,6 +163,12 @@ importers:
       '@sheet-agent/testkit':
         specifier: workspace:*
         version: link:../testkit
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@26.4.0)(jsdom@26.1.0)
+
+  packages/extensibility:
+    devDependencies:
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@26.4.0)(jsdom@26.1.0)
