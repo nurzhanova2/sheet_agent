@@ -1,1 +1,1 @@
-{ "name": "@sheet-agent/security", "version": "0.0.0", "private": true, "type": "module", "exports": { ".": "./src/index.ts" }, "scripts": { "build": "tsc -p tsconfig.json", "lint": "eslint src", "test": "node --test", "typecheck": "tsc -p tsconfig.json" } }
+{ "name": "@sheet-agent/security", "version": "0.0.0", "private": true, "type": "module", "exports": { ".": "./src/index.ts" }, "scripts": { "build": "tsc -p tsconfig.json", "lint": "eslint src", "test": "vitest run", "typecheck": "tsc -p tsconfig.json" }, "devDependencies": { "vitest": "^3.2.4" } }

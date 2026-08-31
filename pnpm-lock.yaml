@@ -181,7 +181,11 @@ importers:
 
   packages/observability: {}
 
-  packages/security: {}
+  packages/security:
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@26.4.0)(jsdom@26.1.0)
 
   packages/testkit:
     dependencies:
