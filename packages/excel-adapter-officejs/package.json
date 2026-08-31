@@ -1,0 +1,10 @@
+{
+  "name": "@sheet-agent/excel-adapter-officejs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "build": "tsc -p tsconfig.json", "lint": "eslint src", "test": "node --test", "typecheck": "tsc -p tsconfig.json" },
+  "dependencies": { "@sheet-agent/application": "workspace:*" },
+  "devDependencies": { "@types/office-js": "^1.0.564" }
+}

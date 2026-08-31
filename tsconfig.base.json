@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "declaration": true,
+    "composite": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true
+  }
+}

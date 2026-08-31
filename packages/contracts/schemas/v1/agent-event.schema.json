@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.sheet-agent.local/v1/agent-event.schema.json",
+  "title": "AgentEventV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "conversationId", "runId", "eventId", "timestamp", "type", "payload"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "conversationId": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "eventId": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "type": {
+      "enum": ["run.started", "status.changed", "message.delta", "tool.started", "tool.completed", "change.proposed", "run.completed", "run.failed", "run.cancelled"]
+    },
+    "payload": {}
+  }
+}

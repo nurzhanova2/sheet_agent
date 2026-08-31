@@ -1,0 +1,19 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./apps/addin" },
+    { "path": "./apps/server" },
+    { "path": "./packages/application" },
+    { "path": "./packages/agent" },
+    { "path": "./packages/excel-adapter-officejs" },
+    { "path": "./packages/excel-tools" },
+    { "path": "./packages/changes" },
+    { "path": "./packages/analysis" },
+    { "path": "./packages/llm" },
+    { "path": "./packages/contracts" },
+    { "path": "./packages/security" },
+    { "path": "./packages/observability" },
+    { "path": "./packages/testkit" },
+    { "path": "./packages/extensibility" }
+  ]
+}

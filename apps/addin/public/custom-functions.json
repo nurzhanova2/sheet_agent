@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/office-js/custom-functions.schema.json",
+  "functions": [
+    { "id": "AI", "name": "AI", "description": "Run an AI prompt for a cell value.", "result": { "type": "string" }, "parameters": [{ "name": "input", "description": "Prompt or value.", "type": "string" }] },
+    { "id": "AI.SUMMARIZE", "name": "AI.SUMMARIZE", "description": "Summarize text.", "result": { "type": "string" }, "parameters": [{ "name": "input", "description": "Text to summarize.", "type": "string" }] },
+    { "id": "AI.CLASSIFY", "name": "AI.CLASSIFY", "description": "Classify text.", "result": { "type": "string" }, "parameters": [{ "name": "input", "description": "Text to classify.", "type": "string" }] },
+    { "id": "AI.EXTRACT", "name": "AI.EXTRACT", "description": "Extract structured data.", "result": { "type": "string" }, "parameters": [{ "name": "input", "description": "Source text.", "type": "string" }] },
+    { "id": "AI.TRANSLATE", "name": "AI.TRANSLATE", "description": "Translate text.", "result": { "type": "string" }, "parameters": [{ "name": "input", "description": "Text and target language.", "type": "string" }] },
+    { "id": "AI.CLEAN", "name": "AI.CLEAN", "description": "Clean text.", "result": { "type": "string" }, "parameters": [{ "name": "input", "description": "Text to clean.", "type": "string" }] }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.sheet-agent.local/v1/tool-result.schema.json",
+  "title": "ToolResultV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "toolCallId", "success"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "toolCallId": { "type": "string", "minLength": 1 },
+    "success": { "type": "boolean" },
+    "data": {},
+    "error": { "$ref": "./api-error.schema.json" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "executionTimeMs": { "type": "number", "minimum": 0 },
+        "affectedRange": { "type": "string" }
+      },
+      "required": ["executionTimeMs"]
+    }
+  }
+}

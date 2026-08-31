@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.sheet-agent.local/v1/change-set.schema.json",
+  "title": "ChangeSetV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "description", "operations", "affectedRanges", "risk", "createdAt"],
+  "$defs": {
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sheet", "address"],
+      "properties": { "sheet": { "type": "string", "minLength": 1 }, "address": { "type": "string", "minLength": 1 } }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "type", "target", "before", "after", "risk"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "target": { "$ref": "#/$defs/range" },
+        "before": {},
+        "after": {},
+        "risk": { "enum": ["low", "medium", "high"] }
+      }
+    }
+  },
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "id": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "operations": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/operation" } },
+    "affectedRanges": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/range" } },
+    "risk": { "enum": ["low", "medium", "high"] },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

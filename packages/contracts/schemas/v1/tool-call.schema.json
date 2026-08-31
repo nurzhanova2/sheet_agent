@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.sheet-agent.local/v1/tool-call.schema.json",
+  "title": "ToolCallV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "toolCallId", "name", "arguments"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "toolCallId": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "arguments": { "type": "object" }
+  }
+}

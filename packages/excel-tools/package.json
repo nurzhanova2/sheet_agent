@@ -1,0 +1,17 @@
+{
+  "name": "@sheet-agent/excel-tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "build": "tsc -p tsconfig.json", "lint": "eslint src", "test": "vitest run", "typecheck": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "@sheet-agent/application": "workspace:*",
+    "@sheet-agent/contracts": "workspace:*",
+    "@sheet-agent/changes": "workspace:*"
+  },
+  "devDependencies": {
+    "@sheet-agent/testkit": "workspace:*",
+    "vitest": "^3.2.4"
+  }
+}
