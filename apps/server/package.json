@@ -1,10 +1,25 @@
 {
-  "name": "@sheet-agent/server",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "build": "tsc -p tsconfig.json", "lint": "eslint src", "test": "vitest run", "typecheck": "tsc -p tsconfig.json" },
-  "dependencies": { "@sheet-agent/llm": "workspace:*", "@sheet-agent/security": "workspace:*" },
-  "devDependencies": { "vitest": "^3.2.4" }
+    "name":  "@sheet-agent/server",
+    "version":  "0.0.0",
+    "private":  true,
+    "type":  "module",
+    "exports":  {
+                    ".":  "./src/index.ts"
+                },
+    "scripts":  {
+                    "build":  "tsc -p tsconfig.json --noEmit \u0026\u0026 esbuild src/node-server.ts --bundle --platform=node --format=esm --outfile=dist/server.mjs",
+                    "lint":  "eslint src",
+                    "test":  "vitest run",
+                    "typecheck":  "tsc -p tsconfig.json",
+                    "start":  "node --env-file=../../.env dist/server.mjs"
+                },
+    "dependencies":  {
+                         "@sheet-agent/llm":  "workspace:*",
+                         "@sheet-agent/security":  "workspace:*"
+                     },
+    "devDependencies":  {
+                            "vitest":  "^3.2.4",
+                            "@types/node":  "^26.4.0",
+                            "esbuild":  "^0.28.2"
+                        }
 }

@@ -148,7 +148,7 @@ test("application errors preserve stable codes and safe metadata", async () => {
 
 test("Office.js imports are confined to the Office.js adapter and add-in host", async () => {
   const sourceFiles = (await filesUnder(".")).filter(
-    (file) => /\.(?:ts|tsx|js|jsx|mjs)$/.test(file) && !file.includes("node_modules"),
+    (file) => /\.(?:ts|tsx|js|jsx|mjs)$/.test(file) && !/[\\/](?:node_modules|artifacts|dist|bin|obj)[\\/]/.test(file),
   );
   const violations = [];
 

@@ -36,6 +36,7 @@ export class CustomFunctionService {
   private async flush(): Promise<void> {
     if (!this.#pending.length || this.#active >= this.#options.maxConcurrency) { if (this.#pending.length) this.schedule(); return; }
     this.#active += 1; const batch = this.#pending.splice(0, this.#options.batchSize); const controller = new AbortController();
+    if (this.#pending.length && this.#active < this.#options.maxConcurrency) this.schedule();
     try {
       const results = await this.gateway.completeBatch(batch.map((item) => item.request), controller.signal);
       batch.forEach((item, index) => { const result = results[index]; const currentGeneration = batch.filter((candidate) => candidate.context.tenantId === item.context.tenantId).reduce((max, candidate) => Math.max(max, candidate.context.generation ?? 0), 0); const value = item.context.signal?.aborted ? "#CANCELLED!" : item.context.generation !== undefined && item.context.generation < currentGeneration ? "#STALE!" : result ?? "#AI!"; if (value !== "#STALE!" && value !== "#CANCELLED!") { const key = `${this.#options.contractVersion}:${item.context.tenantId}:${item.request.functionName}:${item.request.locale ?? "default"}:${item.request.input}`; this.#cache.set(key, { value, expiresAt: Date.now() + this.#options.cacheTtlMs }); } item.resolve(value); });
@@ -44,7 +45,11 @@ export class CustomFunctionService {
 }
 
 export class HttpCustomFunctionGateway implements CustomFunctionGateway {
-  constructor(private readonly endpoint: string, private readonly fetchImpl: typeof fetch = fetch) {}
+  // `fetch` must be called with the global object as its receiver. Storing the bare
+  // reference and calling it as `this.fetchImpl(...)` throws
+  // `TypeError: Failed to execute 'fetch' on 'Window': Illegal invocation` in the Office
+  // WebView, so the default is bound to the global.
+  constructor(private readonly endpoint: string, private readonly fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis)) {}
   async completeBatch(requests: readonly CustomFunctionRequest[], signal: AbortSignal): Promise<readonly string[]> {
     const response = await this.fetchImpl(this.endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requests }), signal });
     if (!response.ok) throw new Error(`custom-functions HTTP ${response.status}`);
@@ -57,5 +62,15 @@ export class HttpCustomFunctionGateway implements CustomFunctionGateway {
 declare const CustomFunctions: { associate(name: string, handler: (input: string) => Promise<string>): void } | undefined;
 export function registerCustomFunctions(service: CustomFunctionService): void {
   if (typeof CustomFunctions === "undefined") return;
-  for (const name of ["AI", "AI.SUMMARIZE", "AI.CLASSIFY", "AI.EXTRACT", "AI.TRANSLATE", "AI.CLEAN"] as const) CustomFunctions.associate(name, (input: string) => service.evaluate(name, input, { tenantId: "default", consent: true }));
+  const registrations = {
+    ASK: "AI",
+    SUMMARIZE: "AI.SUMMARIZE",
+    CLASSIFY: "AI.CLASSIFY",
+    EXTRACT: "AI.EXTRACT",
+    TRANSLATE: "AI.TRANSLATE",
+    CLEAN: "AI.CLEAN",
+  } as const;
+  for (const [id, name] of Object.entries(registrations)) {
+    CustomFunctions.associate(id, (input: string) => service.evaluate(name, input, { tenantId: "default", consent: true }));
+  }
 }

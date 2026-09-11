@@ -7,11 +7,14 @@
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "eslint .",
-    "test": "node --test tests/foundation/*.test.mjs tests/addin-shell/*.test.mjs && pnpm -r --if-present test",
+    "test": "node --test tests/foundation/*.test.mjs tests/addin-shell/*.test.mjs tests/installer/*.test.mjs && corepack pnpm -r --if-present test",
+    "test:installer": "node --test tests/installer/*.test.mjs",
+    "test:performance": "corepack pnpm --filter @sheet-agent/addin exec vitest run src/custom-functions/service.performance.test.ts --configLoader runner",
+    "build:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File installer/build-installer.ps1",
     "test:foundation": "node --test tests/foundation/*.test.mjs",
-    "typecheck": "tsc -b && turbo run typecheck",
-    "check": "pnpm lint && pnpm typecheck && pnpm test",
-    "validate:manifest": "office-addin-manifest validate apps/addin/manifest/manifest.dev.xml && office-addin-manifest validate apps/addin/manifest/manifest.prod.xml"
+    "typecheck": "tsc -b && corepack pnpm -r --if-present typecheck",
+    "check": "corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test",
+    "validate:manifest": "office-addin-manifest validate apps/addin/manifest/manifest.dev.xml && office-addin-manifest validate apps/addin/manifest/manifest.prod.xml && office-addin-manifest validate apps/addin/manifest/manifest.windows.xml"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",

@@ -1,5 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
-import { CustomFunctionService, type CustomFunctionGateway, type CustomFunctionRequest } from "./service.js";
+import { CustomFunctionService, HttpCustomFunctionGateway, type CustomFunctionGateway, type CustomFunctionRequest } from "./service.js";
+
+describe("HttpCustomFunctionGateway", () => {
+  // Regression: the Office WebView's native `fetch` brand-checks its receiver, so the
+  // default `fetchImpl` must be bound to the global. An unbound reference invoked as
+  // `this.fetchImpl(...)` throws "Failed to execute 'fetch' on 'Window': Illegal invocation".
+  it("invokes the global fetch with a valid receiver when no fetchImpl is injected", async () => {
+    const original = globalThis.fetch;
+    const seenReceivers: unknown[] = [];
+    globalThis.fetch = function fetchWithBrandCheck(this: unknown) {
+      seenReceivers.push(this);
+      if (this !== undefined && this !== globalThis) {
+        throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+      }
+      return Promise.resolve(new Response(JSON.stringify({ results: ["done"] }), { headers: { "content-type": "application/json" } }));
+    } as typeof fetch;
+    try {
+      const gateway = new HttpCustomFunctionGateway("https://localhost:47831/v1/custom-functions");
+      const results = await gateway.completeBatch([{ functionName: "AI", input: "hello" }], new AbortController().signal);
+      expect(results).toEqual(["done"]);
+      expect(seenReceivers).toEqual([globalThis]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
 
 describe("AI Custom Functions", () => {
   it("batches fill-down requests and never accepts API keys as arguments", async () => {

@@ -7,4 +7,12 @@ coverage/
 !.env.example
 *.log
 certs/
+.dotnet/
+artifacts/
+**/bin/
+**/obj/
+.ai/
+documentation/stages/
+RELEASE_NOTES.md
+AGENTS.md
 

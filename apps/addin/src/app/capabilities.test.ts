@@ -9,7 +9,8 @@ describe("detectCapabilities", () => {
       excelApi13: true,
       excelApi14: false,
       sharedRuntime12: false,
+      customFunctionsRuntime11: false,
     });
-    expect(isSetSupported).toHaveBeenCalledTimes(4);
+    expect(isSetSupported).toHaveBeenCalledTimes(5);
   });
 });

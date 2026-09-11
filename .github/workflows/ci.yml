@@ -30,3 +30,5 @@ jobs:
       - run: pnpm -r --if-present test
       - run: pnpm validate:manifest
       - run: pnpm build
+      - if: runner.os == 'Windows'
+        run: dotnet test apps/windows-companion/tests/SheetAgent.Companion.Tests.csproj -c Release

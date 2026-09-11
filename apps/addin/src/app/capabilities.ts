@@ -3,6 +3,7 @@ export interface AddinCapabilities {
   readonly excelApi13: boolean;
   readonly excelApi14: boolean;
   readonly sharedRuntime12: boolean;
+  readonly customFunctionsRuntime11: boolean;
 }
 
 interface RequirementSets {
@@ -15,5 +16,6 @@ export function detectCapabilities(requirements: RequirementSets): AddinCapabili
     excelApi13: requirements.isSetSupported("ExcelApi", "1.3"),
     excelApi14: requirements.isSetSupported("ExcelApi", "1.4"),
     sharedRuntime12: requirements.isSetSupported("SharedRuntime", "1.2"),
+    customFunctionsRuntime11: requirements.isSetSupported("CustomFunctionsRuntime", "1.1"),
   });
 }

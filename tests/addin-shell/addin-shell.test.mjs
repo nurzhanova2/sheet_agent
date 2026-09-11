@@ -44,13 +44,18 @@ test("capability service uses Office Requirement Sets instead of platform checks
 });
 
 test("task pane shell provides accessible landmarks and controls", async () => {
-  const app = await read("apps/addin/src/taskpane/App.tsx");
-  assert.match(app, /<header/);
-  assert.match(app, /<main/);
-  assert.match(app, /<form/);
-  assert.match(app, /aria-live="polite"/);
-  assert.match(app, /aria-label=/);
-  assert.match(app, /Send24Regular/);
+  const parts = await Promise.all([
+    read("apps/addin/src/taskpane/App.tsx"),
+    read("apps/addin/src/taskpane/components/TerminalHeader.tsx"),
+    read("apps/addin/src/taskpane/components/Composer.tsx"),
+    read("apps/addin/src/taskpane/components/AgentTranscript.tsx"),
+  ]);
+  const taskpane = parts.join("\n");
+  assert.match(taskpane, /<header/);
+  assert.match(taskpane, /<form/);
+  assert.match(taskpane, /aria-live="polite"/);
+  assert.match(taskpane, /aria-label="Send message"/);
+  assert.match(taskpane, /aria-label="Message"/);
 });
 
 test("styles support narrow panes, keyboard focus and reduced motion", async () => {

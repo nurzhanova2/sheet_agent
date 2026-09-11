@@ -15,11 +15,21 @@
   <SupportUrl DefaultValue="https://localhost:3000/"/>
   <AppDomains><AppDomain>https://localhost:3000</AppDomain></AppDomains>
   <Hosts><Host Name="Workbook" /></Hosts>
+  <Requirements><Sets DefaultMinVersion="1.2"><Set Name="ExcelApi" MinVersion="1.2"/></Sets></Requirements>
   <DefaultSettings><SourceLocation DefaultValue="https://localhost:3000/taskpane.html"/></DefaultSettings>
   <Permissions>ReadWriteDocument</Permissions>
   <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Requirements><bt:Sets DefaultMinVersion="1.1"><bt:Set Name="CustomFunctionsRuntime"/></bt:Sets></Requirements>
     <Hosts>
       <Host xsi:type="Workbook">
+        <AllFormFactors>
+          <ExtensionPoint xsi:type="CustomFunctions">
+            <Script><SourceLocation resid="CustomFunctions.Script.Url"/></Script>
+            <Page><SourceLocation resid="CustomFunctions.Page.Url"/></Page>
+            <Metadata><SourceLocation resid="CustomFunctions.Metadata.Url"/></Metadata>
+            <Namespace resid="CustomFunctions.Namespace"/>
+          </ExtensionPoint>
+        </AllFormFactors>
         <DesktopFormFactor>
           <FunctionFile resid="Commands.Url"/>
           <ExtensionPoint xsi:type="PrimaryCommandSurface">
@@ -48,12 +58,14 @@
       <bt:Urls>
         <bt:Url id="Commands.Url" DefaultValue="https://localhost:3000/commands.html"/>
         <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:3000/taskpane.html"/>
-        <bt:Url id="CustomFunctions.Url" DefaultValue="https://localhost:3000/custom-functions.html"/>
+        <bt:Url id="CustomFunctions.Script.Url" DefaultValue="https://localhost:3000/assets/customFunctions.js"/>
+        <bt:Url id="CustomFunctions.Page.Url" DefaultValue="https://localhost:3000/custom-functions.html"/>
         <bt:Url id="CustomFunctions.Metadata.Url" DefaultValue="https://localhost:3000/custom-functions.json"/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="Group.Label" DefaultValue="Excel AI"/>
         <bt:String id="Taskpane.Label" DefaultValue="AI Assistant"/>
+        <bt:String id="CustomFunctions.Namespace" DefaultValue="AI"/>
       </bt:ShortStrings>
       <bt:LongStrings><bt:String id="Taskpane.Description" DefaultValue="Open the Excel AI Assistant task pane."/></bt:LongStrings>
     </Resources>

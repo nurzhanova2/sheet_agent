@@ -2,7 +2,7 @@
 
 **Статус:** Proposed  
 **Охват:** полный продукт, без разделения на «временный MVP» и «настоящую версию»  
-**Количество этапов:** 15  
+**Количество этапов:** 19
 **Единица оценки:** человеко-неделя (чел.-нед.)
 
 ## 1. Подход к реализации
@@ -32,6 +32,10 @@
 | 13 | Enterprise, security и compliance | Tenant policies, audit, privacy, threat hardening | 7–11 чел.-нед. |
 | 14 | Quality, packaging и rollout | Evals, E2E, performance, deployment и operations | 8–12 чел.-нед. |
 | 15 | Qwen key и Windows production integration | Локальный ключ, authless Windows режим и финальная provider wiring | 2–4 чел.-нед. |
+| 16 | Qwen/LiteLLM end-to-end | Рабочий streaming chat, server и Custom Functions API | 3–5 чел.-нед. |
+| 17 | Windows Companion | Localhost service, DPAPI, settings и startup | 4–6 чел.-нед. |
+| 18 | Windows Installer | Manifest deployment, certificate и setup.exe | 3–5 чел.-нед. |
+| 19 | Final QA и Release | E2E, signing, release artifacts и GA | 3–5 чел.-нед. |
 
 Суммарная инженерная оценка: **86–129 чел.-нед.** без учёта product discovery, юридической сертификации и длительных внешних согласований. Это не календарный срок: несколько потоков могут выполняться параллельно после стабилизации контрактов.
 
@@ -106,3 +110,8 @@ flowchart LR
 ## 7. Управление планом
 
 Для каждого этапа ведутся backlog, owner, risks и decision log. Изменение публичного контракта требует ADR. Новая write capability не может появиться вне Tool Registry и ChangeSet. Новая интеграция с данными должна пройти privacy review и получить отдельный permission scope.
+
+- [Этап 16 — Qwen/LiteLLM](./stages/16-qwen-litellm-integration.md)
+- [Этап 17 — Windows Companion](./stages/17-windows-companion.md)
+- [Этап 18 — Excel integration и installer](./stages/18-excel-installer.md)
+- [Этап 19 — Final testing and release](./stages/19-final-testing-release.md)
