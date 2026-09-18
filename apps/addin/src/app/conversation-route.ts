@@ -46,6 +46,37 @@ const CONCEPT_RE = new RegExp(
 const CONCEPT_RE_RU =
   /^\s*(?:кстати[,:\s]+|а\s+|и\s+)?(?:что такое|что значит|что означает|объясни|поясни|расскажи (?:о|про|мне о)|чем отлич|в ч[её]м (?:разниц|отлич)|как работает|как считается|зачем|почему|приведи пример|дай пример)/i;
 
+/**
+ * Stage 26.8 §7/§64 — "чем медиана отличается от среднего?".
+ *
+ * A DEFINITION question that happens to name two statistics. `classifyIntent`
+ * sees the statistics and `strongAnalytical` then suppresses the concept
+ * branch, so it routed to analysis — which is wrong with or without V2, and was
+ * only noticed because §64 asks for the routing to be exactly right.
+ *
+ * Kept narrow on purpose. The rescue applies ONLY where the misroute comes
+ * from: a contrast whose two terms are statistics vocabulary, which is exactly
+ * what made `classifyIntent` call it analysis. A contrast about the data
+ * itself — "чем январь отличается от февраля по выручке" — carries no such
+ * vocabulary, so it is untouched and keeps whatever route it has today.
+ */
+const DEFINITIONAL_CONTRAST_RE =
+  /(?:^|\s)(?:чем\s+[^?.!]{0,40}?\s*отлича|в\s+ч[ёе]м\s+(?:разниц|отлич)|difference between|how (?:is|does|do)\s+[^?.!]{0,40}?\s*differ)/i;
+
+/**
+ * A period named in the sentence makes it about DATA, not about a definition.
+ *
+ * No word boundaries: JS `\b` is ASCII-only even under /u, so `\bянв` matches
+ * nothing at all. The prefixes are specific instead, and an over-match only
+ * makes the rescue below decline — which is the direction that cannot hurt.
+ */
+const PERIOD_TOKEN_RE =
+  /(?:янв\p{L}*|фев\p{L}*|март\p{L}*|апрел\p{L}*|ма[йея]|июн\p{L}*|июл\p{L}*|август\p{L}*|сентябр\p{L}*|октябр\p{L}*|ноябр\p{L}*|декабр\p{L}*|квартал\p{L}*|полугод\p{L}*|год[ауе]?|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|quarter|month|year)/iu;
+
+function isDefinitionalContrast(text: string): boolean {
+  return DEFINITIONAL_CONTRAST_RE.test(text) && !/\d/.test(text) && !PERIOD_TOKEN_RE.test(text) && !hasWorkbookDeixis(text);
+}
+
 // Deixis that forces a workbook turn even when the sentence opens like a concept
 // question ("what is this table about").
 const WORKBOOK_DEIXIS_RE =
@@ -159,11 +190,15 @@ export function routeTurn(text: string, ctx: RouteContext): TurnRoute {
     /\bmean(?:s|ing|t)?\b/i.test(trimmed) &&
     !/\b(?:the|a|arithmetic|average|sample|population|group|overall)\s+mean\b/i.test(trimmed) &&
     !/\bmean\s+(?:of|value|for|per|by)\b/i.test(trimmed);
-  const strongAnalytical = intent.analytical && !(meansVerb && intent.matched.every((m) => m === "mean"));
+  // `intent.analytical` is the precondition, not an obstacle: the only contrast
+  // this rescues is one whose terms ARE statistics, because that is the only
+  // one the analytical lexicon was ever going to capture.
+  const definitional = isDefinitionalContrast(trimmed) && intent.analytical && !knownEntity;
+  const strongAnalytical = intent.analytical && !(meansVerb && intent.matched.every((m) => m === "mean")) && !definitional;
 
   // 1. GENERAL_CHAT — a concept question with no workbook pull at all.
   if (
-    isConceptQuestion(trimmed) &&
+    (isConceptQuestion(trimmed) || definitional) &&
     !deixis &&
     !knownEntity &&
     !strongAnalytical &&

@@ -92,3 +92,32 @@ describe("detectComparison", () => {
     expect(detectComparison("compare 2025 and 2025")).toBeNull();
   });
 });
+
+// Stage 26.8 §7/§64 — a definition question that names two statistics.
+describe("Stage 26.8 — definitional contrast", () => {
+  const ctx = { hasSelection: true, knownEntities: [], hasPriorResult: false };
+
+  it("routes 'чем медиана отличается от среднего?' to general chat", () => {
+    expect(routeTurn("Чем медиана отличается от среднего?", ctx).route).toBe("general_chat");
+    expect(routeTurn("В чём разница между медианой и средним?", ctx).route).toBe("general_chat");
+    expect(routeTurn("What's the difference between mean and median?", ctx).route).toBe("general_chat");
+  });
+
+  it("leaves a contrast about the DATA alone", () => {
+    // no statistics vocabulary — untouched by the rescue
+    // ("Чем отличается X от Y" is matched by the pre-existing concept regex and
+    //  was general chat before this stage; these two are not.)
+    for (const text of ["Чем январь отличается от февраля по выручке?", "Чем Север отличается от Юга по выручке?"]) {
+      expect(routeTurn(text, ctx).route, text).not.toBe("general_chat");
+    }
+  });
+
+  it("a period or a figure in the sentence makes it about data again", () => {
+    expect(routeTurn("Чем среднее за январь отличается от среднего за февраль?", ctx).route).not.toBe("general_chat");
+    expect(routeTurn("Чем среднее 2024 отличается от среднего 2025?", ctx).route).not.toBe("general_chat");
+  });
+
+  it("workbook deixis still wins", () => {
+    expect(routeTurn("Чем медиана в этой таблице отличается от среднего?", ctx).route).not.toBe("general_chat");
+  });
+});

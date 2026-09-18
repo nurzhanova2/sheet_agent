@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import type { MeasureKind } from "../measure-compatibility.js";
-import type { RankingField, TemporalPoint, TemporalSeries } from "./types.js";
+import type { DirectionChangeEvent, RankingField, TemporalPoint, TemporalSeries } from "./types.js";
 
 const EPS = 1e-9;
 
@@ -239,6 +239,47 @@ export function detectDirectionChanges(series: TemporalSeries, epsilon = EPS): D
     last = s;
   }
   return { changes: atIndexes.length, atIndexes, periods: vs.length };
+}
+
+export interface DirectionChangeEventsResult {
+  readonly changes: number;
+  readonly events: readonly DirectionChangeEvent[];
+}
+
+/**
+ * Stage 24.9 §14–§16 — the FULL event detail behind `detectDirectionChanges`'s
+ * bare count: one `DirectionChangeEvent` per reversal pivot, with the exact
+ * canonical period + source cell (§18 — "В какие периоды он менял
+ * направление?" reads these events directly, never re-derives them).
+ *
+ * Zero-delta policy (§14, documented + tested §51): a period-to-period delta
+ * of ~0 is skipped entirely when comparing signs — it neither creates a new
+ * direction nor counts as a reversal on its own. This is the SAME sign
+ * sequence `detectDirectionChanges` already computes; the two must never
+ * disagree on the count.
+ */
+export function computeDirectionChangeEvents(series: TemporalSeries, epsilon = EPS): DirectionChangeEventsResult {
+  const pts = series.points;
+  if (pts.length < 3) return { changes: 0, events: [] };
+  const events: DirectionChangeEvent[] = [];
+  let lastDirection: "positive" | "negative" | undefined;
+  for (let i = 1; i < pts.length; i += 1) {
+    const d = pts[i]!.value - pts[i - 1]!.value;
+    const sign: -1 | 0 | 1 = Math.abs(d) <= epsilon ? 0 : d > 0 ? 1 : -1;
+    if (sign === 0) continue;
+    const direction: "positive" | "negative" = sign > 0 ? "positive" : "negative";
+    if (lastDirection && direction !== lastDirection) {
+      events.push({
+        pivotCanonical: pts[i - 1]!.canonicalPeriod,
+        pivotHeaderPath: pts[i - 1]!.periodLabel,
+        previousDirection: lastDirection,
+        nextDirection: direction,
+        sourceCell: pts[i - 1]!.cell,
+      });
+    }
+    lastDirection = direction;
+  }
+  return { changes: events.length, events };
 }
 
 // --- ranking / filtering by change --------------------------------

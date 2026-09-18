@@ -121,6 +121,121 @@ export interface EventRef {
   readonly sourceVersion: string;
 }
 
+/** Stage 24.9 §14–§18 — one direction-reversal pivot, persisted verbatim. */
+export interface DirectionChangeEventEntry {
+  readonly pivotCanonical: string;
+  readonly pivotHeaderPath: string;
+  readonly previousDirection: "positive" | "negative";
+  readonly nextDirection: "positive" | "negative";
+  readonly sourceCell: string;
+}
+
+/**
+ * Stage 24.9 §17/§18/§41–§43 — the single-winner "менял направление чаще
+ * всего" result. "Покажи его динамику." / "В какие периоды он менял
+ * направление?" resolve DIRECTLY from this — never by re-analysing.
+ */
+export interface DirectionChangeAnalysisRef {
+  readonly id: string;
+  readonly turnId: string;
+  readonly order: number;
+  readonly createdAt: number;
+  readonly metricKey: string;
+  readonly directionChangeCount: number;
+  readonly events: readonly DirectionChangeEventEntry[];
+  readonly sourceRange: string;
+  readonly sourceVersion: string;
+}
+
+/**
+ * Stage 24.9 §4/§8–§10 — an EXPLICIT, bounded set of named metrics under
+ * conversational discussion ("Активы и Обязательства"). Reused as the
+ * CANDIDATE SET for a follow-up growth comparison ("какой из них вырос
+ * сильнее…") — the comparison itself is always recomputed fresh; only the
+ * membership is inherited.
+ */
+export interface MetricSetRef {
+  readonly id: string;
+  readonly turnId: string;
+  readonly order: number;
+  readonly createdAt: number;
+  readonly metricKeys: readonly string[];
+  readonly origin: "explicit_user_list" | "previous_result_set" | "previous_ranking" | "previous_filter" | "derived_analysis";
+  readonly sourceRange: string;
+  readonly sourceVersion: string;
+}
+
+/** One (metric, score) row of an ordered ranking, for a ResultSetRef. */
+export interface ResultSetEntry {
+  readonly key: string;
+  readonly score: number;
+}
+
+/**
+ * Stage 24.9 §5–§7/§35/§39/§55 — the ORDERED output of a ranking-shaped
+ * analysis (volatility / stability today). "Какой из них самый
+ * волатильный?" slices this stored order directly — the full-workbook
+ * ranking is NEVER recomputed for such a follow-up.
+ */
+export interface ResultSetRef {
+  readonly id: string;
+  readonly turnId: string;
+  readonly order: number;
+  readonly createdAt: number;
+  readonly operation: string;
+  readonly scoreField: string;
+  readonly rows: readonly ResultSetEntry[];
+  readonly sourceRange: string;
+  readonly sourceVersion: string;
+}
+
+/**
+ * Stage 25.1.3f §3/§5/§6 — the FULL structured result of a successful
+ * analytical turn: the continuation universe a compatible follow-up
+ * ("теперь покажи только те, что снизились") filters, slices or ranks
+ * WITHOUT re-deriving anything from the workbook or from the visible
+ * markdown table.
+ *
+ * Deliberately SEPARATE from `ResultSetRef` (an ordered (metric, score)
+ * ranking) and from the turn's narrowed `PrimaryAnswerRef`: a comparison
+ * carries several analytical fields per metric (startValue/endValue/
+ * absoluteChange/percentageChange), and a later winner-reduction turn may
+ * legitimately narrow what the USER SEES to one row while the analytical
+ * continuation universe stays whole (§6 — visible answer state and
+ * analytical continuation state are separate).
+ */
+export interface AnalyticalResultSetRef {
+  readonly id: string;
+  readonly turnId: string;
+  readonly order: number;
+  readonly createdAt: number;
+  /** The deterministic tool that produced it ("change.compare_periods", "set.filter", ...). */
+  readonly operation: string;
+  readonly columns: readonly string[];
+  readonly rows: readonly (readonly CellValue[])[];
+  /** The metric universe, in result order — the "из них" candidate set. */
+  readonly metricKeys: readonly string[];
+  /** The interval the result was computed over, when the run established one. */
+  readonly startCanonical?: string;
+  readonly endCanonical?: string;
+  readonly sourceRange: string;
+  readonly sourceVersion: string;
+}
+
+/**
+ * Stage 24.9 §29/§37 — the single metric currently "in focus" for a bare
+ * pronoun ("его", "он"). Updated by ANY analysis that pins down one metric
+ * (an adjacent-event winner, a direction-change winner, a single-metric
+ * subject) — one shared authority, so a pronoun never needs a per-operation
+ * special case (§75 — generalize, don't special-case per sentence).
+ */
+export interface MetricFocusRef {
+  readonly metricKey: string;
+  readonly order: number;
+  readonly sourceRange: string;
+  readonly sourceVersion: string;
+}
+
 /**
  * Stage 24.8 §27–§29 — the last table an analytical query successfully ran
  * against. When the live selection collapses to a single cell INSIDE this
@@ -268,6 +383,12 @@ export type ClarificationKind =
   /** Stage 24.4 — a bounded agent task paused for a clarification; the answer
    *  resumes the SAME `AgentLoopState` (carried in `agentContinuation`). */
   | "agent"
+  /** Stage 25.1.3 §15/§16 — the Stage 25 ANALYTICAL planner (not the flat
+   *  legacy agent) paused for a clarification; the answer resumes the SAME
+   *  `AgentLoopState` through `runAnalyticalPlanner`'s own tool registry,
+   *  never the flat agent's. Distinct from "agent" so the resume dispatch
+   *  never crosses tool registries. */
+  | "analytical_agent"
   /** Stage 24.5 §15 — a remembered result has two plausible entity columns; the
    *  answer picks which column an entity action (highlight / copy) grounds on. */
   | "entity_action"
@@ -347,6 +468,17 @@ export interface SessionMemory {
   readonly lastEventRef?: EventRef;
   /** Stage 24.8 §27–§29 — the last table an analytical query ran against. */
   readonly lastAnalyticalTable?: AnalyticalTableContextRef;
+  /** Stage 24.9 — the most recent superlative direction-change winner. */
+  readonly lastDirectionChangeRef?: DirectionChangeAnalysisRef;
+  /** Stage 24.9 — the most recent explicit / reused multi-metric candidate set. */
+  readonly lastMetricSetRef?: MetricSetRef;
+  /** Stage 24.9 — the most recent ordered ranking-shaped result. */
+  readonly lastResultSetRef?: ResultSetRef;
+  /** Stage 25.1.3f §3 — the most recent FULL analytical result table, the
+   *  structured input universe for a compatible analytical follow-up. */
+  readonly lastAnalyticalResultSetRef?: AnalyticalResultSetRef;
+  /** Stage 24.9 §29/§37 — the metric currently "in focus" for a bare pronoun. */
+  readonly lastMetricFocusRef?: MetricFocusRef;
   readonly resolvedEntities: readonly ResolvedWorkbookRef[];
   readonly pendingClarification?: PendingClarification;
   /** Monotonic ordering counter for every remembered object. */

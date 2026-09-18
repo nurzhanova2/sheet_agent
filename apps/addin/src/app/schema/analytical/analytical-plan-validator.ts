@@ -23,6 +23,7 @@ const MIN_OBS: Readonly<Record<string, number>> = {
   time_series: 2,
   argmax: 1,
   argmin: 1,
+  compare_time_series: 1,
 };
 
 export function validatePlan(
@@ -101,9 +102,18 @@ export function validatePlan(
   // rank must carry a ranking field once it reaches validation.
   if (plan.operation === "rank" && !plan.rankingField) errors.push("rank requires a ranking field");
 
+  // Stage 24.9 §10/§57 — a multi-metric comparison needs at least TWO
+  // candidate metrics; a single-metric "comparison" is a contradiction.
+  if (plan.operation === "compare_time_series" || plan.operation === "compare_growth") {
+    if (plan.subject.kind !== "metric_set" || plan.subject.members.length < 2) {
+      errors.push("a comparison needs at least two named metrics");
+    }
+  }
+  if (plan.operation === "compare_growth" && !plan.interval) errors.push("compare_growth requires a resolved interval");
+
   // enough observations for a temporal series operation
   const min = MIN_OBS[plan.operation];
-  if (min && (plan.operation === "volatility" || plan.operation === "stability" || plan.operation === "trend" || plan.operation === "monotonicity" || plan.operation === "direction_change" || plan.operation === "time_series")) {
+  if (min && (plan.operation === "volatility" || plan.operation === "stability" || plan.operation === "trend" || plan.operation === "monotonicity" || plan.operation === "direction_change" || plan.operation === "time_series" || plan.operation === "compare_time_series")) {
     const set = getTemporalSeriesSet(schema, grids, plan.subject, periodIndex);
     const anyEnough = set.some((s) => s.points.length >= min);
     if (!anyEnough) {

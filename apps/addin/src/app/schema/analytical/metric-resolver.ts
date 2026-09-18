@@ -260,6 +260,67 @@ export function traceMetricResolution(needle: string, index: MetricIndex): Metri
   };
 }
 
+// ---------------------------------------------------------------------------
+// Stage 24.9 §8/§9/§27/§28 — MULTI-METRIC resolution ("Активы и
+// Обязательства", "Ликвидные активы и доля ликвидных активов в активах").
+//
+// The whole phrase is tried as ONE metric FIRST — this protects a legitimate
+// label that itself contains a connector word ("корреспондентские счета и
+// вклады", §27/§28) from ever being split. Only when the whole phrase does
+// NOT resolve does it get split on top-level connectors and each segment
+// resolved independently via the SAME `resolveMetric` used everywhere else —
+// no separate multi-metric matching logic, no greedy longest-label merge.
+// ---------------------------------------------------------------------------
+
+export type MetricSetResolution =
+  | { readonly kind: "resolved"; readonly entries: readonly MetricEntry[] }
+  | { readonly kind: "ambiguous"; readonly needle: string; readonly candidates: readonly string[] }
+  | { readonly kind: "unknown"; readonly needle: string };
+
+const METRIC_SET_CONNECTOR_RE = /\s*,\s*(?:и\s+)?|\s+и\s+|\s+против\s+|\s+vs\.?\s+|\s+versus\s+/giu;
+
+function splitMetricSetText(text: string): string[] {
+  return text
+    .split(METRIC_SET_CONNECTOR_RE)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * Resolves "A и B [и C]" against the index. §9 — no greedy merge: "Ликвидные
+ * активы и доля ликвидных активов в активах" always resolves as the two
+ * EXACT metrics, never one metric whose label happens to contain the other.
+ */
+export function resolveMetricSet(text: string, index: MetricIndex): MetricSetResolution {
+  const raw = text.trim();
+  if (raw === "") return { kind: "unknown", needle: raw };
+
+  // §27/§28 — protect a legitimate single label containing a connector word
+  // ("корреспондентские счета и вклады"). Only an EXACT or morphological
+  // match protects the whole phrase — a "prefix" match (a real single metric
+  // like "Активы" is a literal string-prefix of "Активы и Обязательства")
+  // must NOT swallow a genuine two-metric phrase.
+  const whole = resolveMetric(raw, index);
+  if (whole.kind === "resolved" && (whole.how === "exact_normalized" || whole.how === "morphological_exact")) {
+    return { kind: "resolved", entries: [whole.entry] };
+  }
+
+  const parts = splitMetricSetText(raw);
+  if (parts.length < 2) {
+    return whole.kind === "ambiguous"
+      ? { kind: "ambiguous", needle: whole.needle, candidates: whole.candidates }
+      : { kind: "unknown", needle: raw };
+  }
+  const entries: MetricEntry[] = [];
+  for (const part of parts) {
+    const r = resolveMetric(part, index);
+    if (r.kind === "ambiguous") return { kind: "ambiguous", needle: r.needle, candidates: r.candidates };
+    if (r.kind === "unknown") return { kind: "unknown", needle: r.needle };
+    entries.push(r.entry);
+  }
+  return { kind: "resolved", entries };
+}
+
 function dedupeClassified<T extends { entry: MetricEntry }>(entries: readonly T[]): T[] {
   const seen = new Set<string>();
   const out: T[] = [];

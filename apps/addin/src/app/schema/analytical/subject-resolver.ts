@@ -8,7 +8,7 @@
 
 import type { TableSchema } from "../schema-induction.js";
 import type { AnalyticalIntent, ResolvedSubject, SubjectScope } from "./types.js";
-import { AXIS_NOUN_RE, DIMENSION_NOUN_RE, buildMetricIndex, resolveMetric, type MetricIndex } from "./metric-resolver.js";
+import { AXIS_NOUN_RE, DIMENSION_NOUN_RE, buildMetricIndex, resolveMetric, resolveMetricSet, type MetricIndex } from "./metric-resolver.js";
 
 export type SubjectResolution =
   | { readonly kind: "resolved"; readonly subject: ResolvedSubject; readonly scope: SubjectScope; readonly how: string }
@@ -90,4 +90,25 @@ export function resolveSubject(
     return { kind: "resolved", subject: { kind: "column_measure", column: r.entry.column }, scope: "single_metric", how: r.how };
   }
   return { kind: "unknown", needle };
+}
+
+/**
+ * Stage 24.9 §8–§10 — resolves an EXPLICIT multi-metric phrase ("Активы и
+ * Обязательства") into a bounded `metric_set` subject. Row-axis only (§9
+ * scope) — a `column_metrics` (transposed) table declines rather than
+ * silently guessing a column-based multi-metric shape.
+ */
+export function resolveMetricSetSubject(
+  metricSetText: string,
+  schema: TableSchema,
+  index: MetricIndex = buildMetricIndex(schema),
+): SubjectResolution {
+  const needle = metricSetText.trim();
+  if (schema.orientation === "column_metrics") return { kind: "unknown", needle };
+  const r = resolveMetricSet(needle, index);
+  if (r.kind === "ambiguous") return { kind: "ambiguous", needle: r.needle, candidates: r.candidates };
+  if (r.kind === "unknown") return { kind: "unknown", needle: r.needle };
+  const members = r.entries.map((e) => e.member).filter((m): m is NonNullable<typeof m> => Boolean(m));
+  if (members.length < r.entries.length) return { kind: "unknown", needle };
+  return { kind: "resolved", subject: { kind: "metric_set", members }, scope: "metric_set", how: "metric_set" };
 }

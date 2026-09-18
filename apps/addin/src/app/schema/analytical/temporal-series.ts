@@ -72,7 +72,7 @@ export function getPointValue(
 /** One member label per resolved subject, for compare/filter (§60 "each metric"
  *  scope) — a single-metric subject yields exactly one label. */
 function subjectMembers(subject: ResolvedSubject): { readonly key: string; readonly single: ResolvedSubject }[] {
-  if (subject.kind === "each_metric") {
+  if (subject.kind === "each_metric" || subject.kind === "metric_set") {
     return subject.members.map((m) => ({ key: m.display, single: { kind: "row_axis_member" as const, member: m } }));
   }
   if (subject.kind === "each_column") {
@@ -194,7 +194,7 @@ export function getTemporalSeriesSet(
   subject: ResolvedSubject,
   index: PeriodIndex,
 ): TemporalSeries[] {
-  if (subject.kind === "each_metric") {
+  if (subject.kind === "each_metric" || subject.kind === "metric_set") {
     return subject.members.map((m) => seriesForRowSubject(schema, grids, m.rowIndex, m.display, index));
   }
   if (subject.kind === "each_column") {
