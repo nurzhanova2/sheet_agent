@@ -57,6 +57,55 @@ export function sameMeasureGroup(a: MeasureKind, b: MeasureKind): boolean {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Stage 24.9 §22–§25 — SEMANTIC metric classes, a product-meaning taxonomy
+// distinct from `MeasureKind` (a unit-compatibility grouping). Two metrics can
+// share a `MeasureKind` (both "unknown_numeric") yet mean very different
+// things ("Активы" = amount, "уровень долларизации" = rate) — classification
+// here reads the LABEL first (language-agnostic-ish product cues), falling
+// back to number-format / MeasureKind evidence, never workbook layout alone.
+// ---------------------------------------------------------------------------
+
+export type SemanticMetricClass = "amount" | "ratio" | "share" | "rate" | "percentage" | "count" | "index" | "unknown";
+
+const SHARE_LABEL_RE = /доля\p{L}*|share\b/iu;
+const RATE_LABEL_RE = /уровень\p{L}*|ставк\p{L}*|темп\p{L}*|коэффициент\p{L}*|\brate\b/iu;
+const INDEX_LABEL_RE = /индекс\p{L}*|\bindex\b/iu;
+const COUNT_LABEL_RE = /количеств\p{L}*|штук\p{L}*|числ[оа]\p{L}*|\bcount\b/iu;
+const PERCENT_LABEL_RE = /процент\p{L}*|%|\bpercent(?:age)?\b/iu;
+
+/**
+ * Classifies a metric's SEMANTIC (product) class from its label text plus
+ * fallback evidence — a number-format percent hint and/or its `MeasureKind`.
+ * Label cues take precedence: "доля ликвидных активов в активах" is a SHARE
+ * even before any format is inspected; "Активы" is an amount regardless of
+ * which column happens to be percent-formatted elsewhere in the row.
+ */
+export function classifySemanticMetricClass(
+  label: string,
+  opts: { readonly percentFormatted?: boolean; readonly measureKind?: MeasureKind } = {},
+): SemanticMetricClass {
+  if (SHARE_LABEL_RE.test(label)) return "share";
+  if (RATE_LABEL_RE.test(label)) return "rate";
+  if (INDEX_LABEL_RE.test(label)) return "index";
+  if (COUNT_LABEL_RE.test(label)) return "count";
+  if (PERCENT_LABEL_RE.test(label)) return "percentage";
+  if (opts.measureKind === "ratio") return "ratio";
+  if (opts.measureKind === "count") return "count";
+  if (opts.percentFormatted || opts.measureKind === "percentage" || opts.measureKind === "percentage_change") return "percentage";
+  // A numeric metric with no percentage / share / rate / index / count cue —
+  // by far the common case for this domain (financial amounts) — defaults to
+  // "amount" rather than "unknown", so an ordinary metric is never silently
+  // left out of a semantic-class comparison by lack of a positive signal.
+  return "amount";
+}
+
+/** True for every semantic class that behaves like "a percentage" for
+ *  exclusion purposes (§23) — ratio / share / rate / percentage. */
+export function isPercentageLike(cls: SemanticMetricClass): boolean {
+  return cls === "ratio" || cls === "share" || cls === "rate" || cls === "percentage";
+}
+
 /** A short label for a measure kind (developer diagnostics / grouping display). */
 export function measureKindLabel(kind: MeasureKind): string {
   switch (kind) {

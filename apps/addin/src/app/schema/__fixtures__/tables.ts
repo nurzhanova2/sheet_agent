@@ -303,6 +303,57 @@ export function fixtureTwoIntervalAndEvents(): FixtureSnapshot {
   return mk("TwoInt", "TwoInt!A1:D4", values, fmt);
 }
 
+// Stage 24.9 — direction-change / monotonic-symmetry / semantic-class-filter
+// / multi-metric fixture. Row-metrics orientation, the SAME proven 2-level
+// header shape as `fixtureBalanceLike` / `fixtureMetricPrecedence` (dates +
+// "абс./%" sub-header) — the real Баланс!B2:Q25 shape. 5 canonical points.
+//
+//   Активы:        1000 → 1100 → 1200 → 1300 → 1400   (never decreased, low volatility)
+//   Обязательства:   500 →  480 →  460 →  440 →  420   (never increased, low volatility)
+//   Ликвидные активы: 200 →  220 →  210 →  230 →  225   (3 direction reversals — the
+//                                                         unique direction-change winner;
+//                                                         moderate volatility, ~0.0764)
+//   доля ликвидных активов в активах (share, %): 0.20→0.21→0.22→0.23→0.24 (never
+//                                                 decreased; ~zero volatility)
+//   уровень долларизации вкладов физлиц (rate, %): 0.45→0.40→0.35→0.50→0.55 (1
+//     reversal; the LARGEST raw volatility score of all 5 — the unfiltered
+//     volatility winner, and the metric a percentage-exclusion filter must remove)
+export function fixtureDirectionAndSets(): FixtureSnapshot {
+  const periodSerials = [45292, 45383, 45474, 45566, 45658]; // 01.01/01.04/01.07/01.10.2024, 01.01.2025
+  const level0: CellValue[] = [""];
+  const level1: CellValue[] = ["Наименование показателя"];
+  for (const s of periodSerials) {
+    level0.push(s, "");
+    level1.push("абс.", "%");
+  }
+  const series: Record<string, readonly number[]> = {
+    "Активы": [1000, 1100, 1200, 1300, 1400],
+    "Обязательства": [500, 480, 460, 440, 420],
+    "Ликвидные активы": [200, 220, 210, 230, 225],
+    "доля ликвидных активов в активах": [0.2, 0.21, 0.22, 0.23, 0.24],
+    "уровень долларизации вкладов физлиц": [0.45, 0.4, 0.35, 0.5, 0.55],
+  };
+  // percent-only rows (share/rate): BOTH data columns are percent-formatted —
+  // there is no separate "abs" figure (same convention as `fixtureMetricPrecedence`).
+  const percentOnlyRows = new Set(["доля ликвидных активов в активах", "уровень долларизации вкладов физлиц"]);
+  const rows: CellValue[][] = [level0, level1];
+  for (const [name, abs] of Object.entries(series)) {
+    const row: CellValue[] = [name];
+    abs.forEach((v, i) => {
+      row.push(v, Number(((i + 1) * 0.01).toFixed(4)));
+    });
+    rows.push(row);
+  }
+  const fmt = rows.map((_, r) => {
+    if (r === 0) return level0.map((v, c) => (c === 0 ? "General" : typeof v === "number" ? "dd.mm.yyyy" : "General"));
+    if (r === 1) return level1.map(() => "General");
+    const rowName = String(rows[r]![0]);
+    if (percentOnlyRows.has(rowName)) return level1.map((_v, c) => (c === 0 ? "General" : "0.00%"));
+    return level1.map((v, c) => (c === 0 ? "General" : String(v) === "%" ? "0.0%" : "#,##0"));
+  });
+  return mk("Баланс9", "Баланс9!A1:K7", rows, fmt);
+}
+
 // Balance-like acceptance fixture (§38) -----------------------------
 export function fixtureBalanceLike(): FixtureSnapshot {
   const periodSerials = [45292, 45597, 45658, 45931, 45962]; // 5 dated snapshots

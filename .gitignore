@@ -16,3 +16,11 @@ documentation/stages/
 RELEASE_NOTES.md
 AGENTS.md
 
+
+# Stage 27 — the vendored Pyodide runtime (~39 MB). Reproduced by
+# `node apps/addin/scripts/vendor-pyodide.mjs`, never committed.
+apps/addin/public/pyodide/
+
+# Local scratch: ad-hoc probe tests and generated prompt measurements.
+apps/addin/src/__tmp/
+apps/addin/prompt-audit.json

@@ -42,16 +42,20 @@ import {
   rememberChart,
   rememberComposite,
   rememberDerivedResult,
+  rememberDirectionChange,
   rememberEvent,
+  rememberMetricFocus,
+  rememberMetricSet,
   rememberPeriod,
   rememberRanking,
   rememberResult,
+  rememberResultSet,
   rememberRowSet,
   resolveReference,
   setClarification,
 } from "../app/conversation-memory.js";
 import type { PendingClarification, ResultKind, ResultRef, RowSetRef, SessionMemory } from "../app/session-memory.js";
-import { isExtremeQuestion, isMutationRequest, isTransformRequest, routeTurn } from "../app/conversation-route.js";
+import { hasWorkbookDeixis, isConceptQuestion, isExtremeQuestion, isMutationRequest, isTransformRequest, routeTurn } from "../app/conversation-route.js";
 import { revalidateSource, revalidateSources, sourceVersionOf } from "../app/source-freshness.js";
 import { formatDisplayCell } from "../app/format-cell.js";
 import { detectResultAction, type ResultActionIntent } from "../app/result-action-intent.js";
@@ -62,14 +66,49 @@ import { detectGroupedRanking, planGroupedRanking } from "../app/grouped-ranking
 import { induceTableSchema, type TableSchema } from "../app/schema/schema-induction.js";
 import { detectSchemaIntent, runSchemaAnalysis } from "../app/schema/schema-result.js";
 import { runAnalyticalAnalysis, type AnalyticalTrace } from "../app/schema/analytical/analytical-analysis.js";
-import type { InheritedComposite, InheritedRanking } from "../app/schema/analytical/analytical-compiler.js";
+import type { InheritedComposite, InheritedMetricSet, InheritedRanking } from "../app/schema/analytical/analytical-compiler.js";
 import { detectAnalyticalIntent } from "../app/schema/analytical/analytical-intent.js";
 import { buildMetricIndex, resolveMetric } from "../app/schema/analytical/metric-resolver.js";
 import { buildPeriodIndex } from "../app/schema/analytical/period-index.js";
 import type { InheritedPeriod } from "../app/schema/analytical/period-resolver.js";
 import { getPointValue } from "../app/schema/analytical/temporal-series.js";
 import { detectEventFollowup } from "../app/event-followup.js";
+import { detectDirectionPeriodsFollowup, detectResultSetFollowup } from "../app/resultset-followup.js";
+import { classifyIntent } from "../app/intent.js";
+import type { AnalysisGrids } from "../app/schema/matrix-analysis.js";
+import { runAnalyticalPlanner, type AnalyticalPlannerOutcome } from "../analytics-agent/runtime.js";
+import { analyticalPlannerEnabled } from "../analytics-agent/feature-flag.js";
+import type { AnalyticalInherited } from "../analytics-agent/tool-registry.js";
+import {
+  COMPOUND_AWARE_OPERATIONS,
+  countAnalyticalClauses,
+  detectOperationKind,
+  detectRequestedRankingBasis,
+  detectTemporalMode,
+  explicitCandidateSet,
+  extractRequestedCardinality,
+  hasSecondAnalyticalClause,
+  isAnalyticalFollowUp,
+  isExploratoryRequest,
+} from "../analytics-agent/semantic-frame.js";
+import { commitPlannerOutputs } from "../analytics-agent/canonical-refs.js";
+import { containsForbiddenLeak } from "../analytics-agent/narrator.js";
 import { BUILD_INFO, buildInfoLine } from "../app/build-info.js";
+// ----- Stage 26.8: the unified analytical engine, in production -------------
+import { runAnalyticalEngine } from "../analytical-engine-v2/engine.js";
+import { unifiedAnalyticalEngineV2Enabled, unifiedAnalyticalEngineV2FlagSource } from "../analytical-engine-v2/feature-flag.js";
+import { classifyTurnOwner } from "../analytical-engine-v2/production/turn-owner.js";
+import { beginTurn, finishTurn, recordAnalyticalExecution, turnLedger } from "../analytical-engine-v2/production/turn-ledger.js";
+import {
+  containsInternalLeak,
+  fallbackNote,
+  failureMessage as v2FailureMessage,
+  leakReplacement,
+  progressLabel,
+  provenanceLine,
+} from "../analytical-engine-v2/production/answer-ux.js";
+import { EMPTY_ANALYTICAL_STATE, withoutSuspension, type AnalyticalConversationState } from "../analytical-engine-v2/state/conversation-state.js";
+import { getAnalyticalTraces, renderTrace } from "../analytical-engine-v2/debug/analytical-trace.js";
 import { commitTrace, getResultActionTraces, type MutableResultActionTrace, type ResultActionTrace } from "../app/result-action-trace.js";
 import { commonNumericColumns, planCrossSheetComparison } from "../app/cross-sheet-compare.js";
 import { buildCompareReport, isCompareError } from "../app/commands/compare.js";
@@ -366,6 +405,25 @@ export interface SessionMemoryDebug {
   };
   /** Stage 24.8 §27–§29 — the last table an analytical query ran against. */
   readonly lastAnalyticalTable?: { readonly sheetName: string; readonly sourceRange: string };
+  /** Stage 24.9 — the most recent superlative direction-change winner. */
+  readonly lastDirectionChangeRef?: { readonly metricKey: string; readonly directionChangeCount: number; readonly events: number };
+  /** Stage 24.9 — the most recent explicit / reused multi-metric candidate set. */
+  readonly lastMetricSetRef?: { readonly metricKeys: readonly string[]; readonly origin: string };
+  /** Stage 24.9 — the most recent ordered ranking-shaped result. */
+  readonly lastResultSetRef?: { readonly operation: string; readonly rows: readonly { readonly key: string; readonly score: number }[] };
+  /** Stage 25.1.3f §3/§20 — the standing analytical continuation universe:
+   *  which operation produced it, its filterable fields, its metric universe
+   *  and its size. Observability only — never surfaced to the user. */
+  readonly lastAnalyticalResultSetRef?: {
+    readonly operation: string;
+    readonly columns: readonly string[];
+    readonly metricKeys: readonly string[];
+    readonly rowCount: number;
+  };
+  /** Stage 24.9 §29/§37 — the metric currently "in focus" for a bare pronoun. */
+  readonly lastMetricFocusRef?: { readonly metricKey: string };
+  /** Stage 25.1.2 §2/§3/§53 — the most recent FINAL executed comparison interval. */
+  readonly lastPeriodRef?: { readonly startCanonical: string; readonly endCanonical?: string };
 }
 
 export interface AgentController {
@@ -393,6 +451,14 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
   // Stage 24 — typed conversational memory. Prose history is NOT the canonical
   // representation of a previous analytical result; structured refs live here.
   const sessionMemoryRef = useRef<SessionMemory>(emptySessionMemory());
+  // Stage 26.8 §12/§13 — the ONE V2 analytical conversation state, held for
+  // the life of a chat session and reset with it. Deliberately separate from
+  // SessionMemory: two engines, two memories, no accidental sharing.
+  const analyticalStateRef = useRef<AnalyticalConversationState>(EMPTY_ANALYTICAL_STATE);
+  // §21 — a turn in flight, and the sequence number that makes a cancelled
+  // one unable to append its answer afterwards.
+  const v2AbortRef = useRef<AbortController | null>(null);
+  const turnSeqRef = useRef(0);
 
   const append = useCallback((entry: TranscriptEntry) => setEntries((current) => [...current, entry]), []);
   const setActivity = useCallback((id: string, status: ActivityStatus, detail?: string) => {
@@ -481,6 +547,46 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
 
       // ----- Stage 24.5.2 §1/§18: developer-only build + trace inspector.
       // Not a registered slash command (kept out of /help); dev/manual-QA only.
+      // §19 — the V2 developer surface. Not registered as a slash command (it
+      // stays out of /help): owner, planner decisions, tools, result ids,
+      // primary/supporting, references, table + freshness identity,
+      // clarification state, serialization recovery and the narrator path —
+      // none of which ever appears in a normal answer (§18).
+      if (/^\/debug[\s-]?analytical(?:[\s-]engine)?\s*$/i.test(text)) {
+        setLanguage(lang);
+        append({ kind: "command", id: nextId("cmd"), text });
+        const traces = getAnalyticalTraces();
+        const ledger = turnLedger();
+        const st = analyticalStateRef.current;
+        const body = [
+          "```",
+          buildInfoLine(),
+          `analytical engine v2: ${unifiedAnalyticalEngineV2Enabled() ? "ON" : "OFF"}  (${unifiedAnalyticalEngineV2FlagSource()})`,
+          `planner transport: ${typeof chatClient.planAnalyticalTurn === "function" ? "available" : "MISSING"}`,
+          "",
+          "TURN OWNERSHIP (most recent last)",
+          ledger.length === 0
+            ? "  (no turns yet)"
+            : ledger
+                .map(
+                  (e) =>
+                    `  ${e.owner === "V2_OWNED" ? "V2 " : "V1 "} ${e.ownerReason.padEnd(24)} engines=[${e.engines.join(", ") || "none"}] outcome=${e.outcome ?? "-"}  ${JSON.stringify(e.request).slice(0, 60)}`,
+                )
+                .join("\n"),
+          "",
+          `V2 CONVERSATION STATE`,
+          `  table: ${st.tableRef ? `${st.tableRef.sheetName}!${st.tableRef.sourceRange} @ ${st.tableRef.sourceVersion}` : "(none)"}`,
+          `  suspended: ${st.suspended ? `"${st.suspended.question}" over ${st.suspended.results.length} result(s)` : "(none)"}`,
+          `  recent: ${(st.recentResults ?? []).map((r) => `${r.tool}(${r.role ?? "primary"})`).join(", ") || "(none)"}`,
+          "",
+          `V2 TRACES (${traces.length}, most recent last)`,
+          traces.length === 0 ? "  (none yet)" : traces.map((t2) => renderTrace(t2)).join("\n\n"),
+          "```",
+        ].join("\n");
+        append({ kind: "response", id: nextId("res"), streaming: false, text: body });
+        return;
+      }
+
       if (/^\/debug(?:-context)?\s*$/i.test(text)) {
         setLanguage(lang);
         append({ kind: "command", id: nextId("cmd"), text });
@@ -490,6 +596,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
           "```",
           buildInfoLine(),
           `bundle build: ${BUILD_INFO.buildId}   commit: ${BUILD_INFO.gitCommit}`,
+          `analytical engine v2: ${unifiedAnalyticalEngineV2Enabled() ? "ON" : "OFF"}  (${unifiedAnalyticalEngineV2FlagSource()})`,
           "",
           `memory: results=${m.recentResults.length} lastResultId=${m.lastResultId ?? "-"} ` +
             `lastRowSet=${m.lastRowSet?.id ?? "-"} lastChart=${m.lastChart?.id ?? "-"} ` +
@@ -1151,6 +1258,219 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         }
       };
 
+      // ----- Stage 25: LLM analytical planner (composes Stage 24.x tools) --
+      // Runs when the Stage 24.7–24.9 deterministic COMPILER declines a
+      // schema-backed table — a request no known phrase/cue covers (§0/§57).
+      // The planner never computes a workbook number itself: it composes the
+      // read-only tools in analytics-agent/tool-registry.ts, and a SEPARATE
+      // narrator pass (gated by the same evidence check as the Stage 24.4
+      // bounded agent) turns the verified observations into prose (§32/§39).
+      const runStage25Planner = async (
+        schema: TableSchema,
+        grids: AnalysisGrids,
+        analyticalText: string,
+        resume?: { readonly state: AgentLoopState; readonly answer: string },
+        // Stage 25.1.3c §4/§5/§10 — an already-resolved pronoun subject
+        // (Stage 25.1.3a's `subjectOverride` handoff), carried into the
+        // planner's own context as an AUTHORITATIVE binding rather than
+        // dropped at this boundary. Must survive every fallback path that
+        // hands a turn to the Stage 25 planner, not just the direct route.
+        resolvedSubject?: string,
+      ): Promise<boolean> => {
+        if (!analyticalPlannerEnabled() || typeof chatClient.decideAgentStep !== "function" || typeof chatClient.narrate !== "function") return false;
+        // §44 — every analytical route says it ran, so "who analysed this turn?"
+        // has an answer a test can assert instead of a comment claiming it.
+        recordAnalyticalExecution("stage25_planner");
+        const controller = new AbortController();
+        const mf = sessionMemoryRef.current.lastMetricFocusRef;
+        const ms = sessionMemoryRef.current.lastMetricSetRef;
+        const rs = sessionMemoryRef.current.lastResultSetRef;
+        const pr = sessionMemoryRef.current.lastPeriodRef;
+        // Stage 25.1.3f §3/§4 — the previous successful analytical turn's FULL
+        // structured result: this turn's follow-up filters/slices THAT, instead
+        // of re-resolving a fresh workbook universe (§9).
+        const art = sessionMemoryRef.current.lastAnalyticalResultSetRef;
+        const inherited: AnalyticalInherited = {
+          ...(resolvedSubject ? { resolvedSubject: { metricKey: resolvedSubject, source: "conversation_pronoun", authoritative: true } } : {}),
+          ...(mf ? { metricFocus: { metricKey: mf.metricKey } } : {}),
+          ...(ms ? { metricSet: { metricKeys: ms.metricKeys } } : {}),
+          ...(rs ? { resultSet: { operation: rs.operation, scoreField: rs.scoreField, rows: rs.rows } } : {}),
+          ...(art
+            ? {
+                resultTable: {
+                  operation: art.operation,
+                  columns: art.columns,
+                  rows: art.rows,
+                  ...(art.startCanonical ? { startCanonical: art.startCanonical } : {}),
+                  ...(art.endCanonical ? { endCanonical: art.endCanonical } : {}),
+                },
+              }
+            : {}),
+          ...(pr ? { period: { startCanonical: pr.startCanonical, ...(pr.endCanonical ? { endCanonical: pr.endCanonical } : {}) } } : {}),
+        };
+
+        // Stage 25.1/25.1.1 §17/§6/§7/§3–§5/§15–§17 — the request's semantic
+        // invariants, audited against what actually got executed below.
+        const requestedCandidateSet = explicitCandidateSet(analyticalText, buildMetricIndex(schema));
+        const requestedTemporalMode = detectTemporalMode(analyticalText);
+        const requestedOperationKind = detectOperationKind(analyticalText);
+        const requestedClauseCount = countAnalyticalClauses(analyticalText);
+        // Stage 25.1.3 §23/§24 — only meaningful for a genuinely exploratory
+        // ask; a bare number elsewhere in the sentence is not a cardinality.
+        const requestedExploratoryCardinality = isExploratoryRequest(analyticalText) ? extractRequestedCardinality(analyticalText) : null;
+        // Stage 25.1.3b §2–§6 — a "changed the most" comparison across
+        // heterogeneous metrics defaults to percentage-magnitude ranking.
+        const requestedRankingBasis = detectRequestedRankingBasis(analyticalText);
+
+        const actId = nextId("act");
+        append({ kind: "activity", id: actId, activity: "analyzing", title: uiText(lang, "analyzing"), status: "running" });
+        const seenActivity = new Set<string>();
+        let outcome: AnalyticalPlannerOutcome;
+        try {
+          outcome = await runAnalyticalPlanner({
+            taskId: nextId("plan"),
+            text: analyticalText,
+            schema,
+            grids,
+            language: lang === "ru" ? "ru" : "en",
+            inherited,
+            requestedCandidateSet,
+            requestedTemporalMode,
+            requestedOperationKind,
+            requestedClauseCount,
+            requestedExploratoryCardinality,
+            requestedRankingBasis,
+            ...(resume ? { resume } : {}),
+            decidePlanner: (dctx) =>
+              chatClient.decideAgentStep!(
+                {
+                  originalUserRequest: dctx.originalUserRequest,
+                  language: dctx.language,
+                  history: boundedHistory(conversationRef.current).map((m) => ({ role: m.role, content: m.content })),
+                  workbookContext: dctx.workbookContext,
+                  toolSchemas: dctx.toolSchemas,
+                  observations: dctx.observations,
+                  iteration: dctx.iteration,
+                  remainingSteps: dctx.remainingSteps,
+                  remainingReads: dctx.remainingReads,
+                  ...(model ? { model } : {}),
+                },
+                controller.signal,
+              ),
+            narrate: (messages) => chatClient.narrate!(messages, controller.signal, model),
+            onStep: (step) => {
+              const label = agentActivityLabel(step, lang, seenActivity);
+              if (label) append({ kind: "activity", id: nextId("act"), activity: "calculating", title: label, status: "done" });
+            },
+          });
+        } catch (error) {
+          setActivity(actId, "error");
+          append({ kind: "notice", id: nextId("ntc"), tone: "error", text: error instanceof Error ? error.message : "The analytical planner could not run." });
+          return true;
+        }
+        setActivity(actId, "done");
+
+        if (outcome.kind === "clarify") {
+          // Stage 25.1.2 §8/§10 — the model's own clarifying question, never
+          // shown raw: guard it exactly like a final narration.
+          const question = containsForbiddenLeak(outcome.question)
+            ? lang === "ru"
+              ? "Уточните, пожалуйста, какие показатели и период вы имеете в виду."
+              : "Could you clarify which metrics and period you mean?"
+            : outcome.question;
+          // Stage 25.1.3 §15/§16 — a SUSPENDED analytical request: `kind:
+          // "analytical_agent"` (never "agent") so the resume dispatch below
+          // never routes this through the flat legacy agent's tool registry.
+          // `sourceIdentity` here is the RANGE's own freshness token (not the
+          // whole-workbook identity) — a mutation to an unrelated sheet, a
+          // clarification round-trip, or a planner retry must never
+          // invalidate it (§20/§21); only a real change to THIS range does.
+          sessionMemoryRef.current = setClarification(
+            sessionMemoryRef.current,
+            buildAgentClarification(analyticalText, question, outcome.candidates, outcome.state, schema.sourceVersion, "analytical_agent"),
+          );
+          append({ kind: "response", id: nextId("res"), streaming: false, text: question });
+          conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: question }];
+          return true;
+        }
+
+        if (outcome.kind === "failed") {
+          const en =
+            outcome.reasonKey === "model_error" || outcome.reasonKey === "repeated_tool_call"
+              ? "I couldn't work out a reliable way to answer that. Could you rephrase it or narrow it down?"
+              : outcome.reasonKey === "read_budget" || outcome.reasonKey === "step_budget"
+                ? "I couldn't finish investigating this within the limits for one turn. Try narrowing the question to a specific metric or period."
+                : "I wasn't able to complete that analysis.";
+          const ru =
+            outcome.reasonKey === "model_error" || outcome.reasonKey === "repeated_tool_call"
+              ? "Не удалось составить надёжный план ответа. Переформулируйте запрос или сузьте его."
+              : outcome.reasonKey === "read_budget" || outcome.reasonKey === "step_budget"
+                ? "Не удалось завершить анализ в пределах лимитов за один ход. Уточните вопрос — конкретный показатель или период."
+                : "Не удалось выполнить этот анализ.";
+          const body = lang === "ru" ? ru : en;
+          append({ kind: "response", id: nextId("res"), streaming: false, text: body });
+          conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: body }];
+          return true;
+        }
+
+        // Stage 25.1 §9/§24/§28/§49 — grounded numbers, wrong shape: the plan
+        // answered a different question (a widened candidate set, an
+        // internally inconsistent change row). Never narrated, never shown,
+        // and — per §9 — must NOT steal the conversation's prior valid focus.
+        if (outcome.kind === "semantic_failed") {
+          const body =
+            lang === "ru"
+              ? "Не удалось убедиться, что результат точно отвечает на заданный вопрос (расхождение в наборе показателей или в периоде). Уточните запрос."
+              : "I couldn't confirm the result actually answers what was asked (a candidate-set or period mismatch). Please rephrase or narrow the request.";
+          append({ kind: "response", id: nextId("res"), streaming: false, text: body });
+          conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: body }];
+          return true;
+        }
+
+        // handled
+        append({ kind: "response", id: nextId("res"), streaming: false, text: outcome.body });
+        conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: outcome.body }];
+        sessionMemoryRef.current = rememberAnalyticalTable(sessionMemoryRef.current, { sheetName: schema.sheetName, sourceRange: schema.sourceRange });
+        // Stage 25.1.3f §5/§6 — a SUCCESSFUL analytical execution commits its
+        // structured continuation state, period. The narrator falling back to
+        // the deterministic table is a PRESENTATION outcome, and a superlative
+        // turn narrowing the VISIBLE answer to one row is a display decision —
+        // neither may prevent the next turn from seeing the universe this turn
+        // computed. `commitPlannerOutputs` therefore runs off the run's own
+        // observations, outside the `outcome.primary` guard below (which only
+        // governs the user-visible ResultRef).
+        const plannerTurnId = nextId("turn");
+        if (outcome.primary && outcome.primary.columns && outcome.primary.rows) {
+          sessionMemoryRef.current = rememberResult(sessionMemoryRef.current, {
+            turnId: plannerTurnId,
+            kind: "temporal_analysis",
+            title: outcome.primary.tool,
+            spec: { op: "analytical_planner", tool: outcome.primary.tool },
+            columns: outcome.primary.columns,
+            rows: outcome.primary.rows.map((r) => r.map((c) => c as CellValue)),
+            rowsTruncated: outcome.primary.truncated ?? false,
+            facts: [],
+            sourceSheet: schema.sheetName,
+            sourceRange: schema.sourceRange,
+            sourceVersion: schema.sourceVersion,
+            resolved: [],
+          });
+        }
+        // Stage 25.1 §4/§5/§6 — the planner's own outputs are canonical refs
+        // too, not just a generic ResultRef: commit whichever shape the run
+        // produced (a focus winner, an explicit set, an ordered ranking, an
+        // interval, and — Stage 25.1.3f §3 — the full continuation universe)
+        // into the SAME SessionMemory fields the Stage 24.x fast path writes —
+        // one authoritative owner, not a parallel memory.
+        sessionMemoryRef.current = commitPlannerOutputs(
+          sessionMemoryRef.current,
+          { turnId: plannerTurnId, sourceRange: schema.sourceRange, sourceVersion: schema.sourceVersion, requestText: analyticalText },
+          outcome.state.observations,
+          outcome.state.steps,
+        );
+        return true;
+      };
+
       // ----- Stage 24.7: universal analytical-intent compiler ------------
       // Sits between the proven flat routes and the model. Compiles a temporal /
       // ranking / comparison intent against the induced TableSchema and executes
@@ -1175,9 +1495,16 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
           const useKnownTable = Boolean(
             liveSel && liveSel.rowCount === 1 && liveSel.columnCount === 1 && known && cellWithinRange(liveSel.address, known.sourceRange),
           );
-          const snap = useKnownTable
+          let snap = useKnownTable
             ? await readAddressSnapshot(port, known!.sourceRange).catch(() => undefined)
             : await readSelectionSnapshot(port).catch(() => undefined);
+          // Stage 25.1.2 §4/§6 — a schema-aware analytical conversation must
+          // not decline to the legacy flat analyzer just because the live
+          // selection could not be read this turn (moved, or a transient
+          // failure): retry against the remembered analytical table first.
+          if (!snap && known) {
+            snap = await readAddressSnapshot(port, known.sourceRange).catch(() => undefined);
+          }
           if (!snap) return "flat";
           let startsBelowRow1 = false;
           try {
@@ -1234,6 +1561,18 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             if (s1 && e1 && s2 && e2) inheritedComposite = { interval1: { start: s1, end: e1 }, interval2: { start: s2, end: e2 } };
           }
 
+          // Stage 24.9 §35/§36/§50 — rehydrate the prior MetricSetRef's
+          // members as the CANDIDATE SET for a growth-comparison pronoun
+          // follow-up ("какой из них вырос сильнее…").
+          let inheritedMetricSet: InheritedMetricSet | undefined;
+          const msr = sessionMemoryRef.current.lastMetricSetRef;
+          if (msr) {
+            const members = msr.metricKeys
+              .map((key) => schema.rowAxis.find((m) => m.display === key))
+              .filter((m): m is NonNullable<typeof m> => Boolean(m));
+            if (members.length === msr.metricKeys.length && members.length > 0) inheritedMetricSet = { members };
+          }
+
           const outcome = runAnalyticalAnalysis(
             schema,
             grids,
@@ -1243,6 +1582,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             subjectOverride,
             inheritedRanking,
             inheritedComposite,
+            inheritedMetricSet,
           );
           const toTraceField = (t: AnalyticalTrace): NonNullable<ResultActionTrace["analyticalCompiler"]> => ({
             originalText: t.originalText,
@@ -1263,7 +1603,23 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             assumptions: t.assumptions,
           });
 
-          if (outcome.kind === "decline") return "flat";
+          if (outcome.kind === "decline") {
+            // Stage 25 §57 — never fall to the legacy flat analyzer for a
+            // schema-backed table without trying tool composition first.
+            if (!analyticalPlannerEnabled() || typeof chatClient.decideAgentStep !== "function" || typeof chatClient.narrate !== "function") return "flat";
+            setLanguage(lang);
+            setBusy(true);
+            committed = true;
+            selectionRef.current = snap;
+            sessionMemoryRef.current = rememberAnalyticalTable(sessionMemoryRef.current, { sheetName: schema.sheetName, sourceRange: schema.sourceRange });
+            if (!suppressCommandEcho) append({ kind: "command", id: nextId("cmd"), text: analyticalText });
+            // Stage 25.1.3c §4/§9 — the legacy compiler declining this turn
+            // must not drop an already-resolved pronoun subject: the Stage 25
+            // planner needs it just as much as the compiler would have.
+            await runStage25Planner(schema, grids, analyticalText, undefined, subjectOverride);
+            append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
+            return "handled";
+          }
 
           // committed — this turn is analytical-schema work.
           setLanguage(lang);
@@ -1277,6 +1633,24 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             sourceRange: schema.sourceRange,
           });
           if (!suppressCommandEcho) append({ kind: "command", id: nextId("cmd"), text: analyticalText });
+
+          // Stage 25.1.1 §5/§35/§36 — Stage 24.x has NO compiled operation for
+          // any of these kinds (peak-distance, down/up-then pattern, stable
+          // growth, mean deviation) — whatever it decided (clarify / error /
+          // even a "successful" but structurally wrong plan) is never a
+          // legitimate answer to THIS class of request. Skip straight to the
+          // planner rather than showing an irrelevant clarification.
+          if (
+            outcome.kind !== "handled" &&
+            detectOperationKind(analyticalText) !== null &&
+            analyticalPlannerEnabled() &&
+            typeof chatClient.decideAgentStep === "function" &&
+            typeof chatClient.narrate === "function"
+          ) {
+            await runStage25Planner(schema, grids, analyticalText, undefined, subjectOverride);
+            append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
+            return "handled";
+          }
 
           if (outcome.kind === "clarify") {
             acTrace.analyticalCompiler = toTraceField(outcome.trace);
@@ -1294,6 +1668,14 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
           }
 
           if (outcome.kind === "error") {
+            // Stage 25.1 §39/§94 — a schema-aware table must never surface a
+            // raw compiler error ("не удалось разрешить период" etc.) when
+            // the planner can still attempt the request via tool composition.
+            if (analyticalPlannerEnabled() && typeof chatClient.decideAgentStep === "function" && typeof chatClient.narrate === "function") {
+              await runStage25Planner(schema, grids, analyticalText, undefined, subjectOverride);
+              append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
+              return "handled";
+            }
             acTrace.analyticalCompiler = toTraceField(outcome.trace);
             acTrace.outcome = "error";
             commitTrace(acTrace);
@@ -1301,6 +1683,45 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: outcome.message }];
             append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
             return "handled";
+          }
+
+          // Stage 25.1/25.1.1 §12–§14/§21/§35/§36/§90 — a compiled, VALID plan
+          // is still not a full/correct answer when: (a) it covers only ONE
+          // clause of a multi-clause request (§14 "partial fast-path match is
+          // not success"); (b) the sentence names an operation kind Stage
+          // 24.x structurally cannot represent (§5/§35/§36 — "a generic
+          // growth route must NOT win" for peak-distance/pattern/stable-
+          // growth/mean-deviation requests); or (c) an explicit temporal mode
+          // ("previous_to_last"/"first_to_last") was requested but the
+          // executed interval is a different pair of periods (§6–§8/§41 —
+          // the exact release-blocker case). One semantic retry through the
+          // planner (§8/§26), never a silently dropped clause or substituted
+          // period.
+          const detectedOperationKind = detectOperationKind(analyticalText);
+          const detectedTemporalMode = detectTemporalMode(analyticalText);
+          const periodMismatch =
+            detectedTemporalMode !== null &&
+            outcome.plan.interval !== undefined &&
+            (() => {
+              const sorted = [...periodIndexForInherit.points].sort((a, b) => a.orderKey - b.orderKey);
+              if (sorted.length < 2) return false;
+              const expected =
+                detectedTemporalMode === "previous_to_last"
+                  ? [sorted[sorted.length - 2]!.canonical, sorted[sorted.length - 1]!.canonical]
+                  : [sorted[0]!.canonical, sorted[sorted.length - 1]!.canonical];
+              const executed = [outcome.plan.interval!.start.canonical, outcome.plan.interval!.end.canonical];
+              return expected[0] !== executed[0] || expected[1] !== executed[1];
+            })();
+          if (
+            (hasSecondAnalyticalClause(analyticalText) && !COMPOUND_AWARE_OPERATIONS.has(outcome.plan.operation)) ||
+            detectedOperationKind !== null ||
+            periodMismatch
+          ) {
+            if (analyticalPlannerEnabled() && typeof chatClient.decideAgentStep === "function" && typeof chatClient.narrate === "function") {
+              await runStage25Planner(schema, grids, analyticalText, undefined, subjectOverride);
+              append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
+              return "handled";
+            }
           }
 
           // handled
@@ -1392,6 +1813,48 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
               sourceVersion: schema.sourceVersion,
             });
           }
+          if (outcome.directionChangeWinner) {
+            sessionMemoryRef.current = rememberDirectionChange(sessionMemoryRef.current, {
+              turnId: acTurnId,
+              metricKey: outcome.directionChangeWinner.metricKey,
+              directionChangeCount: outcome.directionChangeWinner.count,
+              events: outcome.directionChangeWinner.events.map((e) => ({
+                pivotCanonical: e.pivotCanonical,
+                pivotHeaderPath: e.pivotHeaderPath,
+                previousDirection: e.previousDirection,
+                nextDirection: e.nextDirection,
+                sourceCell: e.sourceCell,
+              })),
+              sourceRange: schema.sourceRange,
+              sourceVersion: schema.sourceVersion,
+            });
+          }
+          if (outcome.metricSetLabels && outcome.metricSetLabels.length > 0) {
+            sessionMemoryRef.current = rememberMetricSet(sessionMemoryRef.current, {
+              turnId: acTurnId,
+              metricKeys: outcome.metricSetLabels,
+              origin: outcome.metricSetOrigin ?? "derived_analysis",
+              sourceRange: schema.sourceRange,
+              sourceVersion: schema.sourceVersion,
+            });
+          }
+          if (outcome.resultSet) {
+            sessionMemoryRef.current = rememberResultSet(sessionMemoryRef.current, {
+              turnId: acTurnId,
+              operation: outcome.resultSet.operation,
+              scoreField: outcome.resultSet.scoreField,
+              rows: outcome.resultSet.rows,
+              sourceRange: schema.sourceRange,
+              sourceVersion: schema.sourceVersion,
+            });
+          }
+          if (outcome.focusMetricKey) {
+            sessionMemoryRef.current = rememberMetricFocus(sessionMemoryRef.current, {
+              metricKey: outcome.focusMetricKey,
+              sourceRange: schema.sourceRange,
+              sourceVersion: schema.sourceVersion,
+            });
+          }
           acTrace.analyticalCompiler = { ...toTraceField(outcome.trace), ...(sessionMemoryRef.current.lastResultId ? { resultId: sessionMemoryRef.current.lastResultId } : {}) };
           acTrace.outcome = "analytical_result";
           commitTrace(acTrace);
@@ -1428,15 +1891,22 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
       const finalizeAgentRun = (state: AgentLoopState, userRequest: string, sourceIdentity?: string): void => {
         if (state.status === "awaiting_clarification" && state.pendingClarification) {
           const pc = state.pendingClarification;
+          // Stage 25.1.2 §8/§10 — the model's own clarifying question, never
+          // shown raw.
+          const question = containsForbiddenLeak(pc.question)
+            ? lang === "ru"
+              ? "Уточните, пожалуйста, запрос."
+              : "Could you clarify the request?"
+            : pc.question;
           sessionMemoryRef.current = setClarification(
             sessionMemoryRef.current,
-            buildAgentClarification(userRequest, pc.question, pc.candidates, state, sourceIdentity),
+            buildAgentClarification(userRequest, question, pc.candidates, state, sourceIdentity),
           );
-          append({ kind: "response", id: nextId("res"), streaming: false, text: pc.question });
+          append({ kind: "response", id: nextId("res"), streaming: false, text: question });
           conversationRef.current = [
             ...conversationRef.current,
             { role: "user", content: userRequest },
-            { role: "assistant", content: pc.question },
+            { role: "assistant", content: question },
           ];
           return;
         }
@@ -1488,11 +1958,12 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
           const evidence = agentEvidenceFacts(state.observations);
           const rowCounts = state.observations.filter((o) => o.ok && o.rows).map((o) => o.rowCount ?? o.rows!.length);
           const check = validateAgentAnswer(state.finalAnswer, evidence, rowCounts);
-          // §15 — a final answer must never leak internal terminology.
+          // §15/Stage 25.1.2 §7/§8 — a final answer must never leak internal
+          // terminology, legacy-engine execution strings, or raw planner JSON.
           const leaked =
-            /\b(ResultRef|RowSetRef|AgentLoop|tool_call|AgentDecision|VerifiedFact|sourceVersion|derivedFrom|model_error|maxAgentSteps|maxWorkbookReads|op#\d|ANALYSIS RESULT)\b/i.test(
+            /\b(ResultRef|RowSetRef|AgentLoop|tool_call|AgentDecision|VerifiedFact|sourceVersion|derivedFrom|model_error|maxAgentSteps|maxWorkbookReads|op#\d)\b/i.test(
               state.finalAnswer,
-            );
+            ) || containsForbiddenLeak(state.finalAnswer);
           let answer = state.finalAnswer;
           if (!check.ok || leaked) {
             const grid =
@@ -1541,6 +2012,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         userRequest: string,
         resume?: { readonly state: AgentLoopState; readonly answer: string },
       ): Promise<void> => {
+        recordAnalyticalExecution("stage24_agent");
         const registry = createAgentToolRegistry(); // read-only tools only (no mutation tool exists)
         const deps = createProductionAgentDeps(port, { language: lang === "ru" ? "ru" : "en" });
         const map = await safeBuildMap();
@@ -1701,6 +2173,61 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             }
           }
           await runAgentTask(p.originalPrompt, { state: cont, answer: choices[0] ?? "" });
+          return true;
+        }
+        if (p.kind === "analytical_agent") {
+          // Stage 25.1.3 §15–§19 — resume the SAME Stage 25 analytical
+          // planner run (never the flat legacy agent — a different tool
+          // registry entirely) with the user's short slot-filling answer.
+          // The suspended request IS `cont.originalUserRequest` plus its
+          // accumulated observations/steps — no separate parallel state.
+          const cont = p.agentContinuation as AgentLoopState | undefined;
+          if (!cont) {
+            append({ kind: "response", id: nextId("res"), streaming: false, text: lang === "ru" ? "Не удалось возобновить прошлый анализ." : "I couldn't resume that earlier analysis." });
+            return true;
+          }
+          const known = sessionMemoryRef.current.lastAnalyticalTable;
+          if (!known) {
+            append({ kind: "response", id: nextId("res"), streaming: false, text: lang === "ru" ? "Не удалось возобновить прошлый анализ — таблица больше не выделена." : "I couldn't resume that earlier analysis — the table isn't in view any more." });
+            return true;
+          }
+          const freshSnap = await readAddressSnapshot(port, known.sourceRange).catch(() => undefined);
+          if (!freshSnap) {
+            append({ kind: "response", id: nextId("res"), streaming: false, text: lang === "ru" ? "Не удалось прочитать таблицу заново." : "I couldn't re-read that table." });
+            return true;
+          }
+          // §20/§21 — freshness is THIS RANGE's own version, never the
+          // whole-workbook identity: a mutation elsewhere, a clarification
+          // round-trip, or a planner retry must never invalidate it.
+          if (p.sourceIdentity && sourceVersionOf(freshSnap) !== p.sourceIdentity) {
+            append({
+              kind: "response",
+              id: nextId("res"),
+              streaming: false,
+              text: lang === "ru" ? "Таблица изменилась с момента вопроса — задайте его снова." : "That table changed since I asked that — please ask again.",
+            });
+            return true;
+          }
+          let resumeStartsBelowRow1 = false;
+          try {
+            const { localAddress } = splitSheetAddress(freshSnap.address);
+            resumeStartsBelowRow1 = parseLocalRange(localAddress || freshSnap.address).start.row > 0;
+          } catch {
+            /* keep false */
+          }
+          const resumeSchema = induceTableSchema({
+            values: freshSnap.values,
+            numberFormats: freshSnap.numberFormats,
+            formulas: freshSnap.formulas,
+            sheetName: freshSnap.sheetName,
+            sourceRange: freshSnap.address,
+            sourceVersion: sourceVersionOf(freshSnap),
+            startsBelowRow1: resumeStartsBelowRow1,
+          });
+          const resumeGrids: AnalysisGrids = { values: freshSnap.values, numberFormats: freshSnap.numberFormats };
+          selectionRef.current = freshSnap;
+          await runStage25Planner(resumeSchema, resumeGrids, p.originalPrompt, { state: cont, answer: choices[0] ?? "" });
+          append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
           return true;
         }
         if (p.kind === "schema_norm" || p.kind === "schema_threshold") {
@@ -1907,6 +2434,299 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         return false;
       };
 
+      // ----- Stage 26.8 §4–§21: THE UNIFIED ANALYTICAL ENGINE (V2) ---------
+      //
+      // One decision, in front of every analytical route this file contains.
+      // The §3 audit counted eleven branches below that can answer a question
+      // about a table; §4 says exactly one engine may own a turn, so V2 is not
+      // inserted among them — it is asked FIRST, and when it answers "mine",
+      // none of them runs at all.
+      //
+      // §11 — and it does not hand a turn back. Once V2 owns a turn its
+      // failures are V2's failures and the user sees a V2 message; sending the
+      // same request on to Stage 24/25 would make every V2 defect invisible,
+      // which is the one thing human testing cannot afford.
+
+      /** Set when the live selection is a table V2 does not analyse (§6/§39). */
+      let v2SelectionIsForeign = false;
+
+      /** §14 — the table identity V2 analyses: the live selection, or its own memory. */
+      const resolveV2Table = async (): Promise<{ readonly schema: TableSchema; readonly grids: AnalysisGrids; readonly snap: SelectionSnapshot } | null> => {
+        const induce = (snap: SelectionSnapshot): TableSchema => {
+          let startsBelowRow1 = false;
+          try {
+            const { localAddress } = splitSheetAddress(snap.address);
+            startsBelowRow1 = parseLocalRange(localAddress || snap.address).start.row > 0;
+          } catch {
+            /* keep false */
+          }
+          return induceTableSchema({
+            values: snap.values,
+            numberFormats: snap.numberFormats,
+            formulas: snap.formulas,
+            sheetName: snap.sheetName,
+            // §14 — the canonical RANGE identity, never the active cell.
+            sourceRange: snap.address,
+            sourceVersion: sourceVersionOf(snap),
+            startsBelowRow1,
+          });
+        };
+        const usable = (snap: SelectionSnapshot | undefined, schema: TableSchema | undefined): schema is TableSchema =>
+          Boolean(snap && schema && schema.orientation !== "row_records" && schema.confidence >= 0.5);
+
+        let snap: SelectionSnapshot | undefined;
+        try {
+          snap = await readSelectionSnapshot(port);
+        } catch {
+          snap = undefined;
+        }
+        let schema = snap ? induce(snap) : undefined;
+        // A flat records list under the cursor is Stage 24's, not V2's — and
+        // saying so here is what stops V2's own remembered table from pulling
+        // the turn back below.
+        v2SelectionIsForeign = Boolean(
+          schema &&
+            schema.orientation === "row_records" &&
+            schema.confidence >= 0.5 &&
+            // …and it is an actual TABLE. A single cell inside the table under
+            // discussion also induces "records", and treating that as a
+            // different table breaks the drift fallback two lines below.
+            schema.rowAxis.length >= 3 &&
+            (snap?.columnCount ?? 0) >= 2,
+        );
+        // §15 — SELECTION DRIFT. One cell inside the analysed table does not
+        // induce a table of its own; fall back to the range this conversation is
+        // already about, which is what keeps the analytical context intact.
+        // …and it is also the reason not to reach for the remembered table
+        // below: the fallback is for a cell inside the table under discussion,
+        // not for a different table the person deliberately selected.
+        const known = analyticalStateRef.current.tableRef;
+        if (!usable(snap, schema) && !v2SelectionIsForeign && known) {
+          const knownSnap = await readAddressSnapshot(port, known.sourceRange).catch(() => undefined);
+          if (knownSnap) {
+            const knownSchema = induce(knownSnap);
+            if (usable(knownSnap, knownSchema)) {
+              snap = knownSnap;
+              schema = knownSchema;
+            }
+          }
+        }
+        if (!usable(snap, schema)) return null;
+        return { schema, grids: { values: snap!.values, numberFormats: snap!.numberFormats }, snap: snap! };
+      };
+
+      const runUnifiedEngineV2 = async (
+        v2Text: string,
+        table: { readonly schema: TableSchema; readonly grids: AnalysisGrids; readonly snap: SelectionSnapshot } | null,
+      ): Promise<void> => {
+        setLanguage(lang);
+        setBusy(true);
+        append({ kind: "command", id: nextId("cmd"), text: v2Text });
+        recordAnalyticalExecution("analytical_engine_v2");
+        const seq = (turnSeqRef.current += 1);
+        const language: ResponseLanguage = lang === "ru" ? "ru" : "en";
+        const say = (body: string, outcome: "answered" | "clarify" | "failed", v2TurnId?: string): void => {
+          append({ kind: "response", id: nextId("res"), streaming: false, text: body });
+          conversationRef.current = [...conversationRef.current, { role: "user", content: v2Text }, { role: "assistant", content: body }];
+          finishTurn(outcome, v2TurnId);
+        };
+
+        try {
+          if (!table) {
+            // §11/§14 — V2 owns this turn (the conversation is analytical and has
+            // a table behind it) but this message could not be tied to one. That
+            // is a V2 answer, not a reason to restart the cascade.
+            say(
+              language === "ru"
+                ? "Не удалось определить таблицу для анализа — выделите диапазон с данными и повторите вопрос."
+                : "I couldn't work out which table to analyse — select the data range and ask again.",
+              "failed",
+            );
+            return;
+          }
+          selectionRef.current = table.snap;
+
+          // §20 — a ~30-second turn must not look frozen. Three phases, named for
+          // what the turn is doing, with no tool names and no invented progress.
+          let phaseId = nextId("act");
+          append({ kind: "activity", id: phaseId, activity: "analyzing", title: progressLabel("reading", language), status: "running" });
+          const phase = (label: string): void => {
+            setActivity(phaseId, "done");
+            phaseId = nextId("act");
+            append({ kind: "activity", id: phaseId, activity: "calculating", title: label, status: "running" });
+          };
+          let rounds = 0;
+
+          const controller = new AbortController();
+          v2AbortRef.current = controller;
+          const turnId = nextId("turn");
+          const turn = await runAnalyticalEngine({
+            turnId,
+            request: v2Text,
+            schema: table.schema,
+            grids: table.grids,
+            language,
+            state: analyticalStateRef.current,
+            decide: (messages) => {
+              rounds += 1;
+              if (rounds === 2) phase(progressLabel("analysing", language));
+              return chatClient.planAnalyticalTurn!(messages, controller.signal, model);
+            },
+            narrate: async (messages) => {
+              phase(progressLabel("composing", language));
+              return typeof chatClient.narrate === "function" ? chatClient.narrate(messages, controller.signal, model) : "";
+            },
+          });
+
+          // §21 — a cancelled turn appends nothing. `reset` bumps the sequence and
+          // aborts the transport; whatever arrives afterwards belongs to a chat
+          // that no longer exists, and the state it computed is dropped with it.
+          if (seq !== turnSeqRef.current) return;
+          setActivity(phaseId, "done");
+
+          if (turn.kind === "answered") {
+            // §12/§17 — the conversation's state is whatever the ENGINE committed
+            // from its verified execution. The task pane stores it; never edits it.
+            analyticalStateRef.current = turn.state;
+            // §18 — the last gate. A body carrying a result id, a decision key or
+            // a typed error code was built from an internal string somewhere, and
+            // is replaced rather than shown.
+            const clean = containsInternalLeak(turn.body) ? leakReplacement(turn.analysis, language) : turn.body;
+            const body = [clean, turn.usedFallback ? fallbackNote(language) : "", provenanceLine(table.schema.sheetName, table.schema.sourceRange, language)]
+              .filter((p) => p !== "")
+              .join("\n\n");
+            // §36/§37 — the ONE typed handoff between the two worlds.
+            //
+            // V2 is read-only, and a mutation stays on the deterministic
+            // Preview → Approve → Execute → Undo path. So the bridge is the
+            // shape Stage 24 already acts on: the verified primary result,
+            // committed as a ResultRef, so a FOLLOW-UP mutation ("выдели их
+            // красным") has something real to act on. No Office.js call is ever
+            // constructed by the model, and nothing about this turn mutated the
+            // workbook — the next turn asks for that, explicitly, and gets a
+            // Preview it must approve.
+            sessionMemoryRef.current = rememberResult(sessionMemoryRef.current, {
+              turnId,
+              kind: "temporal_analysis",
+              title: turn.analysis.primary.tool,
+              spec: { op: "analytical_engine_v2", tool: turn.analysis.primary.tool },
+              columns: turn.analysis.primary.fields.map((f) => f.name),
+              rows: turn.analysis.primary.rows.map((r) => r.map((c) => c as CellValue)),
+              rowsTruncated: false,
+              facts: [],
+              sourceSheet: table.schema.sheetName,
+              sourceRange: table.schema.sourceRange,
+              sourceVersion: table.schema.sourceVersion,
+              resolved: [],
+            });
+            say(body, "answered", turnId);
+            append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(language, "done"), status: "done" });
+            return;
+          }
+
+          if (turn.kind === "clarify") {
+            // §29 — an exhausted clarification loop still returns the state, but
+            // the engine has already declined to suspend anything: the next
+            // message starts clean instead of feeding the loop again.
+            analyticalStateRef.current = turn.state;
+            const question = containsInternalLeak(turn.question)
+              ? language === "ru"
+                ? "Уточните, пожалуйста, какой показатель и за какой период вас интересует."
+                : "Could you say which indicator and which period you mean?"
+              : turn.question;
+            say(question, "clarify", turnId);
+            return;
+          }
+
+          // §11/§32 — a clean bounded failure, phrased for a person. The
+          // conversation state is untouched, so the next turn still has whatever
+          // the last successful one established.
+          say(v2FailureMessage(turn.reason, language), "failed", turnId);
+        } catch (error) {
+          if (seq !== turnSeqRef.current) return;
+          say(
+            error instanceof Error && error.name === "AbortError"
+              ? language === "ru"
+                ? "Запрос отменён."
+                : "Request cancelled."
+              : v2FailureMessage("model_error", language),
+            "failed",
+          );
+        } finally {
+          if (seq === turnSeqRef.current) {
+            v2AbortRef.current = null;
+            setBusy(false);
+          }
+        }
+      };
+
+      // §4 — the ownership decision itself. Cheap checks first; the table is
+      // resolved only for a turn that has already passed every one of them, and
+      // a turn that resolves no table AND has no analytical table behind it was
+      // never accepted, so continuing the cascade is not a §11 fallback.
+      {
+        const v2Slash = resolveSlashSubmission(text);
+        // The Stage 24 result a transform would act on, if there is one.
+        const v2LastV1Result =
+          sessionMemoryRef.current.recentResults.find((r) => r.id === sessionMemoryRef.current.lastResultId) ??
+          sessionMemoryRef.current.recentResults[sessionMemoryRef.current.recentResults.length - 1];
+        const v2Route = routeTurn(text, {
+          hasSelection: Boolean(selectionRef.current),
+          knownEntities: [],
+          hasPriorResult: sessionMemoryRef.current.recentResults.length > 0,
+        });
+        const ownerCtx = {
+          flagEnabled: unifiedAnalyticalEngineV2Enabled(),
+          canPlan: typeof chatClient.planAnalyticalTurn === "function",
+          isSlash: v2Slash !== null,
+          isUndo: isUndoPhrase(text),
+          hasResultAction: detectResultAction(text) !== null,
+          isMutation: isMutationRequest(text),
+          isResultTransform: v2LastV1Result !== undefined && detectResultTransform(text, v2LastV1Result).kind === "transform",
+          hasV1Result: sessionMemoryRef.current.recentResults.length > 0,
+          v1ClarificationPending: Boolean(sessionMemoryRef.current.pendingClarification),
+          v2ClarificationPending: Boolean(analyticalStateRef.current.suspended),
+          // A message is the ANSWER to an outstanding question when it is not a
+          // turn in its own right. A short reply ("20%", "за первый квартал")
+          // routes as general chat and carries no request; anything that routes
+          // as analysis, structure or a mutation is the person moving on.
+          isTopicSwitch:
+            isConceptQuestion(text) ||
+            isMutationRequest(text) ||
+            detectResultAction(text) !== null ||
+            (v2Route.route !== "general_chat" && text.trim().split(/\s+/).length >= 4),
+          hasV2Table: Boolean(analyticalStateRef.current.tableRef),
+          isConceptQuestion: isConceptQuestion(text),
+          hasWorkbookDeixis: hasWorkbookDeixis(text),
+          // §5 — capability, from the classifiers this file ALREADY routes by.
+          // `routeTurn`'s own "workbook_analysis" is the broadest of them and
+          // the reason this is not a phrase list: it is the same judgement the
+          // Stage 24 cascade makes about whether a turn is analysis at all.
+          isAnalytical:
+            v2Route.route === "workbook_analysis" ||
+            detectAnalyticalIntent(text).any ||
+            classifyIntent(text).analytical ||
+            isExploratoryRequest(text),
+          isAnalyticalFollowUp: isAnalyticalFollowUp(text),
+          route: v2Route,
+        };
+        const provisional = classifyTurnOwner({ ...ownerCtx, hasTable: true, selectionIsForeign: false });
+        if (provisional.owner === "V2_OWNED") {
+          const v2Table = await resolveV2Table();
+          const decision = classifyTurnOwner({ ...ownerCtx, hasTable: v2Table !== null, selectionIsForeign: v2SelectionIsForeign });
+          if (decision.dropSuspension) analyticalStateRef.current = withoutSuspension(analyticalStateRef.current);
+          if (decision.owner === "V2_OWNED") {
+            beginTurn(nextId("uturn"), text, decision.owner, decision.reason);
+            await runUnifiedEngineV2(text, v2Table);
+            return;
+          }
+          beginTurn(nextId("uturn"), text, decision.owner, decision.reason);
+        } else {
+          if (provisional.dropSuspension) analyticalStateRef.current = withoutSuspension(analyticalStateRef.current);
+          beginTurn(nextId("uturn"), text, provisional.owner, provisional.reason);
+        }
+      }
+
       // ----- Stage 24.6: pending-clarification interception -----------------
       const pending = sessionMemoryRef.current.pendingClarification;
       if (pending && !text.startsWith("/")) {
@@ -2049,6 +2869,128 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         // BEFORE the generic analytical route so "покажи его динамику" is
         // never misread as "each metric" (an empty subject with no event).
         const lastEvent = sessionMemoryRef.current.lastEventRef;
+        // Stage 24.9 §29/§37 — the GENERALIZED single-metric pronoun target:
+        // any producer that pins down one metric (event winner, direction-
+        // change winner, resultset top-1, any single-metric analytical query)
+        // sets this — "покажи его динамику" never needs a per-operation case.
+        const focusMetricKey = sessionMemoryRef.current.lastMetricFocusRef?.metricKey;
+        const lastDirectionChange = sessionMemoryRef.current.lastDirectionChangeRef;
+
+        // Stage 24.9 §26–§31 — COMPOUND requests: two independent analytical
+        // predicates joined by "и <triggerVerb>", sharing ONE subject. Clause
+        // 1 runs first (through whichever path it normally takes — a pronoun
+        // follow-up or a fresh analytical query); clause 2 then runs against
+        // the resulting focal metric. Neither clause is ever silently dropped
+        // (§31) — both render, in order.
+        // `\b` is ASCII-only in JS regex — Cyrillic letters are never "word"
+        // characters to it, so the trigger verb's own end (letter → comma)
+        // never counts as a boundary. A `(?![\p{L}])` lookaround is used
+        // instead (the SAME recurring bug class as Stage 24.7.1/24.8).
+        const compoundM = /^(.*?)\s+и\s+(?:а\s+также\s+)?(укажи|покажи|сравни|выведи|найди|определи)(?![\p{L}])[,:]?\s*(.*)$/isu.exec(text);
+        if (compoundM && compoundM[1]?.trim() && compoundM[3]?.trim()) {
+          const clause1Text = compoundM[1]!.trim();
+          const clause2Text = `${compoundM[2]} ${compoundM[3]}`.trim();
+          const clause1Followup = (lastEvent || focusMetricKey) ? detectEventFollowup(clause1Text) : null;
+          const clause1Analytical = detectAnalyticalIntent(clause1Text).any;
+          const clause2Analytical = detectAnalyticalIntent(clause2Text).any;
+          if ((clause1Followup || clause1Analytical) && clause2Analytical) {
+            setLanguage(lang);
+            append({ kind: "command", id: nextId("cmd"), text });
+            suppressCommandEcho = true;
+            let clause1Handled = false;
+            if (clause1Followup?.kind === "dynamics") {
+              const mk = focusMetricKey ?? lastEvent?.metricKey ?? lastDirectionChange?.metricKey;
+              if (mk) clause1Handled = (await runAnalyticalRoute(`Покажи динамику ${mk} по времени.`, mk)) === "handled";
+            }
+            if (!clause1Handled && clause1Analytical) {
+              clause1Handled = (await runAnalyticalRoute(clause1Text)) === "handled";
+            }
+            const focus2 = sessionMemoryRef.current.lastMetricFocusRef?.metricKey ?? focusMetricKey;
+            const clause2Handled = (await runAnalyticalRoute(clause2Text, focus2)) === "handled";
+            if (!clause1Handled && !clause2Handled) {
+              const msg = lang === "ru" ? "Не удалось выполнить составной запрос." : "I couldn't run that compound request.";
+              append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
+            }
+            return;
+          }
+        }
+
+        // Stage 24.9 §18/§43 — "В какие периоды он менял направление?" reads
+        // the stored DirectionChangeAnalysisRef's events directly.
+        if (lastDirectionChange && detectDirectionPeriodsFollowup(text)) {
+          setLanguage(lang);
+          append({ kind: "command", id: nextId("cmd"), text });
+          const lines = lastDirectionChange.events.map((e) => {
+            const from = e.previousDirection === "positive" ? (lang === "ru" ? "рост" : "up") : lang === "ru" ? "снижение" : "down";
+            const to = e.nextDirection === "positive" ? (lang === "ru" ? "рост" : "up") : lang === "ru" ? "снижение" : "down";
+            return `- ${e.pivotHeaderPath}: ${from} → ${to}`;
+          });
+          const msg =
+            lastDirectionChange.events.length > 0
+              ? (lang === "ru"
+                  ? `Показатель: ${lastDirectionChange.metricKey}\n\nСмена направления:\n${lines.join("\n")}`
+                  : `Metric: ${lastDirectionChange.metricKey}\n\nDirection changes:\n${lines.join("\n")}`)
+              : lang === "ru"
+                ? "Смен направления не найдено."
+                : "No direction changes found.";
+          append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
+          conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: msg }];
+          return;
+        }
+
+        // Stage 24.9 §5–§7/§35/§39/§69 — "какой из них самый волатильный?"
+        // answers from the stored ResultSetRef's order DIRECTLY — never a
+        // fresh full-workbook ranking. No compatible prior set → clarify,
+        // never infer an arbitrary workbook-wide universe.
+        const rsFollowup = detectResultSetFollowup(text);
+        if (rsFollowup) {
+          setLanguage(lang);
+          append({ kind: "command", id: nextId("cmd"), text });
+          const rs = sessionMemoryRef.current.lastResultSetRef;
+          const winner = rs?.rows[0];
+          if (!rs || !winner || (rsFollowup.operationHint && rs.operation !== rsFollowup.operationHint)) {
+            const msg = lang === "ru"
+              ? "Уточните, к какому предыдущему списку показателей относится «из них» — подходящего результата не нашлось."
+              : "Please clarify which earlier list \"of them\" refers to — I couldn't find a matching prior result.";
+            append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
+            conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: msg }];
+            return;
+          }
+          const msg = lang === "ru" ? `${winner.key} (оценка ${winner.score.toFixed(4)}).` : `${winner.key} (score ${winner.score.toFixed(4)}).`;
+          append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
+          conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: msg }];
+          sessionMemoryRef.current = rememberMetricFocus(sessionMemoryRef.current, {
+            metricKey: winner.key,
+            sourceRange: rs.sourceRange,
+            sourceVersion: rs.sourceVersion,
+          });
+          return;
+        }
+
+        // Stage 24.9 §29 — "покажи его/её динамику" resolves from the SHARED
+        // metric-focus authority, not only a prior EventRef.
+        // Stage 25.1.3a §1/§3/§5 — SUBJECT RESOLUTION != REQUEST COMPLETION:
+        // this shortcut may resolve "его", but when the sentence carries MORE
+        // than the one dynamics clause it covers, it must never terminate the
+        // turn early — the remaining clause(s) would be silently dropped.
+        // Hand the FULL text to the compositional route instead, with the
+        // subject already resolved (never re-parsed, never re-asked): Stage
+        // 24.x's own multi-clause override (or the Stage 25 planner, via
+        // `inherited.metricFocus` — unchanged) then covers every clause.
+        const focusDynamicsFollowup = focusMetricKey ? detectEventFollowup(text) : null;
+        if (focusDynamicsFollowup?.kind === "dynamics" && focusMetricKey) {
+          setLanguage(lang);
+          append({ kind: "command", id: nextId("cmd"), text });
+          suppressCommandEcho = true;
+          const fullyCovered = countAnalyticalClauses(text) <= 1;
+          const handled = await runAnalyticalRoute(fullyCovered ? `Покажи динамику ${focusMetricKey} по времени.` : text, focusMetricKey);
+          if (handled === "flat") {
+            const msg = lang === "ru" ? "Не удалось построить динамику для этого показателя." : "I couldn't build a time series for that metric.";
+            append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
+          }
+          return;
+        }
+
         const eventFollowup = lastEvent ? detectEventFollowup(text) : null;
         if (lastEvent && eventFollowup) {
           setLanguage(lang);
@@ -2078,7 +3020,11 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
           }
           if (eventFollowup.kind === "dynamics") {
             suppressCommandEcho = true;
-            const handled = await runAnalyticalRoute(`Покажи динамику ${lastEvent.metricKey} по времени.`, lastEvent.metricKey);
+            // Stage 25.1.3a §1/§3/§5 — same rule as the focus-based shortcut
+            // above: never terminate after only the dynamics clause when the
+            // sentence carries more analytical clauses than that.
+            const fullyCovered = countAnalyticalClauses(text) <= 1;
+            const handled = await runAnalyticalRoute(fullyCovered ? `Покажи динамику ${lastEvent.metricKey} по времени.` : text, lastEvent.metricKey);
             if (handled === "flat") {
               const msg = lang === "ru" ? "Не удалось построить динамику для этого показателя." : "I couldn't build a time series for that metric.";
               append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
@@ -2154,6 +3100,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         // grouped-ranking and 24.6 schema routes; "flat" → this turn is not
         // analytical work over a non-flat TableSchema (records tables decline).
         if (detectAnalyticalIntent(text).any) {
+          recordAnalyticalExecution("stage24_compiler");
           const analytical = await runAnalyticalRoute(text);
           if (analytical === "handled") return;
         }
@@ -2165,6 +3112,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         // source) and after a prior grouped result — identical canonical result.
         const groupedRanking = detectGroupedRanking(text);
         if (groupedRanking) {
+          recordAnalyticalExecution("stage24_grouped_ranking");
           setLanguage(lang);
           setBusy(true);
           append({ kind: "command", id: nextId("cmd"), text });
@@ -2330,6 +3278,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         {
           const si = detectSchemaIntent(text);
           if (si.any) {
+            recordAnalyticalExecution("stage24_schema");
             const outcome = await runSchemaRoute(text, si);
             if (outcome === "handled") return;
             // "flat" → continue below with this turn (records table).
@@ -2439,7 +3388,22 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         }
 
         // 24.3 — general chat: no selection read, no workbook map, no analysis.
-        if (route.route === "general_chat") {
+        // Stage 25.1.2 §4/§6/§9 — but NEVER for a turn inside an already
+        // schema-aware analytical conversation: `routeTurn`'s heuristics have
+        // no notion of an established analytical table, and sending such a
+        // follow-up straight to the generic chat/legacy path is exactly how
+        // "FAILED — .../ANALYSIS RESULT #… (rejected)" leaked to the user.
+        // Skip straight to the Stage 25 planner (below) instead.
+        // Stage 25.1.3f §2 — ALSO never for a compatible analytical follow-up
+        // ("теперь…", "из них…", "покажи только…") while ANY structured
+        // analytical result is still standing: such a turn is a restriction of
+        // that result, and re-reading it as a standalone question against an
+        // empty chat context is exactly how "в предоставленных данных нет
+        // сведений о показателях" reached the user.
+        const analyticalContinuationStanding =
+          Boolean(sessionMemoryRef.current.lastAnalyticalTable) ||
+          (Boolean(sessionMemoryRef.current.lastAnalyticalResultSetRef) && isAnalyticalFollowUp(text));
+        if (route.route === "general_chat" && !analyticalContinuationStanding) {
           setLanguage(lang);
           setBusy(true);
           append({ kind: "command", id: nextId("cmd"), text });
@@ -2493,6 +3457,109 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             setBusy(false);
           }
           return;
+        }
+
+        // Stage 25 §56 — LLM analytical planner. Tried after every more
+        // specific deterministic route above has declined, and before the
+        // flat bounded agent / general chat: a schema-backed table question
+        // no Stage 24.7–24.9 phrase/cue covers still gets a chance at tool
+        // composition instead of falling straight to the flat analyzer.
+        // Gated on the same broad `classifyIntent` heuristic already used for
+        // the flat model route, OR an explicit exploratory ask (§30/§40/§70 —
+        // "Что здесь самое необычное?" carries none of `classifyIntent`'s
+        // keywords, but must still reach the planner's exploratory mode, never
+        // a bare `metric.resolve("")`) — safe here because every route that
+        // owns a more specific turn shape (transforms, references, grouped
+        // ranking, cross-sheet compare, general chat) has already returned
+        // above.
+        // Stage 25.1.2 §4/§6/§9 — ALSO reached whenever this session already
+        // has an established analytical table, regardless of what the
+        // phrase-based classifiers think of THIS turn's wording: a
+        // schema-aware conversation's follow-up must stay schema-aware.
+        const knownForPlanner = sessionMemoryRef.current.lastAnalyticalTable;
+        // Stage 25.1.3f §2 — a follow-up on a standing structured result stays
+        // schema-aware even if this turn's own wording carries no analytical
+        // keyword of its own.
+        const followUpOnStandingResult = Boolean(sessionMemoryRef.current.lastAnalyticalResultSetRef) && isAnalyticalFollowUp(text);
+        if (
+          analyticalPlannerEnabled() &&
+          typeof chatClient.decideAgentStep === "function" &&
+          typeof chatClient.narrate === "function" &&
+          (classifyIntent(text).analytical || isExploratoryRequest(text) || Boolean(knownForPlanner) || followUpOnStandingResult)
+        ) {
+          let plannerSnap: SelectionSnapshot | undefined;
+          try {
+            plannerSnap = await readSelectionSnapshot(port);
+          } catch {
+            plannerSnap = undefined;
+          }
+          let plannerSchema: TableSchema | undefined;
+          const induceFrom = (snap: SelectionSnapshot): TableSchema => {
+            let startsBelowRow1 = false;
+            try {
+              const { localAddress } = splitSheetAddress(snap.address);
+              startsBelowRow1 = parseLocalRange(localAddress || snap.address).start.row > 0;
+            } catch {
+              /* keep false */
+            }
+            return induceTableSchema({
+              values: snap.values,
+              numberFormats: snap.numberFormats,
+              formulas: snap.formulas,
+              sheetName: snap.sheetName,
+              sourceRange: snap.address,
+              sourceVersion: sourceVersionOf(snap),
+              startsBelowRow1,
+            });
+          };
+          if (plannerSnap) plannerSchema = induceFrom(plannerSnap);
+          const plannerSnapValid = (snap: SelectionSnapshot | undefined, schema: TableSchema | undefined): schema is TableSchema =>
+            Boolean(snap && schema && schema.orientation !== "row_records" && schema.confidence >= 0.5);
+          // §4/§6 — the live selection may not resolve to a valid table even
+          // though this IS a schema-aware conversation (selection moved,
+          // read failed, or induction declined): retry against the
+          // REMEMBERED analytical table before giving up.
+          if (!plannerSnapValid(plannerSnap, plannerSchema) && knownForPlanner) {
+            const knownSnap = await readAddressSnapshot(port, knownForPlanner.sourceRange).catch(() => undefined);
+            if (knownSnap) {
+              const knownSchema = induceFrom(knownSnap);
+              if (plannerSnapValid(knownSnap, knownSchema)) {
+                plannerSnap = knownSnap;
+                plannerSchema = knownSchema;
+              }
+            }
+          }
+          if (plannerSnapValid(plannerSnap, plannerSchema)) {
+            setLanguage(lang);
+            setBusy(true);
+            selectionRef.current = plannerSnap;
+            append({ kind: "command", id: nextId("cmd"), text });
+            const plannerGrids: AnalysisGrids = { values: plannerSnap!.values, numberFormats: plannerSnap!.numberFormats };
+            try {
+              await runStage25Planner(plannerSchema, plannerGrids, text);
+            } finally {
+              setBusy(false);
+            }
+            return;
+          }
+          // §4/§6/§16 — this IS a schema-aware analytical conversation that
+          // could not resolve to a table this turn: terminate cleanly here.
+          // NEVER fall through to the legacy flat analyzer for schema-backed
+          // analytics.
+          if (knownForPlanner) {
+            setLanguage(lang);
+            setBusy(true);
+            append({ kind: "command", id: nextId("cmd"), text });
+            const body =
+              lang === "ru"
+                ? "Не удалось определить таблицу для анализа — выделите диапазон с данными и повторите запрос."
+                : "I couldn't resolve a table to analyze — select the data range and try again.";
+            append({ kind: "response", id: nextId("res"), streaming: false, text: body });
+            conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: body }];
+            append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
+            setBusy(false);
+            return;
+          }
         }
 
         // 24.4 §4–5 — bounded agentic analysis. LAST resort before the generic
@@ -3043,6 +4110,13 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
     conversationRef.current = [];
     selectionRef.current = undefined;
     sessionMemoryRef.current = emptySessionMemory();
+    // §13 — a new conversation starts with no analytical memory at all: no
+    // table, no references, no suspended task. §21 — and it cancels a turn
+    // still in flight, whose answer can then no longer be appended.
+    analyticalStateRef.current = EMPTY_ANALYTICAL_STATE;
+    turnSeqRef.current += 1;
+    v2AbortRef.current?.abort();
+    v2AbortRef.current = null;
     setEntries([]);
     setUndoStack([]);
   }, []);
@@ -3112,6 +4186,29 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
           }
         : {}),
       ...(m.lastAnalyticalTable ? { lastAnalyticalTable: { sheetName: m.lastAnalyticalTable.sheetName, sourceRange: m.lastAnalyticalTable.sourceRange } } : {}),
+      ...(m.lastDirectionChangeRef
+        ? {
+            lastDirectionChangeRef: {
+              metricKey: m.lastDirectionChangeRef.metricKey,
+              directionChangeCount: m.lastDirectionChangeRef.directionChangeCount,
+              events: m.lastDirectionChangeRef.events.length,
+            },
+          }
+        : {}),
+      ...(m.lastMetricSetRef ? { lastMetricSetRef: { metricKeys: m.lastMetricSetRef.metricKeys, origin: m.lastMetricSetRef.origin } } : {}),
+      ...(m.lastResultSetRef ? { lastResultSetRef: { operation: m.lastResultSetRef.operation, rows: m.lastResultSetRef.rows } } : {}),
+      ...(m.lastAnalyticalResultSetRef
+        ? {
+            lastAnalyticalResultSetRef: {
+              operation: m.lastAnalyticalResultSetRef.operation,
+              columns: m.lastAnalyticalResultSetRef.columns,
+              metricKeys: m.lastAnalyticalResultSetRef.metricKeys,
+              rowCount: m.lastAnalyticalResultSetRef.rows.length,
+            },
+          }
+        : {}),
+      ...(m.lastMetricFocusRef ? { lastMetricFocusRef: { metricKey: m.lastMetricFocusRef.metricKey } } : {}),
+      ...(m.lastPeriodRef ? { lastPeriodRef: { startCanonical: m.lastPeriodRef.startCanonical, ...(m.lastPeriodRef.endCanonical ? { endCanonical: m.lastPeriodRef.endCanonical } : {}) } } : {}),
     };
   }, []);
 

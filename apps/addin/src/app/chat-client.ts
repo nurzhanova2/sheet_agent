@@ -191,6 +191,26 @@ export interface ChatClient {
    * fall through to the deterministic path.
    */
   decideAgentStep?(request: AgentDecisionRequest, signal: AbortSignal): Promise<string>;
+  /**
+   * Stage 25 §36 — one free-text completion for the analytical NARRATOR pass.
+   * Deliberately separate from `decideAgentStep`: the narrator never returns a
+   * tool decision, only prose grounded in the FACTS the caller supplies in
+   * `messages`. Optional: when absent, the analytical planner falls back to a
+   * deterministic rendered table instead of narrated prose.
+   */
+  narrate?(messages: readonly { readonly role: "system" | "user"; readonly content: string }[], signal: AbortSignal, model?: string): Promise<string>;
+  /**
+   * Stage 26.2 §16 — one decision of the Stage 26 analytical PLANNER. A third
+   * distinct role: `decideAgentStep` carries the Stage 24.4 flat-agent prompt
+   * and `narrate` never returns a decision, so neither can be reused here. The
+   * caller owns the prompt and the strict JSON grammar; this only carries the
+   * completion. Optional: without it the V2 engine cannot run.
+   */
+  planAnalyticalTurn?(
+    messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
+    signal: AbortSignal,
+    model?: string,
+  ): Promise<string>;
 }
 
 const ACTION_FENCE = /```sheet-agent-actions\s*([\s\S]*?)```/;
@@ -765,6 +785,30 @@ export class HttpChatClient implements ChatClient {
   async decideAgentStep(request: AgentDecisionRequest, signal: AbortSignal): Promise<string> {
     const messages = buildAgentDecisionMessages(request).map((m) => ({ role: m.role, content: m.content }));
     return this.runCompletion(messages, request.model, () => {}, signal, request.language);
+  }
+
+  /**
+   * Stage 25 §36/§62 — the narrator completion. A plain, non-streaming text
+   * call with its OWN message array (never the planner's tool-decision
+   * prompt) — kept as a distinct method so the two roles can carry different
+   * prompts/temperatures without coupling (§62).
+   */
+  async narrate(messages: readonly { readonly role: "system" | "user"; readonly content: string }[], signal: AbortSignal, model?: string): Promise<string> {
+    return this.runCompletion(messages, model, () => {}, signal, "en");
+  }
+
+  /**
+   * Stage 26.2 §16 — the analytical planner completion. Same transport as the
+   * other two roles, deliberately its own method so the planner's prompt and
+   * decoding can never be confused with the narrator's (§16: planner and
+   * narrator are separate roles).
+   */
+  async planAnalyticalTurn(
+    messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
+    signal: AbortSignal,
+    model?: string,
+  ): Promise<string> {
+    return this.runCompletion(messages, model, () => {}, signal, "en");
   }
 
   async stream(request: ChatStreamRequest, handlers: ChatStreamHandlers, signal: AbortSignal): Promise<ChatResult> {

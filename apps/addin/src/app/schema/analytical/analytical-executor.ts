@@ -18,6 +18,7 @@ import {
   argExtreme,
   changeRowsFor,
   comparePoints,
+  computeDirectionChangeEvents,
   computeTrend,
   computeVolatility,
   detectDirectionChanges,
@@ -33,6 +34,7 @@ import type {
   AnalyticalExecution,
   AnalyticalPlan,
   AnalyticalSection,
+  DirectionChangeEvent,
   PeriodAudit,
   RankingField,
 } from "./types.js";
@@ -115,6 +117,8 @@ export function executePlan(
   let summaryLine: string | undefined;
   let audit: PeriodAudit = NO_AUDIT;
   let events: AnalysisEvent[] | undefined;
+  let directionChangeWinner: { metricKey: string; count: number; events: readonly DirectionChangeEvent[] } | undefined;
+  let resultSet: { operation: string; scoreField: string; rows: readonly { key: string; score: number }[] } | undefined;
   const seriesSet = getTemporalSeriesSet(schema, grids, plan.subject, periodIndex);
 
   const pushCells = (cs: readonly string[]): void => {
@@ -579,6 +583,14 @@ export function executePlan(
       summaryLine = ru
         ? "Метрика: стандартное отклонение period-to-period изменений; стабильность — та же оценка по возрастанию."
         : "Score = standard deviation of period-to-period changes; stability is the same score, ascending.";
+      // Stage 24.9 §35/§39/§55 — the ordered (metric, score) rows, so a
+      // ResultSetRef can answer "какой из них самый волатильный?" WITHOUT
+      // recomputing the whole-workbook ranking.
+      resultSet = {
+        operation: plan.operation,
+        scoreField: "std_change",
+        rows: scored.map((r) => ({ key: r.key, score: r.score })),
+      };
       computed.push(plan.operation);
       break;
     }
@@ -641,20 +653,141 @@ export function executePlan(
     }
 
     case "direction_change": {
-      const rows: (string | number)[][] = [];
-      for (const s of seriesSet) {
-        const dc = detectDirectionChanges(s);
-        if (!dc || dc.changes === 0) continue;
-        pushCells(s.points.map((p) => p.cell));
-        entityValues.push(s.key);
-        rows.push([s.key, dc.changes]);
+      if (plan.directionChangeSuperlative) {
+        // Stage 24.9 §17/§41 — superlative: the SINGLE metric with the most
+        // reversals (tie → show every tied metric, never an arbitrary pick).
+        const scored: { key: string; count: number; events: readonly DirectionChangeEvent[]; cells: string[] }[] = [];
+        for (const s of seriesSet) {
+          const dc = computeDirectionChangeEvents(s);
+          if (dc.changes === 0) continue;
+          scored.push({ key: s.key, count: dc.changes, events: dc.events, cells: s.points.map((p) => p.cell) });
+        }
+        scored.sort((a, b) => b.count - a.count);
+        const maxCount = scored[0]?.count ?? 0;
+        const winners = maxCount > 0 ? scored.filter((r) => r.count === maxCount) : [];
+        const rows = winners.map((r) => {
+          pushCells(r.cells);
+          entityValues.push(r.key);
+          return [r.key, r.count] as (string | number)[];
+        });
+        sections.push({
+          title: ru ? "Показатель с наибольшим числом смен направления" : "Metric with the most direction changes",
+          columns: [ru ? "Показатель" : "Metric", ru ? "Число разворотов" : "Reversals"],
+          rows: rows.length > 0 ? rows : [[ru ? "Разворотов не найдено" : "No reversals found", 0]],
+        });
+        if (winners.length === 1) {
+          const w = winners[0]!;
+          directionChangeWinner = { metricKey: w.key, count: w.count, events: w.events };
+          summaryLine = ru
+            ? `${w.key}: направление менялось ${w.count} раз(а) — больше, чем у любого другого показателя.`
+            : `${w.key}: direction changed ${w.count} time(s) — more than any other metric.`;
+        } else if (winners.length > 1) {
+          summaryLine = ru
+            ? `Ничья: ${winners.map((w) => w.key).join(", ")} — по ${maxCount} смен(ы) направления у каждого.`
+            : `Tie: ${winners.map((w) => w.key).join(", ")} — ${maxCount} direction change(s) each.`;
+        }
+        computed.push("rank_direction_changes");
+      } else {
+        const rows: (string | number)[][] = [];
+        for (const s of seriesSet) {
+          const dc = detectDirectionChanges(s);
+          if (!dc || dc.changes === 0) continue;
+          pushCells(s.points.map((p) => p.cell));
+          entityValues.push(s.key);
+          rows.push([s.key, dc.changes]);
+        }
+        sections.push({
+          title: ru ? "Смена направления динамики" : "Direction changes",
+          columns: [ru ? "Показатель" : "Metric", ru ? "Число разворотов" : "Reversals"],
+          rows: rows.length > 0 ? rows : [[ru ? "Разворотов не найдено" : "No reversals found", ""]],
+        });
+        computed.push("direction_change");
       }
+      break;
+    }
+
+    case "compare_time_series": {
+      // Stage 24.9 §8/§11/§49 — TWO+ metrics, period-aligned on the SAME
+      // canonical point periods (never mixed change columns, never a raw
+      // Excel serial — `periodIndex.points` headers are always canonical).
+      const sorted = [...periodIndex.points].sort((a, b) => a.orderKey - b.orderKey);
+      const maps = seriesSet.map((s) => new Map(s.points.map((p) => [p.canonicalPeriod, p])));
+      const rows: (string | number)[][] = [];
+      for (const per of sorted) {
+        const row: (string | number)[] = [per.headerPath];
+        let anyValue = false;
+        for (const m of maps) {
+          const p = m.get(per.canonical);
+          if (p) {
+            row.push(fmt(p.value, p.percent));
+            pushCells([p.cell]);
+            anyValue = true;
+          } else {
+            row.push("—");
+          }
+        }
+        if (anyValue) rows.push(row);
+      }
+      for (const s of seriesSet) entityValues.push(s.key);
       sections.push({
-        title: ru ? "Смена направления динамики" : "Direction changes",
-        columns: [ru ? "Показатель" : "Metric", ru ? "Число разворотов" : "Reversals"],
-        rows: rows.length > 0 ? rows : [[ru ? "Разворотов не найдено" : "No reversals found", ""]],
+        title: ru
+          ? `Сравнение динамики: ${seriesSet.map((s) => s.key).join(", ")}`
+          : `Time series comparison: ${seriesSet.map((s) => s.key).join(", ")}`,
+        columns: [ru ? "Период" : "Period", ...seriesSet.map((s) => s.key)],
+        rows,
       });
-      computed.push("direction_change");
+      computed.push("compare_time_series");
+      break;
+    }
+
+    case "compare_growth": {
+      // Stage 24.9 §12/§13 — the SAME shared interval-change primitive used
+      // by rank/compare/change/filter, restricted to the resolved metric set.
+      if (plan.interval) {
+        const startP = plan.interval.start;
+        const endP = plan.interval.end;
+        audit = {
+          requestedStart: startP.canonical,
+          requestedEnd: endP.canonical,
+          executedStart: startP.canonical,
+          executedEnd: endP.canonical,
+          silentSubstitution: false,
+        };
+        const field: RankingField = plan.rankingField === "absolute_change" ? "absolute_change" : "percentage_change";
+        const rows0 = changeRowsFor(compareMetricSetAtTwoPoints(schema, grids, plan.subject, startP, endP));
+        const ranked = rankByField(rows0, { field, direction: plan.direction ?? "desc" });
+        const rows = ranked.map((r) => {
+          pushCells([r.startCell, r.endCell]);
+          entityValues.push(r.key);
+          return [
+            r.key,
+            fmt(r.startValue, false),
+            fmt(r.endValue, false),
+            fmt(r.absoluteChange, false),
+            r.percentChange === null ? "—" : fmt(r.percentChange, true),
+          ] as (string | number)[];
+        });
+        sections.push({
+          title: ru
+            ? `Сравнение темпа роста между ${startP.headerPath} и ${endP.headerPath}`
+            : `Growth comparison between ${startP.headerPath} and ${endP.headerPath}`,
+          columns: [
+            ru ? "Показатель" : "Metric",
+            startP.headerPath,
+            endP.headerPath,
+            ru ? "Δ абс." : "Δ abs",
+            ru ? "Δ %" : "Δ %",
+          ],
+          rows: rows.length > 0 ? rows : [[ru ? "Нет подходящих показателей" : "No matching metrics", "", "", "", ""]],
+        });
+        if (rows.length > 0) {
+          const winner = ranked[0]!;
+          summaryLine = ru
+            ? `${winner.key} изменился(-ась) сильнее всего: ${winner.percentChange === null ? "—" : fmt(winner.percentChange, true)}.`
+            : `${winner.key} changed the most: ${winner.percentChange === null ? "—" : fmt(winner.percentChange, true)}.`;
+        }
+        computed.push("compare_growth");
+      }
       break;
     }
 
@@ -673,6 +806,8 @@ export function executePlan(
     audit,
     computed,
     ...(events ? { events } : {}),
+    ...(directionChangeWinner ? { directionChangeWinner } : {}),
+    ...(resultSet ? { resultSet } : {}),
   };
 }
 

@@ -19,17 +19,22 @@ import { nextId } from "./agent-session.js";
 import { extractEntitySet } from "./entity-reference.js";
 import {
   MEMORY_LIMITS,
+  type AnalyticalResultSetRef,
   type AnalyticalTableContextRef,
   type ChartRef,
   type CompositeAnalysisRef,
   type ConversationRoute,
+  type DirectionChangeAnalysisRef,
   type EventRef,
+  type MetricFocusRef,
+  type MetricSetRef,
   type PendingClarification,
   type PeriodRef,
   type RankingAnalysisRef,
   type ResolvedWorkbookRef,
   type ResultKind,
   type ResultRef,
+  type ResultSetRef,
   type RowSetRef,
   type SessionMemory,
   type SheetRef,
@@ -164,12 +169,19 @@ export function rememberRanking(memory: SessionMemory, input: RankingInput): Ses
 
 type EventInput = Omit<EventRef, "id" | "order" | "createdAt">;
 
-/** Stage 24.8 §17–§21 — persists the winning adjacent-period-change event. */
+/** Stage 24.8 §17–§21 — persists the winning adjacent-period-change event;
+ *  also updates the shared metric-focus pronoun target (Stage 24.9 §29). */
 export function rememberEvent(memory: SessionMemory, input: EventInput): SessionMemory {
   const seq = memory.seq + 1;
   const id = nextId("evt");
   const ref: EventRef = { ...input, id, order: seq, createdAt: Date.now() };
-  return { ...memory, lastEventRef: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
+  return {
+    ...memory,
+    lastEventRef: ref,
+    lastMetricFocusRef: { metricKey: input.metricKey, order: seq, sourceRange: input.sourceRange, sourceVersion: input.sourceVersion },
+    seq,
+    knownIds: pushKnownId(memory.knownIds, id),
+  };
 }
 
 /** Stage 24.8 §27–§29 — remembers the last table an analytical query ran
@@ -177,6 +189,81 @@ export function rememberEvent(memory: SessionMemory, input: EventInput): Session
  *  analytical universe to one cell. Not a "known id" — purely a hint. */
 export function rememberAnalyticalTable(memory: SessionMemory, ref: AnalyticalTableContextRef): SessionMemory {
   return { ...memory, lastAnalyticalTable: ref };
+}
+
+/** Stage 24.9 §29/§37 — the single metric currently in focus for a bare
+ *  pronoun ("его"/"он"). One shared authority updated by every producer that
+ *  pins down one metric — never a per-operation special case. */
+export function rememberMetricFocus(memory: SessionMemory, ref: Omit<MetricFocusRef, "order">): SessionMemory {
+  const seq = memory.seq + 1;
+  return { ...memory, lastMetricFocusRef: { ...ref, order: seq }, seq };
+}
+
+type DirectionChangeInput = Omit<DirectionChangeAnalysisRef, "id" | "order" | "createdAt">;
+
+/** Stage 24.9 §17/§18 — persists the superlative direction-change winner;
+ *  also updates the shared metric-focus pronoun target. */
+export function rememberDirectionChange(memory: SessionMemory, input: DirectionChangeInput): SessionMemory {
+  const seq = memory.seq + 1;
+  const id = nextId("dcr");
+  const ref: DirectionChangeAnalysisRef = { ...input, id, order: seq, createdAt: Date.now() };
+  return {
+    ...memory,
+    lastDirectionChangeRef: ref,
+    lastMetricFocusRef: { metricKey: input.metricKey, order: seq, sourceRange: input.sourceRange, sourceVersion: input.sourceVersion },
+    seq,
+    knownIds: pushKnownId(memory.knownIds, id),
+  };
+}
+
+type MetricSetInput = Omit<MetricSetRef, "id" | "order" | "createdAt">;
+
+/** Stage 24.9 §4/§8–§10 — persists the explicit/reused multi-metric candidate set. */
+export function rememberMetricSet(memory: SessionMemory, input: MetricSetInput): SessionMemory {
+  const seq = memory.seq + 1;
+  const id = nextId("mst");
+  const ref: MetricSetRef = { ...input, id, order: seq, createdAt: Date.now() };
+  return { ...memory, lastMetricSetRef: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
+}
+
+type ResultSetInput = Omit<ResultSetRef, "id" | "order" | "createdAt">;
+
+/** Stage 24.9 §5–§7/§35/§39 — persists the ordered ranking-shaped result. */
+export function rememberResultSet(memory: SessionMemory, input: ResultSetInput): SessionMemory {
+  const seq = memory.seq + 1;
+  const id = nextId("rst");
+  const ref: ResultSetRef = { ...input, id, order: seq, createdAt: Date.now() };
+  return { ...memory, lastResultSetRef: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
+}
+
+type AnalyticalResultSetInput = Omit<AnalyticalResultSetRef, "id" | "order" | "createdAt">;
+
+/**
+ * Stage 25.1.3f §3/§5 — persists the FULL structured result of a successful
+ * analytical turn as the continuation universe for the next compatible
+ * follow-up. Bounded by the SAME `MEMORY_LIMITS` the generic ResultRef uses,
+ * so a wide workbook can never grow session memory without limit.
+ *
+ * Committed on ANALYTICAL SUCCESS, never on narration success: a turn whose
+ * narrator fell back to the deterministic table still executed its analysis
+ * and still owns its result (§5 — deterministic fallback is a presentation
+ * outcome, not an analytical execution failure).
+ */
+export function rememberAnalyticalResultSet(memory: SessionMemory, input: AnalyticalResultSetInput): SessionMemory {
+  const seq = memory.seq + 1;
+  const id = nextId("ars");
+  const columns = input.columns.slice(0, MEMORY_LIMITS.maxColumnsPerResult);
+  const rows = input.rows.slice(0, MEMORY_LIMITS.maxRowsPerResult).map((r) => r.slice(0, MEMORY_LIMITS.maxColumnsPerResult));
+  const ref: AnalyticalResultSetRef = {
+    ...input,
+    columns,
+    rows,
+    metricKeys: input.metricKeys.slice(0, MEMORY_LIMITS.maxRowsPerResult),
+    id,
+    order: seq,
+    createdAt: Date.now(),
+  };
+  return { ...memory, lastAnalyticalResultSetRef: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
 }
 
 function keyOf(ref: ResolvedWorkbookRef): string {
@@ -421,6 +508,10 @@ export function buildAgentClarification(
   candidates: readonly string[],
   agentContinuation: unknown,
   sourceIdentity: string | undefined,
+  // Stage 25.1.3 §15/§16 — "agent" (flat legacy bounded agent) or
+  // "analytical_agent" (Stage 25 analytical planner) — never resumed through
+  // the WRONG tool registry.
+  kind: "agent" | "analytical_agent" = "agent",
 ): PendingClarification {
   return {
     id: nextId("clr"),
@@ -428,7 +519,7 @@ export function buildAgentClarification(
     createdAt: Date.now(),
     originalPrompt,
     route: "workbook_analysis",
-    kind: "agent",
+    kind,
     resolved: [],
     observations: [],
     candidates: [...candidates],
@@ -683,7 +774,7 @@ export function interpretClarificationAnswer(text: string, pending: PendingClari
   // 24.4 §7 — an agent clarification resumes the SAME task. Match a listed
   // candidate when the reply names one; otherwise pass the raw reply through as
   // the answer (the agent handles a free-form clarification answer).
-  if (pending.kind === "agent") {
+  if (pending.kind === "agent" || pending.kind === "analytical_agent") {
     const lc = trimmed.toLowerCase().replace(/[.!?]+$/, "");
     if (lc === "") return { kind: "unclear" };
     const hit = candidates.find((c) => c.toLowerCase() === lc)

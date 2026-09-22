@@ -7,13 +7,14 @@
 // planner that could change semantics (§45).
 // ---------------------------------------------------------------------------
 
-import type { MeasureKind } from "../measure-compatibility.js";
-import type { TableSchema } from "../schema-induction.js";
+import { isPercentNumberFormat } from "../excel-date.js";
+import { classifySemanticMetricClass, isPercentageLike, type MeasureKind } from "../measure-compatibility.js";
+import type { RowAxisMember, TableSchema } from "../schema-induction.js";
 import type { AnalysisGrids } from "../matrix-analysis.js";
 import { buildPeriodIndex, type PeriodIndex } from "./period-index.js";
 import { resolvePeriod, type InheritedPeriod } from "./period-resolver.js";
 import { buildMetricIndex, type MetricIndex } from "./metric-resolver.js";
-import { resolveSubject, type SubjectResolution } from "./subject-resolver.js";
+import { resolveSubject, resolveMetricSetSubject, type SubjectResolution } from "./subject-resolver.js";
 import type {
   AnalyticalIntent,
   AnalyticalPlan,
@@ -24,6 +25,7 @@ import type {
   RankingField,
   ResolutionIssue,
   ResolvedInterval,
+  ResolvedSubject,
 } from "./types.js";
 
 /** Stage 24.8 §11/§30/§31 — enough of the prior explicit-interval rank to
@@ -40,6 +42,13 @@ export interface InheritedComposite {
   readonly interval2: ResolvedInterval;
 }
 
+/** Stage 24.9 §35/§36/§50 — the prior MetricSetRef's members, reused as the
+ *  candidate set for "какой из них вырос сильнее…" (growth is recomputed
+ *  fresh; only the CANDIDATE SET is inherited). */
+export interface InheritedMetricSet {
+  readonly members: readonly RowAxisMember[];
+}
+
 export interface CompileContext {
   readonly schema: TableSchema;
   readonly grids: AnalysisGrids;
@@ -49,6 +58,7 @@ export interface CompileContext {
   readonly subjectOverride?: string;
   readonly inheritedRanking?: InheritedRanking;
   readonly inheritedComposite?: InheritedComposite;
+  readonly inheritedMetricSet?: InheritedMetricSet;
 }
 
 export type CompileOutcome =
@@ -72,6 +82,8 @@ const NEEDS_TEMPORAL = new Set([
   "rank",
   "argmax_event",
   "two_interval_filter",
+  "compare_time_series",
+  "compare_growth",
 ]);
 
 function thresholdFraction(text: string | undefined): number | undefined {
@@ -88,7 +100,12 @@ function thresholdFraction(text: string | undefined): number | undefined {
 function measureBasisFor(intent: AnalyticalIntent, schema: TableSchema): AnalyticalPlan["measureBasis"] {
   // §26 — an explicit user override always wins.
   if (intent.measureBasisOverride) return intent.measureBasisOverride;
-  if (intent.operation === "rank" || intent.operation === "argmax_event" || intent.operation === "two_interval_filter") {
+  if (
+    intent.operation === "rank" ||
+    intent.operation === "argmax_event" ||
+    intent.operation === "two_interval_filter" ||
+    intent.operation === "compare_growth"
+  ) {
     return "percentage_change";
   }
   if (intent.operation === "filter") {
@@ -163,6 +180,12 @@ function steps(intent: AnalyticalIntent): AnalyticalStep[] {
     case "two_interval_filter":
       s.push({ kind: "select_two_intervals" }, { kind: "filter_by_change" });
       break;
+    case "compare_time_series":
+      s.push({ kind: "select_temporal_series" }, { kind: "project_series" });
+      break;
+    case "compare_growth":
+      s.push({ kind: "select_change_horizon" }, { kind: "rank_by_change" });
+      break;
     default:
       break;
   }
@@ -188,9 +211,30 @@ export function compileAnalyticalPlan(intent: AnalyticalIntent, ctx: CompileCont
     return { kind: "decline", reason: "no temporal axis in this table" };
   }
 
+  const assumptions: ExplicitAssumption[] = [];
+  const unresolved: ResolutionIssue[] = [];
+
   // --- subject ---------------------------------------------------------
-  const subjectIntent = ctx.subjectOverride ? { ...intent, subjectText: ctx.subjectOverride } : intent;
-  const sub: SubjectResolution = resolveSubject(subjectIntent, schema, metricIndex);
+  let sub: SubjectResolution;
+  if (intent.operation === "compare_time_series" || intent.operation === "compare_growth") {
+    // Stage 24.9 §8–§10/§35/§36 — an EXPLICIT multi-metric phrase resolves
+    // fresh; a pronoun ("какой из них…") reuses the prior MetricSetRef's
+    // members as the candidate set (never every metric in the table).
+    if (intent.metricSetText) {
+      sub = resolveMetricSetSubject(intent.metricSetText, schema, metricIndex);
+    } else if (intent.sameMetricSetRef) {
+      if (ctx.inheritedMetricSet && ctx.inheritedMetricSet.members.length > 0) {
+        sub = { kind: "resolved", subject: { kind: "metric_set", members: ctx.inheritedMetricSet.members }, scope: "metric_set", how: "inherited_metric_set" };
+      } else {
+        return { kind: "unresolved", issues: [{ field: "subject", reason: "no prior metric set to reuse" }] };
+      }
+    } else {
+      return { kind: "unresolved", issues: [{ field: "subject", reason: "a comparison needs at least two named metrics" }] };
+    }
+  } else {
+    const subjectIntent = ctx.subjectOverride ? { ...intent, subjectText: ctx.subjectOverride } : intent;
+    sub = resolveSubject(subjectIntent, schema, metricIndex);
+  }
   if (sub.kind === "ambiguous") {
     return {
       kind: "clarify",
@@ -207,8 +251,44 @@ export function compileAnalyticalPlan(intent: AnalyticalIntent, ctx: CompileCont
     };
   }
 
-  const assumptions: ExplicitAssumption[] = [];
-  const unresolved: ResolutionIssue[] = [];
+  // Stage 24.9 §22–§25 — semantic-class exclusion, applied BEFORE any ranking
+  // / volatility / argmax / trend / stability computation — never only hidden
+  // at render time. Generic: works for any each_metric / each_column subject,
+  // not a special case tied to "volatility" specifically.
+  let resolvedSubject: ResolvedSubject = sub.subject;
+  let semanticFilter: AnalyticalPlan["semanticFilter"];
+  if (intent.excludeMetricClasses && intent.excludeMetricClasses.length > 0) {
+    if (resolvedSubject.kind === "each_metric") {
+      const before = resolvedSubject.members.length;
+      const kept = resolvedSubject.members.filter((m) => {
+        // Only the POINT-VALUE ("абс.") column per period, never its "%"
+        // sibling — every row_metrics metric has a "%" change column, so
+        // scanning ALL schema.columnPaths would misclassify every metric as
+        // percentage-like.
+        const percentFormatted = periodIndex.points.some(
+          (per) => isPercentNumberFormat(grids.numberFormats[m.rowIndex]?.[per.colIndex] ?? null),
+        );
+        const cls = classifySemanticMetricClass(m.display, { percentFormatted });
+        return !isPercentageLike(cls);
+      });
+      resolvedSubject = { kind: "each_metric", members: kept };
+      semanticFilter = { excludeClasses: intent.excludeMetricClasses, candidateCountBefore: before, candidateCountAfter: kept.length };
+    } else if (resolvedSubject.kind === "each_column") {
+      const before = resolvedSubject.columns.length;
+      const kept = resolvedSubject.columns.filter(
+        (c) => !isPercentageLike(classifySemanticMetricClass(c.displayLabel, { measureKind: c.measureKind })),
+      );
+      resolvedSubject = { kind: "each_column", columns: kept };
+      semanticFilter = { excludeClasses: intent.excludeMetricClasses, candidateCountBefore: before, candidateCountAfter: kept.length };
+    }
+    if (semanticFilter) {
+      assumptions.push({
+        text: ru
+          ? `процентные показатели исключены из рассмотрения (${semanticFilter.candidateCountAfter} из ${semanticFilter.candidateCountBefore})`
+          : `percentage-like metrics excluded (${semanticFilter.candidateCountAfter} of ${semanticFilter.candidateCountBefore})`,
+      });
+    }
+  }
 
   // --- period(s) ------------------------------------------------------
   let period: CanonicalPeriod | undefined;
@@ -363,21 +443,60 @@ export function compileAnalyticalPlan(intent: AnalyticalIntent, ctx: CompileCont
     if (!predicateIntervals || predicateIntervals.length !== 2) {
       unresolved.push({ field: "period", reason: "both intervals and predicates are required" });
     }
-  } else if (intent.operation === "argmax" || intent.operation === "argmin" || intent.operation === "time_series" || intent.operation === "volatility" || intent.operation === "stability" || intent.operation === "trend" || intent.operation === "monotonicity" || intent.operation === "direction_change") {
+  } else if (intent.operation === "compare_growth") {
+    if (intent.periodStartText && intent.periodEndText) {
+      // an explicit interval (§13 allows an override) resolves exactly like
+      // every other explicit two-endpoint operation.
+      const s = resolvePeriod(intent.periodStartText, periodIndex);
+      const e = resolvePeriod(intent.periodEndText, periodIndex);
+      for (const [label, r] of [["period_start", s] as const, ["period_end", e] as const]) {
+        if (r.kind === "unresolved") return { kind: "unresolved", issues: [{ field: label, reason: r.detail, candidates: [r.requested] }] };
+        if (r.kind === "ambiguous") return { kind: "clarify", field: label, needle: r.requested, candidates: r.candidates, question: ru ? `Уточните период «${r.requested}»: ${r.candidates.join(", ")}.` : `Which "${r.requested}" period — ${r.candidates.join(", ")}?` };
+      }
+      if (s.kind === "point" && e.kind === "point") {
+        interval = { start: s.period, end: e.period };
+      } else {
+        unresolved.push({ field: "period", reason: "the interval endpoints did not both resolve to dates" });
+      }
+    } else {
+      // Stage 24.9 §13/§44/§58 — the DETERMINISTIC default for a generic
+      // "темп роста" comparison: first canonical point → last canonical
+      // point. NEVER requires (or falls back to) an inherited PeriodRef.
+      const pts = periodIndex.points;
+      if (pts.length < 2) {
+        return { kind: "unresolved", issues: [{ field: "period", reason: "not enough point periods for a growth comparison" }] };
+      }
+      const sorted = [...pts].sort((a, b) => a.orderKey - b.orderKey);
+      interval = { start: sorted[0]!, end: sorted[sorted.length - 1]! };
+      assumptions.push({
+        text: ru ? "интервал — от первой до последней доступной даты" : "interval — first to last available date",
+      });
+    }
+  } else if (intent.operation === "argmax" || intent.operation === "argmin" || intent.operation === "time_series" || intent.operation === "volatility" || intent.operation === "stability" || intent.operation === "trend" || intent.operation === "monotonicity" || intent.operation === "direction_change" || intent.operation === "compare_time_series") {
     // whole point-in-time series — no single period.
   }
 
   const measureBasis = measureBasisFor(intent, schema);
   const measureKind = measureKindOf(schema, measureBasis);
   const thresholdValue = thresholdFraction(intent.thresholdText);
-  const rankingField = intent.operation === "rank" || intent.operation === "argmax_event" ? rankingFieldFor(intent) : undefined;
+  const rankingField =
+    intent.operation === "rank" || intent.operation === "argmax_event"
+      ? rankingFieldFor(intent)
+      : intent.operation === "compare_growth"
+        ? intent.measureBasisOverride === "absolute_change"
+          ? "absolute_change"
+          : "percentage_change"
+        : undefined;
 
-  const planDirection = intent.direction ?? (intent.operation === "argmax_event" ? "desc" : undefined);
+  const planDirection = intent.direction ?? (intent.operation === "argmax_event" || intent.operation === "compare_growth" ? "desc" : undefined);
   const planLimit = effectiveLimit ?? (intent.operation === "argmax_event" ? 1 : undefined);
+
+  const metricSetLabels =
+    resolvedSubject.kind === "metric_set" ? resolvedSubject.members.map((m) => m.display) : undefined;
 
   const plan: AnalyticalPlan = {
     operation: intent.operation,
-    subject: sub.subject,
+    subject: resolvedSubject,
     subjectScope: sub.scope,
     measureKind,
     measureBasis,
@@ -391,6 +510,9 @@ export function compileAnalyticalPlan(intent: AnalyticalIntent, ctx: CompileCont
     ...(interval ? { interval } : {}),
     ...(rankingField ? { rankingField } : {}),
     ...(predicateIntervals ? { predicateIntervals } : {}),
+    ...(intent.directionChangeSuperlative ? { directionChangeSuperlative: true } : {}),
+    ...(semanticFilter ? { semanticFilter } : {}),
+    ...(metricSetLabels ? { metricSetLabels } : {}),
     steps: steps(intent),
     output: intent.outputProjection,
     assumptions,

@@ -12,11 +12,11 @@
 import type { AnalysisGrids } from "../matrix-analysis.js";
 import type { TableSchema } from "../schema-induction.js";
 import { detectAnalyticalIntent } from "./analytical-intent.js";
-import { compileAnalyticalPlan, type InheritedComposite, type InheritedRanking } from "./analytical-compiler.js";
+import { compileAnalyticalPlan, type InheritedComposite, type InheritedMetricSet, type InheritedRanking } from "./analytical-compiler.js";
 import { validatePlan } from "./analytical-plan-validator.js";
 import { executePlan } from "./analytical-executor.js";
 import type { InheritedPeriod } from "./period-resolver.js";
-import type { AnalysisEvent, AnalyticalExecution, AnalyticalIntent, AnalyticalPlan, ResolvedInterval } from "./types.js";
+import type { AnalysisEvent, AnalyticalExecution, AnalyticalIntent, AnalyticalPlan, DirectionChangeEvent, ResolvedInterval } from "./types.js";
 
 function grid(columns: readonly string[], rows: readonly (readonly (string | number)[])[]): string {
   const head = `| ${columns.join(" | ")} |`;
@@ -67,6 +67,19 @@ export type AnalyticalRouteOutcome =
       /** Stage 24.8 §17–§21 — the winning adjacent-period-change event to
        *  remember as an EventRef for follow-ups ("Когда именно это произошло?"). */
       readonly winningEvent?: AnalysisEvent;
+      /** Stage 24.9 §17/§18 — the superlative direction-change winner, to
+       *  remember as a DirectionChangeAnalysisRef. */
+      readonly directionChangeWinner?: { readonly metricKey: string; readonly count: number; readonly events: readonly DirectionChangeEvent[] };
+      /** Stage 24.9 §4/§8–§10 — the resolved metric-set labels, to remember
+       *  as a MetricSetRef ("Активы и Обязательства"). */
+      readonly metricSetLabels?: readonly string[];
+      readonly metricSetOrigin?: "explicit_user_list" | "derived_analysis";
+      /** Stage 24.9 §5–§7/§35/§39 — the ordered ranking-shaped rows, to
+       *  remember as a ResultSetRef. */
+      readonly resultSet?: { readonly operation: string; readonly scoreField: string; readonly rows: readonly { readonly key: string; readonly score: number }[] };
+      /** Stage 24.9 §29/§37 — a single resolved metric to focus the "его/он"
+       *  pronoun on, for ANY operation whose subject is exactly one metric. */
+      readonly focusMetricKey?: string;
       readonly sourceCells: readonly string[];
       readonly entityColumn?: string;
       readonly entityValues: readonly string[];
@@ -80,6 +93,7 @@ function subjectLabel(plan: AnalyticalPlan): string {
   if (s.kind === "row_axis_member") return s.member.display;
   if (s.kind === "column_measure") return s.column.displayLabel;
   if (s.kind === "each_metric") return `${s.members.length} metrics`;
+  if (s.kind === "metric_set") return s.members.map((m) => m.display).join(", ");
   return `${s.columns.length} columns`;
 }
 
@@ -109,6 +123,7 @@ export function runAnalyticalAnalysis(
   subjectOverride?: string,
   inheritedRanking?: InheritedRanking,
   inheritedComposite?: InheritedComposite,
+  inheritedMetricSet?: InheritedMetricSet,
 ): AnalyticalRouteOutcome {
   const ru = language === "ru";
   const intent = detectAnalyticalIntent(text);
@@ -123,6 +138,7 @@ export function runAnalyticalAnalysis(
       ...(subjectOverride ? { subjectOverride } : {}),
       ...(inheritedRanking ? { inheritedRanking } : {}),
       ...(inheritedComposite ? { inheritedComposite } : {}),
+      ...(inheritedMetricSet ? { inheritedMetricSet } : {}),
     },
     language,
   );
@@ -233,6 +249,16 @@ export function runAnalyticalAnalysis(
     ...(plan.operation === "argmax_event" && execution.events && execution.events.length > 0
       ? { winningEvent: execution.events[0]! }
       : {}),
+    ...(execution.directionChangeWinner ? { directionChangeWinner: execution.directionChangeWinner } : {}),
+    ...(plan.metricSetLabels && plan.metricSetLabels.length > 0
+      ? { metricSetLabels: plan.metricSetLabels, metricSetOrigin: intent.metricSetText ? "explicit_user_list" : "derived_analysis" }
+      : {}),
+    ...(execution.resultSet ? { resultSet: execution.resultSet } : {}),
+    ...(plan.subject.kind === "row_axis_member"
+      ? { focusMetricKey: plan.subject.member.display }
+      : plan.subject.kind === "column_measure"
+        ? { focusMetricKey: plan.subject.column.displayLabel }
+        : {}),
     sourceCells: execution.sourceCells,
     ...(execution.entityColumn ? { entityColumn: execution.entityColumn } : {}),
     entityValues: execution.entityValues,

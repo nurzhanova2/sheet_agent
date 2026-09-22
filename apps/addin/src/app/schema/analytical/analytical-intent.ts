@@ -7,6 +7,7 @@
 // downstream by the compiler / executor, never here.
 // ---------------------------------------------------------------------------
 
+import type { SemanticMetricClass } from "../measure-compatibility.js";
 import type { AnalyticalIntent, AnalyticalOperation, OutputProjection, ThresholdMode } from "./types.js";
 
 const MAX_TICK = /максимум|максимальн\p{L}*|наибольш\p{L}*|наивысш\p{L}*|самы[йх]\s+(?:высок|больш)\p{L}*|пик\p{L}*|highest|maximum|\bmax\b|largest|peak/iu;
@@ -21,7 +22,14 @@ const STABILITY_TICK = /стабильн\p{L}*|устойчив\p{L}*|ровн\p
 const MONO_UP_TICK = /(?:росл\p{L}*|увеличив\p{L}*|повыш\p{L}*|рост\p{L}*)\s+(?:последовательн\p{L}*|непрерывн\p{L}*|стабильн\p{L}*|из\s+периода|каждый\s+период|по\s+периодам)|последовательн\p{L}*\s+(?:рост|росл|увеличив)|consistently\s+(?:ris\p{L}*|increas\p{L}*|grew|grow\p{L}*)|monotonic\p{L}*\s+increas\p{L}*|strictly\s+increasing/iu;
 const MONO_DOWN_TICK = /(?:снижа\p{L}*|снизил\p{L}*|уменьш\p{L}*|падал\p{L}*|сокращ\p{L}*)\s+(?:последовательн\p{L}*|непрерывн\p{L}*|по\s+периодам)|последовательн\p{L}*\s+(?:снижа|снизил|уменьш|падал)|consistently\s+(?:declin\p{L}*|decreas\p{L}*|fell|fall\p{L}*)|strictly\s+decreasing/iu;
 const NON_DECREASING_TICK = /не\s+снижа\p{L}*|не\s+уменьш\p{L}*|не\s+падал\p{L}*|non[-\s]?decreasing|never\s+(?:fell|declined)/iu;
-const DIRECTION_CHANGE_TICK = /направлен\p{L}*\s+(?:измен\p{L}*|динамик\p{L}*)\s+(?:поменя\p{L}*|смен\p{L}*|измен\p{L}*)|смен\p{L}*\s+направлен\p{L}*|развернул\p{L}*|reversed?\s+direction|changed?\s+direction|direction\s+(?:flip|reversal|change)/iu;
+// Stage 24.9 §20/§21/§45 — the exact symmetric counterpart of NON_DECREASING_TICK.
+const NON_INCREASING_TICK = /не\s+рос\p{L}*|не\s+увеличив\p{L}*|не\s+повышал\p{L}*|non[-\s]?increasing|never\s+(?:rose|grew|increased)/iu;
+// Stage 24.9 §41 — "менял направление" in EITHER word order (the original
+// only matched "направление поменял/сменил", not "менял направление").
+const DIRECTION_CHANGE_TICK = /направлен\p{L}*\s+(?:измен\p{L}*|динамик\p{L}*)\s+(?:поменя\p{L}*|смен\p{L}*|измен\p{L}*)|смен\p{L}*\s+направлен\p{L}*|менял\p{L}*\s+направлен\p{L}*|направлен\p{L}*\s+менял\p{L}*|развернул\p{L}*|reversed?\s+direction|changed?\s+direction|direction\s+(?:flip|reversal|change)/iu;
+// Stage 24.9 §17/§41 — "ЧАЩЕ ВСЕГО" (superlative, single winner) rather than
+// the plain list of every metric that ever reversed.
+const DIRECTION_CHANGE_SUPERLATIVE_RE = /чаще\s+всего|most\s+often|the\s+most\s+frequently/iu;
 
 const GROWTH_TICK = /рост\p{L}*|вырос\p{L}*|увеличил\p{L}*|прирост\p{L}*|повысил\p{L}*|\bgrew\b|\bgrowth\b|increas\p{L}*|\brose\b|gain\p{L}*/iu;
 const DECLINE_TICK = /сниж\p{L}*|снизил\p{L}*|уменьш\p{L}*|паден\p{L}*|сократил\p{L}*|упал\p{L}*|\bfell\b|declin\p{L}*|decreas\p{L}*|\bdrop\b|loss\p{L}*/iu;
@@ -82,6 +90,30 @@ const ORDINAL_TWO_INTERVAL_RE = new RegExp(
 // Stage 24.8 §11/§30/§31 — "те же 5 [показателей]" reuses the prior
 // RankingAnalysisRef's scope/interval/limit; only the basis changes.
 const SAME_RANKING_RE = /те\s+же(?:\s+\d{1,3})?(?:\s+показател\p{L}*|метрик\p{L}*)?|those\s+same(?:\s+\d+)?/iu;
+
+// Stage 24.9 §22–§25 — "если не учитывать процентные показатели" / "исключая
+// проценты": a semantic-class exclusion modifier, orthogonal to the chosen
+// operation. All FOUR percentage-like classes are excluded together — the
+// user names one word ("процентные"), not the taxonomy.
+const EXCLUDE_PERCENT_RE =
+  /(?:если\s+)?не\s+учитыва\p{L}*\s+процентн\p{L}*(?:\s+показател\p{L}*)?|исключ\p{L}*\s+процентн\p{L}*(?:\s+показател\p{L}*)?|кроме\s+процентн\p{L}*\s+показател\p{L}*|без\s+учета\s+процентн\p{L}*|excluding\s+percentage(?:s)?|without\s+percentage(?:s)?/iu;
+const EXCLUDE_PERCENT_CLASSES: readonly SemanticMetricClass[] = ["percentage", "ratio", "share", "rate"];
+
+// Stage 24.9 §8/§11 — "сравни (динамику )?A и B [за всё доступное время]." —
+// TWO OR MORE explicitly named metrics, whole point-in-time series, never a
+// change-horizon / single-interval comparison.
+const COMPARE_DYNAMICS_RE =
+  /сравн\p{L}*\s+динамик\p{L}*\s+(.+?)(?:\s+за\s+(?:вс[её]|весь)\s+(?:доступн\p{L}*\s+)?(?:период|время)|[.?!]|$)|compare\s+(?:the\s+)?dynamics\s+of\s+(.+?)(?:\s+over\s+(?:all\s+)?(?:available\s+)?time|[.?!]|$)/iu;
+
+// Stage 24.9 §13/§44/§51 — "[сравни] темп роста A и B" — a growth-rate
+// comparison over an EXPLICIT metric set, default interval = first→last
+// canonical point (resolved in the compiler; no PeriodRef required here).
+const GROWTH_RATE_RE = /(?:сравни\s+)?темп\p{L}*\s+рост\p{L}*\s+(.+?)(?:[.?!]|$)|growth\s+rate\s+of\s+(.+?)(?:[.?!]|$)/iu;
+
+// Stage 24.9 §35/§36/§50 — "какой из них вырос/снизился сильнее…" with NO
+// explicit metric names: a growth comparison reusing the prior MetricSetRef.
+const GROWTH_COMPARE_PRONOUN_RE =
+  /как(?:ой|ая|ое)\s+из\s+них\s+(?:вырос|выросл|снизил|увеличил|уменьш|упал)\p{L}*|which\s+of\s+(?:them|these)\s+(?:grew|declined|fell|increased)/iu;
 
 function changeVerbSign(word: string): "positive" | "negative" {
   return /вырос|увеличил/iu.test(word) ? "positive" : "negative";
@@ -177,12 +209,18 @@ export function detectAnalyticalIntent(rawText: string): AnalyticalIntent {
   let interval2Predicate: "positive" | "negative" | undefined;
   let ordinalIntervalRef: true | undefined;
   let sameRankingRef: true | undefined;
+  let directionChangeSuperlative: true | undefined;
+  let metricSetText: string | undefined;
+  let sameMetricSetRef: true | undefined;
 
   const thr = THRESHOLD_RE.exec(text);
   void num;
 
   const twoIntervalM = TWO_INTERVAL_RE.exec(text);
   const ordinalTwoM = ORDINAL_TWO_INTERVAL_RE.exec(text);
+  const compareDynamicsM = COMPARE_DYNAMICS_RE.exec(text);
+  const growthRateM = GROWTH_RATE_RE.exec(text);
+  const excludePercentM = EXCLUDE_PERCENT_RE.exec(text);
 
   if (twoIntervalM) {
     // Stage 24.8 §37 — two explicit, independently predicated intervals.
@@ -202,6 +240,33 @@ export function detectAnalyticalIntent(rawText: string): AnalyticalIntent {
     interval2Predicate = changeVerbSign(ordinalTwoM[2]!);
     ordinalIntervalRef = true;
     push("two_interval_filter:ordinal");
+  } else if (compareDynamicsM) {
+    // Stage 24.9 §8/§11/§49 — TWO+ explicitly named metrics, whole available
+    // series, period-aligned.
+    operation = "compare_time_series";
+    metricSetText = cleanNoun(compareDynamicsM[1] ?? compareDynamicsM[2] ?? "");
+    push("compare_time_series");
+  } else if (growthRateM) {
+    // Stage 24.9 §13/§44/§51 — "темп роста A и B" — explicit metric set,
+    // default first→last interval (resolved downstream, no PeriodRef needed).
+    operation = "compare_growth";
+    metricSetText = cleanNoun(growthRateM[1] ?? growthRateM[2] ?? "");
+    direction = "desc";
+    push("compare_growth:explicit");
+  } else if (GROWTH_COMPARE_PRONOUN_RE.test(text)) {
+    // Stage 24.9 §35/§36/§50 — no explicit metric names: reuse the prior
+    // MetricSetRef as the candidate set, recompute growth fresh.
+    operation = "compare_growth";
+    sameMetricSetRef = true;
+    direction = decline && !growth ? "asc" : "desc";
+    push("compare_growth:same_metric_set_ref");
+  } else if (DIRECTION_CHANGE_TICK.test(text) && DIRECTION_CHANGE_SUPERLATIVE_RE.test(text)) {
+    // Stage 24.9 §17/§41 — "менял направление ЧАЩЕ ВСЕГО": superlative single
+    // winner, never the plain reversal list.
+    operation = "direction_change";
+    directionChangeSuperlative = true;
+    direction = "desc";
+    push("direction_change:superlative");
   } else if (ADJACENT_TICK.test(text) && (LARGEST_CHANGE_TICK.test(text) || changed)) {
     // Stage 24.8 §15/§39 — the global adjacent-period-change EVENT, never a
     // change-horizon / "last month" shortcut.
@@ -224,6 +289,11 @@ export function detectAnalyticalIntent(rawText: string): AnalyticalIntent {
     operation = "monotonicity";
     monotone = "non_decreasing";
     push("monotonicity:non_decreasing");
+  } else if (NON_INCREASING_TICK.test(text)) {
+    // Stage 24.9 §20/§21/§45 — exact symmetric counterpart: "ни разу не рос".
+    operation = "monotonicity";
+    monotone = "non_increasing";
+    push("monotonicity:non_increasing");
   } else if (MONO_UP_TICK.test(text)) {
     operation = "monotonicity";
     monotone = "strict_increasing";
@@ -294,7 +364,11 @@ export function detectAnalyticalIntent(rawText: string): AnalyticalIntent {
   // interval field(s) (two_interval_filter: interval1/2*Text; argmax_event:
   // every point period), so a two-interval sentence never leaves a garbage
   // single-interval span on the intent.
-  const skipGenericInterval = operation === "two_interval_filter" || operation === "argmax_event";
+  // Stage 24.9 §11/§13/§44 — compare_time_series always uses every available
+  // point; compare_growth resolves its OWN default first→last interval in the
+  // compiler (never a PeriodRef / generic-interval parse here).
+  const skipGenericInterval =
+    operation === "two_interval_filter" || operation === "argmax_event" || operation === "compare_time_series" || operation === "compare_growth";
   // "между" is tried FIRST and independently of the bare "с" alternative:
   // a standalone "с" can legitimately appear earlier in the SAME sentence for
   // an unrelated reason ("5 показателей С наибольшим изменением ... МЕЖДУ
@@ -357,13 +431,21 @@ export function detectAnalyticalIntent(rawText: string): AnalyticalIntent {
   if (intervalM) remainingForSubject = remainingForSubject.replace(intervalM[0], " ");
   else if (sameSpanM) remainingForSubject = remainingForSubject.replace(sameSpanM[0], " ");
   if (thr) remainingForSubject = remainingForSubject.replace(thr[0], " ");
-  const subjectText = extractSubjectText(remainingForSubject.replace(/\s+/g, " ").trim()) ?? extractSubjectText(text);
+  if (excludePercentM) remainingForSubject = remainingForSubject.replace(excludePercentM[0], " ");
+  const subjectText =
+    operation === "compare_time_series" || operation === "compare_growth"
+      ? undefined
+      : (extractSubjectText(remainingForSubject.replace(/\s+/g, " ").trim()) ?? extractSubjectText(text));
 
   const measureBasisOverride: AnalyticalIntent["measureBasisOverride"] = BASIS_ABSOLUTE_RE.test(text)
     ? "absolute_change"
     : BASIS_PERCENT_RE.test(text)
       ? "percentage_change"
       : undefined;
+
+  // Stage 24.9 §22–§25 — a semantic-class exclusion modifier, independent of
+  // the chosen operation.
+  const excludeMetricClasses: AnalyticalIntent["excludeMetricClasses"] = excludePercentM ? EXCLUDE_PERCENT_CLASSES : undefined;
 
   // "как изменились активы между ..." with a single subject → change, not filter.
   if (
@@ -400,7 +482,7 @@ export function detectAnalyticalIntent(rawText: string): AnalyticalIntent {
     operation === "two_interval_filter"
   ) {
     output = "ranking";
-  } else if (operation === "argmax_event") {
+  } else if (operation === "argmax_event" || operation === "compare_time_series" || operation === "compare_growth") {
     output = "table";
   } else {
     output = "table";
@@ -429,6 +511,10 @@ export function detectAnalyticalIntent(rawText: string): AnalyticalIntent {
     ...(interval2EndText ? { interval2EndText } : {}),
     ...(interval2Predicate ? { interval2Predicate } : {}),
     ...(ordinalIntervalRef ? { ordinalIntervalRef } : {}),
+    ...(directionChangeSuperlative ? { directionChangeSuperlative } : {}),
+    ...(excludeMetricClasses ? { excludeMetricClasses } : {}),
+    ...(metricSetText ? { metricSetText } : {}),
+    ...(sameMetricSetRef ? { sameMetricSetRef } : {}),
     outputProjection: output,
     any,
     cues,

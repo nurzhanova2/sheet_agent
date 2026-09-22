@@ -8,7 +8,7 @@
 // membership is computed deterministically here.
 // ---------------------------------------------------------------------------
 
-import type { MeasureKind } from "../measure-compatibility.js";
+import type { MeasureKind, SemanticMetricClass } from "../measure-compatibility.js";
 import type { ColumnPath, RowAxisMember } from "../schema-induction.js";
 
 // --- analytical operations -------------------------------------------------
@@ -36,9 +36,16 @@ export type AnalyticalOperation =
    *  TWO independently resolved intervals ("выросли в первом, но снизились во
    *  втором"). */
   | "two_interval_filter"
+  /** Stage 24.9 §11 — the ordered point-in-time series of TWO OR MORE
+   *  explicitly named metrics, rendered as one period-aligned table. */
+  | "compare_time_series"
+  /** Stage 24.9 §12/§13 — percentage (or absolute) growth of a MetricSet
+   *  between two points, defaulting to first→last canonical period with NO
+   *  PeriodRef required. */
+  | "compare_growth"
   | "unknown";
 
-export type SubjectScope = "each_metric" | "single_metric" | "row_axis" | "column_axis";
+export type SubjectScope = "each_metric" | "single_metric" | "row_axis" | "column_axis" | "metric_set";
 
 export type OutputProjection = "period" | "value" | "period_and_value" | "series" | "ranking" | "table";
 
@@ -93,6 +100,18 @@ export interface AnalyticalIntent {
    *  reuse the prior CompositeAnalysisRef's two intervals; only the predicates
    *  are new. */
   readonly ordinalIntervalRef?: boolean;
+  /** Stage 24.9 §41/§49 — "менял направление ЧАЩЕ ВСЕГО" (superlative, single
+   *  winner) rather than the plain list of every metric with any reversal. */
+  readonly directionChangeSuperlative?: boolean;
+  /** Stage 24.9 §22–§25 — "если не учитывать процентные показатели": exclude
+   *  these semantic classes from the candidate universe BEFORE analysis. */
+  readonly excludeMetricClasses?: readonly SemanticMetricClass[];
+  /** Stage 24.9 §8/§9 — the raw "A и B [и C]" phrase for an explicit
+   *  multi-metric subject (compare_time_series / compare_growth). */
+  readonly metricSetText?: string;
+  /** Stage 24.9 §35/§36 — "какой из них вырос сильнее…" with NO explicit
+   *  metric names: reuse the prior MetricSetRef as the candidate set. */
+  readonly sameMetricSetRef?: boolean;
   readonly outputProjection: OutputProjection;
   /** true when at least one analytical cue fired. */
   readonly any: boolean;
@@ -106,7 +125,10 @@ export type ResolvedSubject =
   | { readonly kind: "each_metric"; readonly members: readonly RowAxisMember[] }
   | { readonly kind: "row_axis_member"; readonly member: RowAxisMember }
   | { readonly kind: "column_measure"; readonly column: ColumnPath }
-  | { readonly kind: "each_column"; readonly columns: readonly ColumnPath[] };
+  | { readonly kind: "each_column"; readonly columns: readonly ColumnPath[] }
+  /** Stage 24.9 §8–§10 — an EXPLICIT, bounded set of named metrics (never
+   *  "every metric") — "Активы и Обязательства". Row-axis only (§9 scope). */
+  | { readonly kind: "metric_set"; readonly members: readonly RowAxisMember[] };
 
 export type CanonicalPeriodKind = "point" | "interval" | "change_horizon" | "year";
 
@@ -166,6 +188,19 @@ export interface AnalysisEvent {
   readonly percentageChange: number | null;
   readonly startCell: string;
   readonly endCell: string;
+}
+
+/** Stage 24.9 §14–§16 — one direction reversal PIVOT of a temporal series: the
+ *  point at which the sign of the period-to-period delta flipped. Zero-delta
+ *  policy (§14): a zero delta never itself creates or breaks a direction —
+ *  it is skipped when comparing signs (the SAME policy as the pre-existing
+ *  `detectDirectionChanges`, §51). */
+export interface DirectionChangeEvent {
+  readonly pivotCanonical: string;
+  readonly pivotHeaderPath: string;
+  readonly previousDirection: "positive" | "negative";
+  readonly nextDirection: "positive" | "negative";
+  readonly sourceCell: string;
 }
 
 // --- the analytical plan (typed DAG) ----------------------------------
@@ -243,6 +278,19 @@ export interface AnalyticalPlan {
   /** Stage 24.8 §12 — the two independently-resolved intervals + predicates
    *  for `two_interval_filter`. Always length 2 when the operation is set. */
   readonly predicateIntervals?: readonly PredicateInterval[];
+  /** Stage 24.9 §17/§49 — "чаще всего" superlative direction-change ranking
+   *  (single winner) rather than the plain reversal list. */
+  readonly directionChangeSuperlative?: boolean;
+  /** Stage 24.9 §25/§46 — the semantic classes excluded from this plan's
+   *  candidate universe, plus the before/after candidate counts (debug trace). */
+  readonly semanticFilter?: {
+    readonly excludeClasses: readonly SemanticMetricClass[];
+    readonly candidateCountBefore: number;
+    readonly candidateCountAfter: number;
+  };
+  /** Stage 24.9 §35/§36/§40 — the resolved metric labels when `subject.kind`
+   *  is `metric_set`, so the caller can persist a MetricSetRef. */
+  readonly metricSetLabels?: readonly string[];
   readonly steps: readonly AnalyticalStep[];
   readonly output: OutputProjection;
   readonly assumptions: readonly ExplicitAssumption[];
@@ -312,4 +360,19 @@ export interface AnalyticalExecution {
    *  plan produced (winner first), so a follow-up EventRef is built from this
    *  structured data — never re-derived from `sections`/rendered text. */
   readonly events?: readonly AnalysisEvent[];
+  /** Stage 24.9 §17/§18 — the single direction-change winner (superlative
+   *  ranking), so a DirectionChangeAnalysisRef is built from structured data. */
+  readonly directionChangeWinner?: {
+    readonly metricKey: string;
+    readonly count: number;
+    readonly events: readonly DirectionChangeEvent[];
+  };
+  /** Stage 24.9 §35/§39 — the ordered (metric, score) rows a volatility /
+   *  stability ranking produced, so a ResultSetRef can be persisted and later
+   *  follow-ups ("какой из них самый волатильный?") answer WITHOUT recompute. */
+  readonly resultSet?: {
+    readonly operation: string;
+    readonly scoreField: string;
+    readonly rows: readonly { readonly key: string; readonly score: number }[];
+  };
 }
