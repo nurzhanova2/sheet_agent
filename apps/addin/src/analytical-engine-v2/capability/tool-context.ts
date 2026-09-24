@@ -1,4 +1,5 @@
 import type { ToolSpec } from "../tools/contracts.js";
+import { ownArgLinesOf, sharedArgumentKeys, sharedArgumentsOf, signatureOf, type SharedArgument } from "../tools/projection.js";
 import { CAPABILITY_PURPOSE, type CapabilityFacts, type CapabilityId } from "./capability-model.js";
 import { capabilityIndex, descriptorOf, usableToolsOf, type CapabilityIndex } from "./capability-index.js";
 import { capabilityStates, type CapabilityState } from "./capability-availability.js";
@@ -13,13 +14,6 @@ const HEADER = [
   "Every tool listed below is callable right now, and carries its full argument contract. Tools shown with a one-line purpose keep their longer notes in reserve — ask for a capability by name to read them.",
 ].join(NEWLINE);
 
-export interface SharedArg {
-  readonly name: string;
-  readonly type: string;
-  readonly describe: string;
-  readonly uses: number;
-}
-
 export interface ToolContextModel {
   readonly capabilities: readonly CapabilityState[];
   readonly availableCapabilities: readonly CapabilityId[];
@@ -27,7 +21,7 @@ export interface ToolContextModel {
   readonly exposedTools: readonly string[];
   readonly loadedTools: readonly string[];
   readonly absentTools: readonly string[];
-  readonly shared: readonly SharedArg[];
+  readonly shared: readonly SharedArgument[];
   readonly leaks: readonly string[];
   readonly text: string;
 }
@@ -70,37 +64,13 @@ export function withoutAbsentTools(text: string, exposed: ReadonlySet<string>, k
   return absentIn(filtered, exposed, known).length === 0 ? filtered : dropAbsentFragments(filtered, exposed, known);
 }
 
-function sharedArgsOf(tools: readonly ToolSpec[]): readonly SharedArg[] {
-  const uses = new Map<string, { name: string; type: string; describe: string; uses: number }>();
-  for (const tool of tools) {
-    for (const [name, spec] of Object.entries(tool.args)) {
-      const key = `${name}\u0000${spec.type}\u0000${spec.describe}`;
-      const entry = uses.get(key) ?? { name, type: spec.type, describe: spec.describe, uses: 0 };
-      entry.uses += 1;
-      uses.set(key, entry);
-    }
-  }
-  return [...uses.values()].filter((e) => e.uses > 1).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function signatureOf(tool: ToolSpec): string {
-  const args = Object.entries(tool.args);
-  return `${tool.name}(${args.map(([n, spec]) => `${n}${spec.required ? "!" : ""}:${spec.type}`).join(", ")})`;
-}
-
-function ownArgLines(tool: ToolSpec, sharedKeys: ReadonlySet<string>, clean: (text: string) => string): readonly string[] {
-  return Object.entries(tool.args)
-    .filter(([n, spec]) => !sharedKeys.has(`${n}\u0000${spec.type}\u0000${spec.describe}`))
-    .map(([n, spec]) => `${n} \u2014 ${clean(spec.describe)}`);
-}
-
 function contractLines(tool: ToolSpec, sharedKeys: ReadonlySet<string>, clean: (text: string) => string): string {
-  const own = ownArgLines(tool, sharedKeys, clean);
+  const own = ownArgLinesOf(tool, sharedKeys, clean);
   return `- ${signatureOf(tool)} \u2192 ${tool.returns}${NEWLINE}  ${clean(tool.description)}${own.length > 0 ? `${NEWLINE}  ${own.join("; ")}` : ""}`;
 }
 
 function descriptorLine(tool: ToolSpec, sharedKeys: ReadonlySet<string>, clean: (text: string) => string): string {
-  const own = ownArgLines(tool, sharedKeys, clean);
+  const own = ownArgLinesOf(tool, sharedKeys, clean);
   return `- ${signatureOf(tool)} \u2192 ${tool.returns}${NEWLINE}  ${clean(descriptorOf(tool).shortDescription)}${own.length > 0 ? `${NEWLINE}  ${own.join("; ")}` : ""}`;
 }
 
@@ -118,8 +88,8 @@ export function buildToolContext(input: ToolContextInput): ToolContextModel {
   const exposedNameSet = new Set(exposed.map((t) => t.name));
   const knownNames = new Set(index.byName.keys());
   const clean = (text: string): string => withoutAbsentTools(text, exposedNameSet, knownNames);
-  const shared = sharedArgsOf(exposed);
-  const sharedKeys = new Set(shared.map((e) => `${e.name}\u0000${e.type}\u0000${e.describe}`));
+  const shared = sharedArgumentsOf(exposed);
+  const sharedKeys = sharedArgumentKeys(shared);
 
   const summary = available.map((id) => {
     const state = states.find((s) => s.id === id)!;

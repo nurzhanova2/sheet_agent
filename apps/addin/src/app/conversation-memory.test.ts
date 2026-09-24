@@ -164,60 +164,6 @@ describe("interpretClarificationAnswer", () => {
   it("returns unclear for an unrelated reply", () => {
     expect(interpretClarificationAnswer("what is PD anyway", pending)).toEqual({ kind: "unclear" });
   });
-
-  // Stage 24.6.1 — a norm clarification is a semantic choice, not a yes/no.
-  const norm: PendingClarification = {
-    id: "clr_n",
-    turnId: "t2",
-    createdAt: 0,
-    originalPrompt: "найди значения, выходящие за пределы нормы",
-    route: "workbook_analysis",
-    kind: "schema_norm",
-    resolved: [],
-    observations: [],
-    candidates: ["статистический выброс", "заданный порог"],
-    term: "норма",
-    question: "статистический выброс или заданный порог?",
-    answerShape: "one_of",
-  };
-  const thr: PendingClarification = { ...norm, kind: "schema_threshold", candidates: [], question: "какое значение порога?", answerShape: "free" };
-
-  it.each(["да", "ага", "угу", "ок", "хорошо", "yes", "yeah", "ok", "okay", "нет", "no"])(
-    "generic acknowledgement %j does NOT pick a branch",
-    (a) => expect(interpretClarificationAnswer(a, norm)).toEqual({ kind: "unclear" }),
-  );
-
-  it("explicit statistical answers resolve to the statistical marker", () => {
-    for (const a of ["статистический выброс", "статистические выбросы", "выброс", "выбросы", "IQR", "по IQR", "statistical outlier"]) {
-      expect(interpretClarificationAnswer(a, norm), a).toEqual({ kind: "choice", choices: ["statistical"] });
-    }
-  });
-
-  it("'порог' with no number → threshold marker (asks for the value later)", () => {
-    expect(interpretClarificationAnswer("порог", norm)).toEqual({ kind: "choice", choices: ["threshold"] });
-    expect(interpretClarificationAnswer("используй порог", norm)).toEqual({ kind: "choice", choices: ["threshold"] });
-  });
-
-  it("a numeric answer is the threshold value (percent normalised)", () => {
-    expect(interpretClarificationAnswer("0.2", norm)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-    expect(interpretClarificationAnswer("0,2", norm)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-    expect(interpretClarificationAnswer("20%", norm)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-    expect(interpretClarificationAnswer("порог 0.2", norm)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-  });
-
-  it("explicit ordinals map to the two branches", () => {
-    expect(interpretClarificationAnswer("первое", norm)).toEqual({ kind: "choice", choices: ["statistical"] });
-    expect(interpretClarificationAnswer("1", norm)).toEqual({ kind: "choice", choices: ["statistical"] });
-    expect(interpretClarificationAnswer("второе", norm)).toEqual({ kind: "choice", choices: ["threshold"] });
-    expect(interpretClarificationAnswer("2", norm)).toEqual({ kind: "choice", choices: ["threshold"] });
-  });
-
-  it("schema_threshold accepts only a number", () => {
-    expect(interpretClarificationAnswer("0.2", thr)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-    expect(interpretClarificationAnswer("20%", thr)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-    expect(interpretClarificationAnswer("да", thr)).toEqual({ kind: "unclear" });
-    expect(interpretClarificationAnswer("порог", thr)).toEqual({ kind: "unclear" });
-  });
 });
 
 describe("projectMemoryForModel", () => {

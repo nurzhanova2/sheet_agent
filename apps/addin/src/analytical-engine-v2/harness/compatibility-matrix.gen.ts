@@ -1,5 +1,5 @@
-import { V2_TOOLS } from "./registry.js";
-import type { ArgSpec } from "./contracts.js";
+import { V2_TOOLS } from "../tools/registry.js";
+import type { ArgSpec } from "../tools/contracts.js";
 
 /** The semantic type a slot carries, as opposed to how it is spelled. */
 function semanticType(arg: string, spec: ArgSpec): string {

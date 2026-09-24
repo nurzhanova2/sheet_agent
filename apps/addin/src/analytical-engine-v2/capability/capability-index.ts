@@ -1,5 +1,6 @@
 import { V2_TOOLS } from "../tools/registry.js";
 import type { ToolSpec } from "../tools/contracts.js";
+import { argSummaryOf } from "../tools/projection.js";
 import {
   CAPABILITY_IDS,
   shortDescriptionOf,
@@ -43,18 +44,12 @@ export function usableToolsOf(capability: CapabilityId, facts: CapabilityFacts, 
   return toolsOf(capability, index).filter((tool) => usableTool(tool, facts));
 }
 
-function summarizeArgs(tool: ToolSpec): string {
-  const entries = Object.entries(tool.args);
-  if (entries.length === 0) return "no arguments";
-  return entries.map(([name, spec]) => `${name}${spec.required ? "!" : ""}:${spec.type}`).join(", ");
-}
-
 export function descriptorOf(tool: ToolSpec): ToolDescriptor {
   return {
     id: tool.name,
     capability: tool.capability,
     shortDescription: shortDescriptionOf(tool.description),
-    inputSummary: summarizeArgs(tool),
+    inputSummary: argSummaryOf(tool),
     outputSummary: tool.returns,
   };
 }

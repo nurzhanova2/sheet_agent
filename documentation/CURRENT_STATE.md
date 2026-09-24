@@ -1,3 +1,86 @@
+STAGE 28F - STATE & REGISTRY CONSOLIDATION - PASS
+
+P0 COMPLETE. P1 engine/routing: BLOCKED on 6->1 only (see 28E).
+P1 state/registry: PASS.
+
+AUTHORITATIVE ANALYTICAL STATE
+`analytical-engine-v2/state/` (conversation-state, state-commit, state-refs,
+clarification-loop). It alone answers "what were we just talking about":
+tableRef, lastResult, recentResults, lastMetric, lastMetricSet, lastPeriod,
+lastPeriodRange, lastSeries, lastEvent, lastAnalysis, suspended - each typed,
+lineage-carrying and freshness-checked. The narrowest-set rule, ResultRef /
+RowSetRef lineage and the analytical follow-up references are unchanged.
+
+AUTHORITATIVE V2 TOOL REGISTRY
+`analytical-engine-v2/tools/registry.ts` (V2_TOOLS, 39 ToolSpec). ToolSpec is
+the single metadata definition: name, description, capability, args, returns,
+accepts, reads, usable, run. `tools/projection.ts` is the single projection of
+it (signatureOf, argSummaryOf, sharedArgumentsOf, ownArgLinesOf, projectTools).
+
+DERIVED CAPABILITY PROJECTIONS (all from the registry, none independent)
+capability-index (grouping + descriptors), capability-selection (dynamic
+exposure), capability/tool-context (planner prompt text), capability/agent-tools
+(sandbox agent-loop shape), context/build-context (full-catalogue baseline).
+Stage 27 dynamic tool exposure is preserved - the prompt still carries a tiered
+subset, never every contract.
+
+MUTATION STORE BOUNDARY (the second store, by design)
+`app/session-memory.ts` + `app/conversation-memory.ts`, narrowed 1340 -> 766 LOC
+and 19 -> 8 fields: recentResults, lastResultId, lastRowSet, lastChart,
+lastCreatedSheet, pendingClarification, seq, knownIds. It owns what a WRITE acts
+on - ResultRef identity for Preview/Approve/Execute/Undo, RowSetRef, ChartRef,
+SheetRef - plus the chart/column/entity/dataset clarifications. Merging it into
+V2 would put read-only analytical state in charge of workbook writes.
+
+FLAT-RECORDS REGISTRY BOUNDARY (the second registry, by domain)
+`agent/tool-registry.ts` (13 tools) serves records lists and cross-sheet
+questions. Names are disjoint from V2's; a test asserts no overlap and that V2
+advertises no records capability.
+
+MIRRORED WRITES REMOVED
+10 analytical reference fields and their 10 `remember*` writers
+(lastPeriodRef, lastCompositeRef, lastRankingRef, lastEventRef,
+lastAnalyticalTable, lastDirectionChangeRef, lastMetricSetRef, lastResultSetRef,
+lastAnalyticalResultSetRef, lastMetricFocusRef) had no production writer after
+28E and no non-debug reader. Also removed: resolvedEntities / rememberResolved /
+ResolvedWorkbookRef (no caller anywhere), and the dead
+`analyticalContinuationStanding` guard.
+
+CLARIFICATION
+Analytical clarification lifecycles 2 -> 1 (V2 SuspendedPlannerState).
+ClarificationKind 14 -> 6, every survivor non-analytical: column_ambiguous,
+dataset_ambiguous, reference_ambiguous, chart_columns, agent, entity_action.
+
+CORRECTION TO THE PLAN
+P1-5(a) proposed carrying verified findings across the V2->V1 bridge instead of
+`facts: []`. `ResultRef.facts` has no production reader, so that would add a
+field with no consumer. The bridge is unchanged; the dead field is recorded as
+debt.
+
+DEAD CODE REMOVED (with evidence)
+agent/index.ts (0 importers), app/qwen-key-store.ts + test (companion holds the
+key via DPAPI), 4 orphaned clarification builders, 4 duplicate projection
+helpers. tools/compatibility-matrix.gen.ts + test moved to harness/.
+
+COMPLEXITY
+SessionMemory fields 19 -> 8; mutation-store reference types 20 -> 7; mirrored
+analytical writers 10 -> 0; ClarificationKind 14 -> 6; clarification builders
+10 -> 6; analytical clarification lifecycles 2 -> 1; mutation-store LOC
+1340 -> 766; duplicate tool-projection implementations 4 -> 1; authoritative
+tool metadata definitions 1 (unchanged); build-context 211 -> 171 LOC;
+use-agent.ts 3075 -> 2969 LOC (59 -> 58 imports); production LOC
+48933 -> 48172; 3 files deleted, 2 moved, 893 LOC removed.
+
+VALIDATION
+full add-in 2035 passed / 27 skipped / 0 failed; focused batch 365/365; new
+state tests 28/28; new registry tests 17/17; root Node 29/29; tsc PASS; eslint
+PASS. No companion run, no installer, no live Qwen.
+
+Report: documentation/stages/stage28/STAGE_28F_REPORT.md
+Commit: recorded below by the docs commit.
+Next: Stage 28G - sandbox consolidation + final architecture cleanup.
+Stage 28 is NOT PASS.
+
 STAGE 28E - P1 ANALYTICAL ENGINE & ROUTING - BLOCKED ON 6->1, CONSOLIDATION DONE
 
 P0 COMPLETE. P1 engine/routing: BLOCKED (on the 6 -> 1 engine target only).

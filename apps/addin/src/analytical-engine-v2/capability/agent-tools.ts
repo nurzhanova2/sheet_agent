@@ -4,20 +4,17 @@ import { buildPeriodIndex } from "../../app/schema/analytical/period-index.js";
 import type { AnalyticalConversationState } from "../state/conversation-state.js";
 import type { ResultStore } from "../results/result-store.js";
 import { buildToolEnv } from "../tools/registry.js";
+export { signatureOf } from "../tools/projection.js";
 import { executeCall, validateCall } from "../tools/validator.js";
 import { renderResultForPlanner } from "../planner/result-preview.js";
 import type { ToolSpec } from "../tools/contracts.js";
+import { signatureOf } from "../tools/projection.js";
 import type { AnalyzeDecision } from "../types.js";
 import { CAPABILITY_PURPOSE, type CapabilityFacts, type CapabilityId } from "./capability-model.js";
 import { capabilityIndex, usableToolsOf } from "./capability-index.js";
 import { capabilityFactsOf, capabilityStateOf } from "./capability-availability.js";
 import { selectCapabilities, type PlanSignals } from "./capability-selection.js";
 import type { CapabilityDiscovery, DeterministicTool, ToolInvoker, ToolOutcome } from "../sandbox/analysis-agent.js";
-
-export function signatureOf(tool: ToolSpec): string {
-  const args = Object.entries(tool.args);
-  return `${tool.name}(${args.map(([n, spec]) => `${n}${spec.required ? "!" : ""}:${spec.type}`).join(", ")})`;
-}
 
 export function agentToolOf(tool: ToolSpec, loaded: boolean): DeterministicTool {
   const first = tool.description.split(". ")[0] ?? tool.description;

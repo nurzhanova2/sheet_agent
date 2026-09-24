@@ -53,7 +53,6 @@ import { detectGroupedRanking, planGroupedRanking } from "../app/grouped-ranking
 import { induceTableSchema, type TableSchema } from "../app/schema/schema-induction.js";
 import { describeSchema } from "../app/schema/describe-schema.js";
 import type { AnalysisGrids } from "../app/schema/matrix-analysis.js";
-import { isAnalyticalFollowUp } from "../app/analytical-turn.js";
 import { containsForbiddenLeak } from "../app/answer-leak.js";
 import { BUILD_INFO, buildInfoLine } from "../app/build-info.js";
 // ----- Stage 26.8: the unified analytical engine, in production -------------
@@ -331,44 +330,6 @@ export interface SessionMemoryDebug {
   readonly build?: { readonly appVersion: string; readonly buildId: string; readonly gitCommit: string; readonly stage: string };
   /** Stage 24.5.2 §2 — the most recent result-action runtime trace. */
   readonly lastResultActionTrace?: ResultActionTrace;
-  /** Stage 24.8 §11/§30/§31 — the most recent explicit-interval ranking. */
-  readonly lastRankingRef?: { readonly startCanonical: string; readonly endCanonical: string; readonly limit?: number };
-  /** Stage 24.8 §12–§14 — the most recent two-interval predicate analysis. */
-  readonly lastCompositeRef?: {
-    readonly interval1: { readonly startCanonical: string; readonly endCanonical: string };
-    readonly interval2: { readonly startCanonical: string; readonly endCanonical: string };
-  };
-  /** Stage 24.8 §17–§21 — the most recent adjacent-period-change event. */
-  readonly lastEventRef?: {
-    readonly metricKey: string;
-    readonly startCanonical: string;
-    readonly endCanonical: string;
-    readonly startHeaderPath: string;
-    readonly endHeaderPath: string;
-    readonly absoluteChange: number;
-    readonly percentageChange: number | null;
-  };
-  /** Stage 24.8 §27–§29 — the last table an analytical query ran against. */
-  readonly lastAnalyticalTable?: { readonly sheetName: string; readonly sourceRange: string };
-  /** Stage 24.9 — the most recent superlative direction-change winner. */
-  readonly lastDirectionChangeRef?: { readonly metricKey: string; readonly directionChangeCount: number; readonly events: number };
-  /** Stage 24.9 — the most recent explicit / reused multi-metric candidate set. */
-  readonly lastMetricSetRef?: { readonly metricKeys: readonly string[]; readonly origin: string };
-  /** Stage 24.9 — the most recent ordered ranking-shaped result. */
-  readonly lastResultSetRef?: { readonly operation: string; readonly rows: readonly { readonly key: string; readonly score: number }[] };
-  /** Stage 25.1.3f §3/§20 — the standing analytical continuation universe:
-   *  which operation produced it, its filterable fields, its metric universe
-   *  and its size. Observability only — never surfaced to the user. */
-  readonly lastAnalyticalResultSetRef?: {
-    readonly operation: string;
-    readonly columns: readonly string[];
-    readonly metricKeys: readonly string[];
-    readonly rowCount: number;
-  };
-  /** Stage 24.9 §29/§37 — the metric currently "in focus" for a bare pronoun. */
-  readonly lastMetricFocusRef?: { readonly metricKey: string };
-  /** Stage 25.1.2 §2/§3/§53 — the most recent FINAL executed comparison interval. */
-  readonly lastPeriodRef?: { readonly startCanonical: string; readonly endCanonical?: string };
 }
 
 export interface AgentController {
@@ -1941,14 +1902,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
           } else {
             setLanguage(lang);
             append({ kind: "command", id: nextId("cmd"), text });
-            // 24.6.1 §2 — a generic "да / yes" gets a short disambiguation, not a restart.
-            const reask =
-              pending.kind === "schema_norm"
-                ? lang === "ru"
-                  ? "Уточните, пожалуйста: статистический выброс или заданный порог?"
-                  : "Please clarify: a statistical outlier or a fixed threshold?"
-                : pending.question;
-            append({ kind: "response", id: nextId("res"), streaming: false, text: reask });
+            append({ kind: "response", id: nextId("res"), streaming: false, text: pending.question });
             return;
           }
         }
@@ -1997,10 +1951,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
       // ----- Stage 24.2 / 24.3: conversational routing (non-slash turns) ---
       if (!routedSlash && !suppressCommandEcho) {
         const mem = sessionMemoryRef.current;
-        const knownEntities = [
-          ...mem.resolvedEntities.map((e) => e.name),
-          ...mem.recentResults.flatMap((r) => r.columns),
-        ];
+        const knownEntities = mem.recentResults.flatMap((r) => r.columns);
         const route = routeTurn(text, {
           hasSelection: Boolean(selectionRef.current),
           knownEntities,
@@ -2359,10 +2310,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         // that result, and re-reading it as a standalone question against an
         // empty chat context is exactly how "в предоставленных данных нет
         // сведений о показателях" reached the user.
-        const analyticalContinuationStanding =
-          Boolean(sessionMemoryRef.current.lastAnalyticalTable) ||
-          (Boolean(sessionMemoryRef.current.lastAnalyticalResultSetRef) && isAnalyticalFollowUp(text));
-        if (route.route === "general_chat" && !analyticalContinuationStanding) {
+        if (route.route === "general_chat") {
           setLanguage(lang);
           setBusy(true);
           append({ kind: "command", id: nextId("cmd"), text });
@@ -3011,60 +2959,6 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
       ...(m.pendingClarification ? { pendingClarificationKind: m.pendingClarification.kind } : {}),
       build: { appVersion: BUILD_INFO.appVersion, buildId: BUILD_INFO.buildId, gitCommit: BUILD_INFO.gitCommit, stage: BUILD_INFO.stage },
       ...(getResultActionTraces().length > 0 ? { lastResultActionTrace: getResultActionTraces().at(-1)! } : {}),
-      ...(m.lastRankingRef
-        ? {
-            lastRankingRef: {
-              startCanonical: m.lastRankingRef.startCanonical,
-              endCanonical: m.lastRankingRef.endCanonical,
-              ...(m.lastRankingRef.limit !== undefined ? { limit: m.lastRankingRef.limit } : {}),
-            },
-          }
-        : {}),
-      ...(m.lastCompositeRef
-        ? {
-            lastCompositeRef: {
-              interval1: { startCanonical: m.lastCompositeRef.interval1.startCanonical, endCanonical: m.lastCompositeRef.interval1.endCanonical },
-              interval2: { startCanonical: m.lastCompositeRef.interval2.startCanonical, endCanonical: m.lastCompositeRef.interval2.endCanonical },
-            },
-          }
-        : {}),
-      ...(m.lastEventRef
-        ? {
-            lastEventRef: {
-              metricKey: m.lastEventRef.metricKey,
-              startCanonical: m.lastEventRef.startCanonical,
-              endCanonical: m.lastEventRef.endCanonical,
-              startHeaderPath: m.lastEventRef.startHeaderPath,
-              endHeaderPath: m.lastEventRef.endHeaderPath,
-              absoluteChange: m.lastEventRef.absoluteChange,
-              percentageChange: m.lastEventRef.percentageChange,
-            },
-          }
-        : {}),
-      ...(m.lastAnalyticalTable ? { lastAnalyticalTable: { sheetName: m.lastAnalyticalTable.sheetName, sourceRange: m.lastAnalyticalTable.sourceRange } } : {}),
-      ...(m.lastDirectionChangeRef
-        ? {
-            lastDirectionChangeRef: {
-              metricKey: m.lastDirectionChangeRef.metricKey,
-              directionChangeCount: m.lastDirectionChangeRef.directionChangeCount,
-              events: m.lastDirectionChangeRef.events.length,
-            },
-          }
-        : {}),
-      ...(m.lastMetricSetRef ? { lastMetricSetRef: { metricKeys: m.lastMetricSetRef.metricKeys, origin: m.lastMetricSetRef.origin } } : {}),
-      ...(m.lastResultSetRef ? { lastResultSetRef: { operation: m.lastResultSetRef.operation, rows: m.lastResultSetRef.rows } } : {}),
-      ...(m.lastAnalyticalResultSetRef
-        ? {
-            lastAnalyticalResultSetRef: {
-              operation: m.lastAnalyticalResultSetRef.operation,
-              columns: m.lastAnalyticalResultSetRef.columns,
-              metricKeys: m.lastAnalyticalResultSetRef.metricKeys,
-              rowCount: m.lastAnalyticalResultSetRef.rows.length,
-            },
-          }
-        : {}),
-      ...(m.lastMetricFocusRef ? { lastMetricFocusRef: { metricKey: m.lastMetricFocusRef.metricKey } } : {}),
-      ...(m.lastPeriodRef ? { lastPeriodRef: { startCanonical: m.lastPeriodRef.startCanonical, ...(m.lastPeriodRef.endCanonical ? { endCanonical: m.lastPeriodRef.endCanonical } : {}) } } : {}),
     };
   }, []);
 
