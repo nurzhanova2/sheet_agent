@@ -47,7 +47,7 @@ COMPLEXITY
 live analytical engine call sites 6 -> 3; declared engine identities 8 -> 3;
 analytical fallback generations 3 -> 0; pre-router analytical classifiers 4 -> 2;
 legacy analytical entry points 5 -> 0; production imports from `analytics-agent/`
-8 -> 0; agent flags 3 -> 1; `use-agent.ts` 4369 -> 3080 LOC (136 -> 59 imports);
+8 -> 0; agent flags 3 -> 1; `use-agent.ts` 4369 -> 3075 LOC (136 -> 59 imports);
 production files 224 -> 207; production LOC 55626 -> 48933; 54 files and 14450
 LOC deleted.
 
@@ -57,7 +57,7 @@ full add-in 2007 passed / 27 skipped / 0 failed; focused routing + Stage
 PASS; eslint PASS. No live Qwen, no installer build.
 
 Report: documentation/stages/stage28/STAGE_28E_P1_REPORT.md
-Commit: see report section 8 / git log.
+Commit: a1efae1 refactor(agent): consolidate analytical routing on v2
 Next: state / registry / sandbox consolidation.
 Stage 28 is NOT PASS.
 
