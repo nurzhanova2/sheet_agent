@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { VENDORED_INDEX_URL, resolvedAgainstDocument } from "./sandbox/runtime-factory.js";
-import { analyticalAgentLoopEnabled, analyticalAgentLoopFlagSource, unifiedAnalyticalEngineV2Enabled, unifiedAnalyticalEngineV2FlagSource } from "./feature-flag.js";
+import { analyticalAgentLoopEnabled, analyticalAgentLoopFlagSource } from "./feature-flag.js";
 
 const DIST = "dist";
 const built = existsSync(join(DIST, "taskpane.html"));
@@ -78,12 +78,7 @@ describe.skipIf(!built)("Stage 27.4 §39/§47 — the build output carries what 
   });
 });
 
-describe("Stage 27.4 §13 — the flags that decide which architecture runs", () => {
-  it("keeps the unified analytical engine on by default", () => {
-    expect(unifiedAnalyticalEngineV2Enabled()).toBe(true);
-    expect(unifiedAnalyticalEngineV2FlagSource()).toBe("default");
-  });
-
+describe("Stage 27.4 §13 — the one remaining agent flag", () => {
   it("keeps the iterative agent loop off by default", () => {
     expect(analyticalAgentLoopEnabled()).toBe(false);
     expect(analyticalAgentLoopFlagSource()).toBe("default(off)");

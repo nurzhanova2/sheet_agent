@@ -1,6 +1,6 @@
 import type { CellValue } from "@sheet-agent/application";
 import type { NumberLocale } from "../../analysis/format-number.js";
-import { renderTableForUser } from "../../analytics-agent/narrator.js";
+import { renderTableForUser } from "../../app/answer-table.js";
 import { allowedNumbers } from "../insight/extract-findings.js";
 import { criterionLabel, executedMethods, readCriterion, type MethodComparison } from "../sandbox/method-comparison.js";
 import { measureWord } from "../insight/measure-words.js";

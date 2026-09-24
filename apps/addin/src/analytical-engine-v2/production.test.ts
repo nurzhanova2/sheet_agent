@@ -27,7 +27,6 @@ import type { AnalyticalConversationState } from "./state/conversation-state.js"
 // --- §4/§5/§6/§7: the ownership table ---------------------------------------
 
 const BASE: OwnershipContext = {
-  flagEnabled: true,
   canPlan: true,
   isSlash: false,
   isUndo: false,
@@ -56,7 +55,6 @@ describe("Stage 26.8 §4 — one ownership decision, in a fixed order", () => {
   });
 
   it.each<[string, Partial<OwnershipContext>, string]>([
-    ["the flag is off", { flagEnabled: false }, "flag_off"],
     ["there is no planner transport", { canPlan: false }, "no_planner_transport"],
     ["it is a slash command", { isSlash: true }, "slash_command"],
     ["it is an undo", { isUndo: true }, "undo"],
@@ -139,7 +137,7 @@ describe("Stage 26.8 §44 — the ledger answers 'who analysed this turn?'", () 
     resetTurnLedger();
     beginTurn("t2", "x", "V2_OWNED", "analytical_request");
     recordAnalyticalExecution("analytical_engine_v2");
-    recordAnalyticalExecution("stage25_planner");
+    recordAnalyticalExecution("stage24_grouped_ranking");
     expect(enginesThisTurn()).toHaveLength(2);
   });
 });

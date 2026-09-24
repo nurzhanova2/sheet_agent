@@ -1,3 +1,66 @@
+STAGE 28E - P1 ANALYTICAL ENGINE & ROUTING - BLOCKED ON 6->1, CONSOLIDATION DONE
+
+P0 COMPLETE. P1 engine/routing: BLOCKED (on the 6 -> 1 engine target only).
+
+AUTHORITATIVE ANALYTICAL ENGINE
+`analytical_engine_v2`. It owns every analytical turn over a TableSchema it can
+induce (`orientation != "row_records"`, `confidence >= 0.5`) - computation,
+change, comparison, ranking, grouped ranking, overview/schema description,
+trend, volatility, exploration, sandbox work, cross-metric analysis, and every
+analytical follow-up on its own result. There is no analytical fallback chain
+across generations any more: 0 fallback generations, and a turn the engine owns
+never reaches a second analytical engine.
+
+REMAINING NON-ANALYTICAL ROUTES
+slash commands; undo; mutations; result actions; deterministic transforms of a
+stored result; general chat / concept questions; the flat-records describe
+capability (`describeSchema`, no model call).
+
+LEGACY ENGINES REMOVED
+`stage25_planner` (the whole `analytics-agent/` folder), `stage24_compiler`
+(`analytical-intent` / `analytical-compiler` / `analytical-executor` /
+`analytical-plan-validator` / `analytical-analysis` / `subject-resolver`),
+`stage24_schema` (`schema-result.ts`), plus the dead `stage24_followup` and
+`flat_analyzer` ledger members and the Stage 24.8/24.9 follow-up cascade.
+
+LEGACY ENGINES RETAINED - WHY
+`stage24_grouped_ranking` and `stage24_agent` own FLAT RECORDS tables and
+CROSS-SHEET questions. V2 induces no metric schema for either, so
+`resolveV2Table` returns null and those turns decline with `no_table` by
+construction. Deleting them would lose real behaviour, so this is a BLOCKED
+result, not a compatibility cascade. Smallest prerequisite: a `row_records`
+projection plus `group_by`/`filter_rows` tools in the V2 registry; cross-sheet
+scope is a second, independent prerequisite (P1-4 `workbook_discovery`).
+
+REMAINING LEGACY UTILITIES (preserved primitives, not engines)
+`app/schema/analytical/{metric-resolver,period-index,period-resolver,
+series-aggregates,temporal-primitives,temporal-series,derive-expr,types}`,
+`matrix-analysis`, `measure-compatibility`, `schema-induction`,
+`app/schema/describe-schema.ts`, `app/grouped-ranking.ts`,
+`app/agent-eligibility.ts`, `agent/*` (the flat-records agent).
+
+FEATURE FLAGS
+`VITE_UNIFIED_ANALYTICAL_ENGINE_V2` REMOVED, `VITE_ANALYTICAL_PLANNER_V1`
+REMOVED, `VITE_ANALYTICAL_AGENT_LOOP` KEPT (sandbox loop; default off).
+
+COMPLEXITY
+live analytical engine call sites 6 -> 3; declared engine identities 8 -> 3;
+analytical fallback generations 3 -> 0; pre-router analytical classifiers 4 -> 2;
+legacy analytical entry points 5 -> 0; production imports from `analytics-agent/`
+8 -> 0; agent flags 3 -> 1; `use-agent.ts` 4369 -> 3080 LOC (136 -> 59 imports);
+production files 224 -> 207; production LOC 55626 -> 48933; 54 files and 14450
+LOC deleted.
+
+VALIDATION
+full add-in 2007 passed / 27 skipped / 0 failed; focused routing + Stage
+28A-28D regressions 193/193; sandbox + mutation 334/334; root Node 29/29; tsc
+PASS; eslint PASS. No live Qwen, no installer build.
+
+Report: documentation/stages/stage28/STAGE_28E_P1_REPORT.md
+Commit: see report section 8 / git log.
+Next: state / registry / sandbox consolidation.
+Stage 28 is NOT PASS.
+
 STAGE 28D - P0-4 ONE NARRATION VERIFIER - COMPLETE
 
 P0-4 is complete at the current worktree. The authoritative V2 narration gate is

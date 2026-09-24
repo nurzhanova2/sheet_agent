@@ -320,38 +320,67 @@ describe("Stage 26.8 §36/§43 — a mutation request stays on the deterministic
 // --- §44: the double-execution guard ----------------------------------------
 
 describe("Stage 26.8 §44 — one turn, one analytical owner", () => {
-  it("no turn of a mixed session ever runs two analytical engines", async () => {
+  const MIXED_SESSION = [
+    "Какой показатель изменился сильнее всего?",
+    "Покажи его динамику",
+    "Что такое волатильность?",
+    "/sheets",
+    "О чём эта таблица?",
+    "Выдели красным строки с убытком",
+    "Какой показатель изменился сильнее всего?",
+  ];
+
+  const driveMixedSession = async () => {
     const wb = workbookPort(fixtureDirectionAndSets());
     const client = v2Client([biggestMoverScript, historyOfFocusScript, biggestMoverScript]);
     const { result } = renderHook(() => useAgent({ chatClient: client, port: wb.port }));
-
-    for (const text of ["Какой показатель изменился сильнее всего?", "Покажи его динамику", "Что такое волатильность?", "/sheets", "Какой показатель изменился сильнее всего?"]) {
+    for (const text of MIXED_SESSION) {
       await act(async () => {
         await result.current.submit(text);
       });
     }
+  };
 
+  it("no turn of a mixed session ever runs two analytical engines", async () => {
+    await driveMixedSession();
     for (const entry of turnLedger()) {
       expect(new Set(entry.engines).size, `${entry.request} → [${entry.engines.join(", ")}]`).toBeLessThanOrEqual(1);
     }
+  });
+
+  it("every turn the engine owns executes exactly one analytical engine, and it is analytical_engine_v2", async () => {
+    await driveMixedSession();
+    const owned = turnLedger().filter((t) => t.owner === "V2_OWNED");
+    expect(owned.length).toBeGreaterThan(0);
+    for (const entry of owned) {
+      expect(entry.engines, entry.request).toEqual(["analytical_engine_v2"]);
+    }
+  });
+
+  it("no Stage 24/25 analytical generation executes on any turn", async () => {
+    await driveMixedSession();
+    const executed = new Set(turnLedger().flatMap((t) => t.engines));
+    expect([...executed]).toEqual(["analytical_engine_v2"]);
   });
 });
 
 // --- §45/§46: the flag ------------------------------------------------------
 
-describe("Stage 26.8 §45 — the flag is a real rollback", () => {
-  it("with V2 OFF the analytical turn never reaches the V2 engine", async () => {
-    vi.stubEnv("VITE_UNIFIED_ANALYTICAL_ENGINE_V2", "false");
+describe("the analytical engine needs its transport, and says so", () => {
+  it("without a planner transport the turn is not the engine's and the engine never starts", async () => {
     const wb = workbookPort(fixtureDirectionAndSets());
     const client = v2Client([biggestMoverScript]);
-    const { result } = renderHook(() => useAgent({ chatClient: client, port: wb.port }));
+    const withoutTransport = { ...(client as unknown as Record<string, unknown>) };
+    delete withoutTransport["plan"];
+    delete withoutTransport["planAnalyticalTurn"];
+    const { result } = renderHook(() => useAgent({ chatClient: withoutTransport as never, port: wb.port }));
 
     await act(async () => {
       await result.current.submit("Какой показатель изменился сильнее всего?");
     });
 
     expect(lastTurn()!.owner).toBe("NON_V2");
-    expect(lastTurn()!.ownerReason).toBe("flag_off");
+    expect(lastTurn()!.ownerReason).toBe("no_planner_transport");
     expect(client.plan).not.toHaveBeenCalled();
     expect(getAnalyticalTraces().length).toBe(0);
   });
@@ -508,7 +537,7 @@ describe("Stage 26.8 §19 — the developer trace is reachable and complete", ()
       await result.current.submit("/debug analytical-engine");
     });
     const dump = lastResponse({ current: result.current });
-    for (const expected of ["analytical engine v2: ON", "TURN OWNERSHIP", "V2 CONVERSATION STATE", "PLANNER ROUND", "TOOL CALL", "REFERENCES", "SERIALIZATION", "PRIMARY RESULT", "NARRATOR"]) {
+    for (const expected of ["analytical engine: analytical_engine_v2", "TURN OWNERSHIP", "V2 CONVERSATION STATE", "PLANNER ROUND", "TOOL CALL", "REFERENCES", "SERIALIZATION", "PRIMARY RESULT", "NARRATOR"]) {
       expect(dump, expected).toContain(expected);
     }
   });

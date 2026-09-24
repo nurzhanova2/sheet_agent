@@ -7,7 +7,6 @@ export type TurnOwner = "V2_OWNED" | "NON_V2";
  * tests. Never shown to a user.
  */
 export type OwnershipReason =
-  | "flag_off"
   | "no_planner_transport"
   | "slash_command"
   | "undo"
@@ -23,8 +22,6 @@ export type OwnershipReason =
   | "analytical_followup";
 
 export interface OwnershipContext {
-  /** §9 — UNIFIED_ANALYTICAL_ENGINE_V2. */
-  readonly flagEnabled: boolean;
   /** Without a planner transport the engine cannot run at all. */
   readonly canPlan: boolean;
   readonly isSlash: boolean;
@@ -90,7 +87,7 @@ const v2 = (reason: OwnershipReason): OwnershipDecision => ({ owner: "V2_OWNED",
 /**
  * §4 — the ONE routing decision. Ordered, and the order is the contract:
  *
- *  1. the flag and the transport, because without either there is no V2;
+ *  1. the transport, because without it there is no V2;
  *  2. the turn shapes another route OWNS outright (§6) — a slash command, an
  *     undo, a pending V1 question;
  *  3. a reply to V2's OWN question, before anything reads the reply as a
@@ -101,7 +98,6 @@ const v2 = (reason: OwnershipReason): OwnershipDecision => ({ owner: "V2_OWNED",
  *  6. analytical capability, then a resolvable table (§14).
  */
 export function classifyTurnOwner(ctx: OwnershipContext): OwnershipDecision {
-  if (!ctx.flagEnabled) return nonV2("flag_off");
   if (!ctx.canPlan) return nonV2("no_planner_transport");
   if (ctx.isSlash) return nonV2("slash_command");
   if (ctx.isUndo) return nonV2("undo");

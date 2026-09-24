@@ -23,7 +23,6 @@ export type ResultKind =
   | "schema_summary"
   /** Stage 24.6 — deterministic analysis over an induced non-flat table schema. */
   | "matrix_analysis"
-  /** Stage 24.7 — a compiled analytical-intent result over a TableSchema. */
   | "temporal_analysis";
 
 /**
@@ -371,11 +370,6 @@ export type ClarificationKind =
   /** Stage 24.4 — a bounded agent task paused for a clarification; the answer
    *  resumes the SAME `AgentLoopState` (carried in `agentContinuation`). */
   | "agent"
-  /** Stage 25.1.3 §15/§16 — the Stage 25 ANALYTICAL planner (not the flat
-   *  legacy agent) paused for a clarification; the answer resumes the SAME
-   *  `AgentLoopState` through `runAnalyticalPlanner`'s own tool registry,
-   *  never the flat agent's. Distinct from "agent" so the resume dispatch
-   *  never crosses tool registries. */
   | "analytical_agent"
   /** Stage 24.5 §15 — a remembered result has two plausible entity columns; the
    *  answer picks which column an entity action (highlight / copy) grounds on. */

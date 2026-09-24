@@ -27,10 +27,6 @@ import {
   buildDatasetClarification,
   buildEntityActionClarification,
   buildReferenceClarification,
-  buildAnalysisPeriodClarification,
-  buildAnalysisSubjectClarification,
-  buildSchemaNormClarification,
-  buildSchemaThresholdClarification,
   clearClarification,
   emptySessionMemory,
   forgetChartPlacement,
@@ -38,24 +34,15 @@ import {
   interpretClarificationAnswer,
   isUndoPhrase,
   projectMemoryForModel,
-  rememberAnalyticalTable,
   rememberChart,
-  rememberComposite,
   rememberDerivedResult,
-  rememberDirectionChange,
-  rememberEvent,
-  rememberMetricFocus,
-  rememberMetricSet,
-  rememberPeriod,
-  rememberRanking,
   rememberResult,
-  rememberResultSet,
   rememberRowSet,
   resolveReference,
   setClarification,
 } from "../app/conversation-memory.js";
 import type { PendingClarification, ResultKind, ResultRef, RowSetRef, SessionMemory } from "../app/session-memory.js";
-import { hasWorkbookDeixis, isConceptQuestion, isExtremeQuestion, isMutationRequest, isTransformRequest, routeTurn } from "../app/conversation-route.js";
+import { isExtremeQuestion, isMutationRequest, isTransformRequest, routeTurn } from "../app/conversation-route.js";
 import { revalidateSource, revalidateSources, sourceVersionOf } from "../app/source-freshness.js";
 import { formatDisplayCell } from "../app/format-cell.js";
 import { detectResultAction, type ResultActionIntent } from "../app/result-action-intent.js";
@@ -64,41 +51,16 @@ import { extractEntitySet, mentionsConversationalReference, resolveActionReferen
 import { DEFAULT_HIGHLIGHT_COLOR, parseHighlightColor } from "../app/highlight-color.js";
 import { detectGroupedRanking, planGroupedRanking } from "../app/grouped-ranking.js";
 import { induceTableSchema, type TableSchema } from "../app/schema/schema-induction.js";
-import { detectSchemaIntent, runSchemaAnalysis } from "../app/schema/schema-result.js";
-import { runAnalyticalAnalysis, type AnalyticalTrace } from "../app/schema/analytical/analytical-analysis.js";
-import type { InheritedComposite, InheritedMetricSet, InheritedRanking } from "../app/schema/analytical/analytical-compiler.js";
-import { detectAnalyticalIntent } from "../app/schema/analytical/analytical-intent.js";
-import { buildMetricIndex, resolveMetric } from "../app/schema/analytical/metric-resolver.js";
-import { buildPeriodIndex } from "../app/schema/analytical/period-index.js";
-import type { InheritedPeriod } from "../app/schema/analytical/period-resolver.js";
-import { getPointValue } from "../app/schema/analytical/temporal-series.js";
-import { detectEventFollowup } from "../app/event-followup.js";
-import { detectDirectionPeriodsFollowup, detectResultSetFollowup } from "../app/resultset-followup.js";
-import { classifyIntent } from "../app/intent.js";
+import { describeSchema } from "../app/schema/describe-schema.js";
 import type { AnalysisGrids } from "../app/schema/matrix-analysis.js";
-import { runAnalyticalPlanner, type AnalyticalPlannerOutcome } from "../analytics-agent/runtime.js";
-import { analyticalPlannerEnabled } from "../analytics-agent/feature-flag.js";
-import type { AnalyticalInherited } from "../analytics-agent/tool-registry.js";
-import {
-  COMPOUND_AWARE_OPERATIONS,
-  countAnalyticalClauses,
-  detectOperationKind,
-  detectRequestedRankingBasis,
-  detectTemporalMode,
-  explicitCandidateSet,
-  extractRequestedCardinality,
-  hasSecondAnalyticalClause,
-  isAnalyticalFollowUp,
-  isExploratoryRequest,
-} from "../analytics-agent/semantic-frame.js";
-import { commitPlannerOutputs } from "../analytics-agent/canonical-refs.js";
-import { containsForbiddenLeak } from "../analytics-agent/narrator.js";
+import { isAnalyticalFollowUp } from "../app/analytical-turn.js";
+import { containsForbiddenLeak } from "../app/answer-leak.js";
 import { BUILD_INFO, buildInfoLine } from "../app/build-info.js";
 // ----- Stage 26.8: the unified analytical engine, in production -------------
 import { runAnalyticalEngine } from "../analytical-engine-v2/engine.js";
 import { analysisCapability } from "./analysis-capability.js";
-import { unifiedAnalyticalEngineV2Enabled, unifiedAnalyticalEngineV2FlagSource } from "../analytical-engine-v2/feature-flag.js";
 import { classifyTurnOwner } from "../analytical-engine-v2/production/turn-owner.js";
+import { buildOwnershipContext } from "../analytical-engine-v2/production/turn-context.js";
 import { beginTurn, finishTurn, recordAnalyticalExecution, turnLedger } from "../analytical-engine-v2/production/turn-ledger.js";
 import {
   containsInternalLeak,
@@ -152,28 +114,6 @@ export function anchorRightOfSelection(address: string): string {
 }
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/** Stage 24.8 §27–§29 — true when `cellAddress` (a single-cell selection) lies
- *  on the SAME sheet and inside the bounds of `rangeAddress`. */
-function cellWithinRange(cellAddress: string, rangeAddress: string): boolean {
-  try {
-    const c = splitSheetAddress(cellAddress);
-    const r = splitSheetAddress(rangeAddress);
-    if ((c.sheetName || "").toLowerCase() !== (r.sheetName || "").toLowerCase()) return false;
-    const cp = parseLocalRange(c.localAddress || cellAddress);
-    const rp = parseLocalRange(r.localAddress || rangeAddress);
-    const cRow = cp.start.row;
-    const cCol = cp.start.column;
-    return (
-      cRow >= rp.start.row &&
-      cRow <= rp.start.row + rp.rowCount - 1 &&
-      cCol >= rp.start.column &&
-      cCol <= rp.start.column + rp.columnCount - 1
-    );
-  } catch {
-    return false;
-  }
-}
 
 /**
  * 24.4 — a compact, plain-text picture of the workbook for the agent decision
@@ -591,7 +531,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         const body = [
           "```",
           buildInfoLine(),
-          `analytical engine v2: ${unifiedAnalyticalEngineV2Enabled() ? "ON" : "OFF"}  (${unifiedAnalyticalEngineV2FlagSource()})`,
+          "analytical engine: analytical_engine_v2",
           `planner transport: ${typeof chatClient.planAnalyticalTurn === "function" ? "available" : "MISSING"}`,
           "",
           "TURN OWNERSHIP (most recent last)",
@@ -631,7 +571,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
           "```",
           buildInfoLine(),
           `bundle build: ${BUILD_INFO.buildId}   commit: ${BUILD_INFO.gitCommit}`,
-          `analytical engine v2: ${unifiedAnalyticalEngineV2Enabled() ? "ON" : "OFF"}  (${unifiedAnalyticalEngineV2FlagSource()})`,
+          "analytical engine: analytical_engine_v2",
           "",
           `memory: results=${m.recentResults.length} lastResultId=${m.lastResultId ?? "-"} ` +
             `lastRowSet=${m.lastRowSet?.id ?? "-"} lastChart=${m.lastChart?.id ?? "-"} ` +
@@ -1125,785 +1065,6 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         proposeActions(1);
       };
 
-      // ----- Stage 24.6: universal table schema route ---------------------
-      const schemaTraceFrom = (
-        schema: TableSchema,
-        routeChosen: "flat_table" | "universal_schema" | "clarify",
-        analysisRequested: readonly string[],
-        analysisCompleted: readonly string[],
-        expandedRowsAbove: number,
-      ): NonNullable<ResultActionTrace["tableSchema"]> => ({
-        sourceRange: schema.sourceRange,
-        layoutKind: schema.layoutKind,
-        orientation: schema.orientation,
-        confidence: schema.confidence,
-        headerDepth: schema.headerDepth,
-        rowHeaderColumns: schema.rowHeaderColumns.length,
-        rowAxisCount: schema.rowAxis.length,
-        columnAxisCount: schema.columnPaths.length,
-        measuresCount: schema.measures.length,
-        dateCells: schema.profileSummary.dateCells,
-        percentCells: schema.profileSummary.percentCells,
-        totalsCount: schema.totals.length,
-        ambiguities: schema.ambiguities.map((a) => a.kind),
-        routeChosen,
-        analysisRequested,
-        analysisCompleted,
-        ...(expandedRowsAbove ? { expandedRowsAbove } : {}),
-      });
-
-      const runSchemaRoute = async (
-        schemaText: string,
-        si: ReturnType<typeof detectSchemaIntent>,
-      ): Promise<"handled" | "flat"> => {
-        setLanguage(lang);
-        setBusy(true);
-        if (!suppressCommandEcho) append({ kind: "command", id: nextId("cmd"), text: schemaText });
-        const scReadId = nextId("act");
-        append({ kind: "activity", id: scReadId, activity: "reading", title: uiText(lang, "reading"), status: "running" });
-        const scTrace: MutableResultActionTrace = { text: schemaText, at: new Date().toISOString(), routeChosen: "universal_schema", detectedResultAction: null };
-        const analysisRequested = Object.entries(si).filter(([k, v]) => v === true && k !== "any").map(([k]) => k);
-        try {
-          let snap = await readSelectionSnapshot(port).catch(() => undefined);
-          if (!snap) {
-            setActivity(scReadId, "done", uiText(lang, "noRange"));
-            say("Select the table first, then ask again.", "Сначала выделите таблицу, затем повторите запрос.");
-            return "handled";
-          }
-          selectionRef.current = snap;
-          let startsBelowRow1 = false;
-          try {
-            const { localAddress } = splitSheetAddress(snap.address);
-            startsBelowRow1 = parseLocalRange(localAddress || snap.address).start.row > 0;
-          } catch {
-            /* keep false */
-          }
-          let expandedRowsAbove = 0;
-          let schema = induceTableSchema({
-            values: snap.values,
-            numberFormats: snap.numberFormats,
-            formulas: snap.formulas,
-            sheetName: snap.sheetName,
-            sourceRange: snap.address,
-            sourceVersion: sourceVersionOf(snap),
-            startsBelowRow1,
-          });
-
-          if (schema.headerDepth === 0 && startsBelowRow1 && schema.ambiguities.some((a) => a.kind === "missing_header_context")) {
-            try {
-              const { sheetName, localAddress } = splitSheetAddress(snap.address);
-              const lr = parseLocalRange(localAddress || snap.address);
-              const rowsAbove = Math.min(5, lr.start.row);
-              if (rowsAbove > 0) {
-                const topRow = lr.start.row - rowsAbove + 1;
-                const expandedLocal = `${columnIndexToLetters(lr.start.column)}${topRow}:${columnIndexToLetters(lr.end.column)}${lr.end.row + 1}`;
-                const expandedAddr = sheetName ? `${sheetName}!${expandedLocal}` : expandedLocal;
-                const expanded = await readAddressSnapshot(port, expandedAddr).catch(() => null);
-                if (expanded && expanded.values.length > snap.values.length) {
-                  expandedRowsAbove = rowsAbove;
-                  snap = expanded;
-                  selectionRef.current = snap;
-                  schema = induceTableSchema({
-                    values: snap.values,
-                    numberFormats: snap.numberFormats,
-                    formulas: snap.formulas,
-                    sheetName: snap.sheetName,
-                    sourceRange: snap.address,
-                    sourceVersion: sourceVersionOf(snap),
-                    startsBelowRow1: false,
-                  });
-                }
-              }
-            } catch {
-              /* best-effort */
-            }
-          }
-
-          const scLocal = snap.address.split("!").pop() ?? snap.address;
-          setActivity(scReadId, "done", `${snap.sheetName}!${scLocal} · ${snap.totalRowCount} rows × ${snap.totalColumnCount} columns`);
-
-          if (
-            schema.orientation === "row_records" &&
-            schema.confidence >= 0.6 &&
-            schema.headerDepth >= 1 &&
-            !schema.ambiguities.some((a) => a.kind === "missing_header_context") &&
-            !si.describe
-          ) {
-            scTrace.tableSchema = schemaTraceFrom(schema, "flat_table", analysisRequested, [], expandedRowsAbove);
-            commitTrace(scTrace);
-            return "flat";
-          }
-
-          if (schema.confidence < 0.35 || (schema.headerDepth === 0 && !si.describe && schema.orientation !== "column_metrics")) {
-            scTrace.tableSchema = schemaTraceFrom(schema, "clarify", analysisRequested, [], expandedRowsAbove);
-            commitTrace(scTrace);
-            say(
-              "I can see a numeric block, but I can't confidently identify the header. It looks like the top header rows are outside the selected range — select them too, or point me at the full table.",
-              "Я вижу числовую матрицу, но не могу уверенно определить заголовок. Похоже, верхние строки заголовка не вошли в выделение — добавьте их в диапазон или укажите таблицу целиком.",
-            );
-            return "handled";
-          }
-
-          const grids = { values: snap.values, numberFormats: snap.numberFormats };
-          const out = runSchemaAnalysis(schema, grids, si, lang);
-          const turnId = nextId("turn");
-          const bodyParts: string[] = [];
-          if (out.describeText) bodyParts.push(out.describeText);
-          for (const sec of out.sections) bodyParts.push(`**${sec.title}**\n\n${renderGridMarkdown(sec.columns, sec.rows)}`);
-          const body = bodyParts.join("\n\n") || (lang === "ru" ? "Не удалось получить результат." : "No result.");
-
-          const firstSec = out.sections[0];
-          const summaryOnly = Boolean(out.describeText) && out.sections.length === 0;
-          sessionMemoryRef.current = rememberResult(sessionMemoryRef.current, {
-            turnId,
-            kind: summaryOnly ? "schema_summary" : "matrix_analysis",
-            title: summaryOnly ? (lang === "ru" ? "О таблице" : "About this table") : firstSec?.title ?? (lang === "ru" ? "Анализ матрицы" : "Matrix analysis"),
-            spec: { op: "schema_analysis", layoutKind: schema.layoutKind, orientation: schema.orientation, computed: out.computed, sourceCells: out.sourceCells },
-            columns: firstSec?.columns ?? [lang === "ru" ? "Сводка" : "Summary"],
-            rows: firstSec?.rows ?? (out.describeText ? [[out.describeText]] : []),
-            rowsTruncated: false,
-            facts: [],
-            sourceSheet: schema.sheetName,
-            sourceRange: schema.sourceRange,
-            sourceVersion: schema.sourceVersion,
-            resolved: [],
-          });
-
-          scTrace.tableSchema = schemaTraceFrom(schema, "universal_schema", analysisRequested, out.computed, expandedRowsAbove);
-          commitTrace(scTrace);
-
-          append({ kind: "response", id: nextId("res"), streaming: false, text: body });
-          conversationRef.current = [...conversationRef.current, { role: "user", content: schemaText }, { role: "assistant", content: body }];
-
-          if (out.needsNormClarification) {
-            sessionMemoryRef.current = setClarification(
-              sessionMemoryRef.current,
-              buildSchemaNormClarification(schemaText, schema.sourceRange, schema.sourceVersion, lang),
-            );
-            append({ kind: "response", id: nextId("res"), streaming: false, text: sessionMemoryRef.current.pendingClarification!.question });
-          } else {
-            append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
-          }
-          return "handled";
-        } catch (error) {
-          append({ kind: "notice", id: nextId("ntc"), tone: "error", text: error instanceof Error ? error.message : "Could not analyse that table" });
-          return "handled";
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      // ----- Stage 25: LLM analytical planner (composes Stage 24.x tools) --
-      // Runs when the Stage 24.7–24.9 deterministic COMPILER declines a
-      // schema-backed table — a request no known phrase/cue covers (§0/§57).
-      // The planner never computes a workbook number itself: it composes the
-      // read-only tools in analytics-agent/tool-registry.ts, and a SEPARATE
-      // narrator pass (gated by the same evidence check as the Stage 24.4
-      // bounded agent) turns the verified observations into prose (§32/§39).
-      const runStage25Planner = async (
-        schema: TableSchema,
-        grids: AnalysisGrids,
-        analyticalText: string,
-        resume?: { readonly state: AgentLoopState; readonly answer: string },
-        // Stage 25.1.3c §4/§5/§10 — an already-resolved pronoun subject
-        // (Stage 25.1.3a's `subjectOverride` handoff), carried into the
-        // planner's own context as an AUTHORITATIVE binding rather than
-        // dropped at this boundary. Must survive every fallback path that
-        // hands a turn to the Stage 25 planner, not just the direct route.
-        resolvedSubject?: string,
-      ): Promise<boolean> => {
-        if (!analyticalPlannerEnabled() || typeof chatClient.decideAgentStep !== "function" || typeof chatClient.narrate !== "function") return false;
-        // §44 — every analytical route says it ran, so "who analysed this turn?"
-        // has an answer a test can assert instead of a comment claiming it.
-        recordAnalyticalExecution("stage25_planner");
-        const controller = new AbortController();
-        const mf = sessionMemoryRef.current.lastMetricFocusRef;
-        const ms = sessionMemoryRef.current.lastMetricSetRef;
-        const rs = sessionMemoryRef.current.lastResultSetRef;
-        const pr = sessionMemoryRef.current.lastPeriodRef;
-        // Stage 25.1.3f §3/§4 — the previous successful analytical turn's FULL
-        // structured result: this turn's follow-up filters/slices THAT, instead
-        // of re-resolving a fresh workbook universe (§9).
-        const art = sessionMemoryRef.current.lastAnalyticalResultSetRef;
-        const inherited: AnalyticalInherited = {
-          ...(resolvedSubject ? { resolvedSubject: { metricKey: resolvedSubject, source: "conversation_pronoun", authoritative: true } } : {}),
-          ...(mf ? { metricFocus: { metricKey: mf.metricKey } } : {}),
-          ...(ms ? { metricSet: { metricKeys: ms.metricKeys } } : {}),
-          ...(rs ? { resultSet: { operation: rs.operation, scoreField: rs.scoreField, rows: rs.rows } } : {}),
-          ...(art
-            ? {
-                resultTable: {
-                  operation: art.operation,
-                  columns: art.columns,
-                  rows: art.rows,
-                  ...(art.startCanonical ? { startCanonical: art.startCanonical } : {}),
-                  ...(art.endCanonical ? { endCanonical: art.endCanonical } : {}),
-                },
-              }
-            : {}),
-          ...(pr ? { period: { startCanonical: pr.startCanonical, ...(pr.endCanonical ? { endCanonical: pr.endCanonical } : {}) } } : {}),
-        };
-
-        // Stage 25.1/25.1.1 §17/§6/§7/§3–§5/§15–§17 — the request's semantic
-        // invariants, audited against what actually got executed below.
-        const requestedCandidateSet = explicitCandidateSet(analyticalText, buildMetricIndex(schema));
-        const requestedTemporalMode = detectTemporalMode(analyticalText);
-        const requestedOperationKind = detectOperationKind(analyticalText);
-        const requestedClauseCount = countAnalyticalClauses(analyticalText);
-        // Stage 25.1.3 §23/§24 — only meaningful for a genuinely exploratory
-        // ask; a bare number elsewhere in the sentence is not a cardinality.
-        const requestedExploratoryCardinality = isExploratoryRequest(analyticalText) ? extractRequestedCardinality(analyticalText) : null;
-        // Stage 25.1.3b §2–§6 — a "changed the most" comparison across
-        // heterogeneous metrics defaults to percentage-magnitude ranking.
-        const requestedRankingBasis = detectRequestedRankingBasis(analyticalText);
-
-        const actId = nextId("act");
-        append({ kind: "activity", id: actId, activity: "analyzing", title: uiText(lang, "analyzing"), status: "running" });
-        const seenActivity = new Set<string>();
-        let outcome: AnalyticalPlannerOutcome;
-        try {
-          outcome = await runAnalyticalPlanner({
-            taskId: nextId("plan"),
-            text: analyticalText,
-            schema,
-            grids,
-            language: lang === "ru" ? "ru" : "en",
-            inherited,
-            requestedCandidateSet,
-            requestedTemporalMode,
-            requestedOperationKind,
-            requestedClauseCount,
-            requestedExploratoryCardinality,
-            requestedRankingBasis,
-            ...(resume ? { resume } : {}),
-            decidePlanner: (dctx) =>
-              chatClient.decideAgentStep!(
-                {
-                  originalUserRequest: dctx.originalUserRequest,
-                  language: dctx.language,
-                  history: boundedHistory(conversationRef.current).map((m) => ({ role: m.role, content: m.content })),
-                  workbookContext: dctx.workbookContext,
-                  toolSchemas: dctx.toolSchemas,
-                  observations: dctx.observations,
-                  iteration: dctx.iteration,
-                  remainingSteps: dctx.remainingSteps,
-                  remainingReads: dctx.remainingReads,
-                  ...(model ? { model } : {}),
-                },
-                controller.signal,
-              ),
-            narrate: (messages) => chatClient.narrate!(messages, controller.signal, model),
-            onStep: (step) => {
-              const label = agentActivityLabel(step, lang, seenActivity);
-              if (label) append({ kind: "activity", id: nextId("act"), activity: "calculating", title: label, status: "done" });
-            },
-          });
-        } catch (error) {
-          setActivity(actId, "error");
-          append({ kind: "notice", id: nextId("ntc"), tone: "error", text: error instanceof Error ? error.message : "The analytical planner could not run." });
-          return true;
-        }
-        setActivity(actId, "done");
-
-        if (outcome.kind === "clarify") {
-          // Stage 25.1.2 §8/§10 — the model's own clarifying question, never
-          // shown raw: guard it exactly like a final narration.
-          const question = containsForbiddenLeak(outcome.question)
-            ? lang === "ru"
-              ? "Уточните, пожалуйста, какие показатели и период вы имеете в виду."
-              : "Could you clarify which metrics and period you mean?"
-            : outcome.question;
-          // Stage 25.1.3 §15/§16 — a SUSPENDED analytical request: `kind:
-          // "analytical_agent"` (never "agent") so the resume dispatch below
-          // never routes this through the flat legacy agent's tool registry.
-          // `sourceIdentity` here is the RANGE's own freshness token (not the
-          // whole-workbook identity) — a mutation to an unrelated sheet, a
-          // clarification round-trip, or a planner retry must never
-          // invalidate it (§20/§21); only a real change to THIS range does.
-          sessionMemoryRef.current = setClarification(
-            sessionMemoryRef.current,
-            buildAgentClarification(analyticalText, question, outcome.candidates, outcome.state, schema.sourceVersion, "analytical_agent"),
-          );
-          append({ kind: "response", id: nextId("res"), streaming: false, text: question });
-          conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: question }];
-          return true;
-        }
-
-        if (outcome.kind === "failed") {
-          const en =
-            outcome.reasonKey === "model_error" || outcome.reasonKey === "repeated_tool_call"
-              ? "I couldn't work out a reliable way to answer that. Could you rephrase it or narrow it down?"
-              : outcome.reasonKey === "read_budget" || outcome.reasonKey === "step_budget"
-                ? "I couldn't finish investigating this within the limits for one turn. Try narrowing the question to a specific metric or period."
-                : "I wasn't able to complete that analysis.";
-          const ru =
-            outcome.reasonKey === "model_error" || outcome.reasonKey === "repeated_tool_call"
-              ? "Не удалось составить надёжный план ответа. Переформулируйте запрос или сузьте его."
-              : outcome.reasonKey === "read_budget" || outcome.reasonKey === "step_budget"
-                ? "Не удалось завершить анализ в пределах лимитов за один ход. Уточните вопрос — конкретный показатель или период."
-                : "Не удалось выполнить этот анализ.";
-          const body = lang === "ru" ? ru : en;
-          append({ kind: "response", id: nextId("res"), streaming: false, text: body });
-          conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: body }];
-          return true;
-        }
-
-        // Stage 25.1 §9/§24/§28/§49 — grounded numbers, wrong shape: the plan
-        // answered a different question (a widened candidate set, an
-        // internally inconsistent change row). Never narrated, never shown,
-        // and — per §9 — must NOT steal the conversation's prior valid focus.
-        if (outcome.kind === "semantic_failed") {
-          const body =
-            lang === "ru"
-              ? "Не удалось убедиться, что результат точно отвечает на заданный вопрос (расхождение в наборе показателей или в периоде). Уточните запрос."
-              : "I couldn't confirm the result actually answers what was asked (a candidate-set or period mismatch). Please rephrase or narrow the request.";
-          append({ kind: "response", id: nextId("res"), streaming: false, text: body });
-          conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: body }];
-          return true;
-        }
-
-        // handled
-        append({ kind: "response", id: nextId("res"), streaming: false, text: outcome.body });
-        conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: outcome.body }];
-        sessionMemoryRef.current = rememberAnalyticalTable(sessionMemoryRef.current, { sheetName: schema.sheetName, sourceRange: schema.sourceRange });
-        // Stage 25.1.3f §5/§6 — a SUCCESSFUL analytical execution commits its
-        // structured continuation state, period. The narrator falling back to
-        // the deterministic table is a PRESENTATION outcome, and a superlative
-        // turn narrowing the VISIBLE answer to one row is a display decision —
-        // neither may prevent the next turn from seeing the universe this turn
-        // computed. `commitPlannerOutputs` therefore runs off the run's own
-        // observations, outside the `outcome.primary` guard below (which only
-        // governs the user-visible ResultRef).
-        const plannerTurnId = nextId("turn");
-        if (outcome.primary && outcome.primary.columns && outcome.primary.rows) {
-          sessionMemoryRef.current = rememberResult(sessionMemoryRef.current, {
-            turnId: plannerTurnId,
-            kind: "temporal_analysis",
-            title: outcome.primary.tool,
-            spec: { op: "analytical_planner", tool: outcome.primary.tool },
-            columns: outcome.primary.columns,
-            rows: outcome.primary.rows.map((r) => r.map((c) => c as CellValue)),
-            rowsTruncated: outcome.primary.truncated ?? false,
-            facts: [],
-            sourceSheet: schema.sheetName,
-            sourceRange: schema.sourceRange,
-            sourceVersion: schema.sourceVersion,
-            resolved: [],
-          });
-        }
-        // Stage 25.1 §4/§5/§6 — the planner's own outputs are canonical refs
-        // too, not just a generic ResultRef: commit whichever shape the run
-        // produced (a focus winner, an explicit set, an ordered ranking, an
-        // interval, and — Stage 25.1.3f §3 — the full continuation universe)
-        // into the SAME SessionMemory fields the Stage 24.x fast path writes —
-        // one authoritative owner, not a parallel memory.
-        sessionMemoryRef.current = commitPlannerOutputs(
-          sessionMemoryRef.current,
-          { turnId: plannerTurnId, sourceRange: schema.sourceRange, sourceVersion: schema.sourceVersion, requestText: analyticalText },
-          outcome.state.observations,
-          outcome.state.steps,
-        );
-        return true;
-      };
-
-      // ----- Stage 24.7: universal analytical-intent compiler ------------
-      // Sits between the proven flat routes and the model. Compiles a temporal /
-      // ranking / comparison intent against the induced TableSchema and executes
-      // it deterministically. "flat" → this turn is not analytical-schema work.
-      const runAnalyticalRoute = async (
-        analyticalText: string,
-        subjectOverride?: string,
-      ): Promise<"handled" | "flat"> => {
-        const acTrace: MutableResultActionTrace = {
-          text: analyticalText,
-          at: new Date().toISOString(),
-          routeChosen: "analytical_compiler",
-          detectedResultAction: null,
-        };
-        let committed = false;
-        try {
-          // Stage 24.8 §27–§29/§57/§74 — a single-cell click INSIDE the last
-          // known analytical table must not shrink the universe to one cell:
-          // read the remembered table range instead of the live selection.
-          const known = sessionMemoryRef.current.lastAnalyticalTable;
-          const liveSel = await port.getSelection().catch(() => undefined);
-          const useKnownTable = Boolean(
-            liveSel && liveSel.rowCount === 1 && liveSel.columnCount === 1 && known && cellWithinRange(liveSel.address, known.sourceRange),
-          );
-          let snap = useKnownTable
-            ? await readAddressSnapshot(port, known!.sourceRange).catch(() => undefined)
-            : await readSelectionSnapshot(port).catch(() => undefined);
-          // Stage 25.1.2 §4/§6 — a schema-aware analytical conversation must
-          // not decline to the legacy flat analyzer just because the live
-          // selection could not be read this turn (moved, or a transient
-          // failure): retry against the remembered analytical table first.
-          if (!snap && known) {
-            snap = await readAddressSnapshot(port, known.sourceRange).catch(() => undefined);
-          }
-          if (!snap) return "flat";
-          let startsBelowRow1 = false;
-          try {
-            const { localAddress } = splitSheetAddress(snap.address);
-            startsBelowRow1 = parseLocalRange(localAddress || snap.address).start.row > 0;
-          } catch {
-            /* keep false */
-          }
-          const schema = induceTableSchema({
-            values: snap.values,
-            numberFormats: snap.numberFormats,
-            formulas: snap.formulas,
-            sheetName: snap.sheetName,
-            sourceRange: snap.address,
-            sourceVersion: sourceVersionOf(snap),
-            startsBelowRow1,
-          });
-
-          // §43/§44 — only route confident non-flat schemas here; records tables
-          // stay on the proven flat pipeline.
-          if (schema.orientation === "row_records" || schema.confidence < 0.5) return "flat";
-
-          const grids = { values: snap.values, numberFormats: snap.numberFormats };
-          const periodIndexForInherit = buildPeriodIndex(schema, grids);
-
-          // §12 — rehydrate the remembered interval as CanonicalPeriods.
-          let inherited: InheritedPeriod | undefined;
-          const pr = sessionMemoryRef.current.lastPeriodRef;
-          if (pr && pr.kind === "interval" && pr.endCanonical) {
-            const s = periodIndexForInherit.points.find((p) => p.canonical === pr.startCanonical);
-            const e = periodIndexForInherit.points.find((p) => p.canonical === pr.endCanonical);
-            if (s && e) inherited = { start: s, end: e };
-          }
-
-          // Stage 24.8 §11/§30/§31 — rehydrate the remembered ranking interval
-          // for "те же 5, но по абсолютному изменению".
-          let inheritedRanking: InheritedRanking | undefined;
-          const rr = sessionMemoryRef.current.lastRankingRef;
-          if (rr) {
-            const s = periodIndexForInherit.points.find((p) => p.canonical === rr.startCanonical);
-            const e = periodIndexForInherit.points.find((p) => p.canonical === rr.endCanonical);
-            if (s && e) inheritedRanking = { interval: { start: s, end: e }, ...(rr.limit !== undefined ? { limit: rr.limit } : {}) };
-          }
-
-          // Stage 24.8 §13/§14 — rehydrate the remembered two intervals for
-          // "в первом интервале… во втором…".
-          let inheritedComposite: InheritedComposite | undefined;
-          const cr = sessionMemoryRef.current.lastCompositeRef;
-          if (cr) {
-            const s1 = periodIndexForInherit.points.find((p) => p.canonical === cr.interval1.startCanonical);
-            const e1 = periodIndexForInherit.points.find((p) => p.canonical === cr.interval1.endCanonical);
-            const s2 = periodIndexForInherit.points.find((p) => p.canonical === cr.interval2.startCanonical);
-            const e2 = periodIndexForInherit.points.find((p) => p.canonical === cr.interval2.endCanonical);
-            if (s1 && e1 && s2 && e2) inheritedComposite = { interval1: { start: s1, end: e1 }, interval2: { start: s2, end: e2 } };
-          }
-
-          // Stage 24.9 §35/§36/§50 — rehydrate the prior MetricSetRef's
-          // members as the CANDIDATE SET for a growth-comparison pronoun
-          // follow-up ("какой из них вырос сильнее…").
-          let inheritedMetricSet: InheritedMetricSet | undefined;
-          const msr = sessionMemoryRef.current.lastMetricSetRef;
-          if (msr) {
-            const members = msr.metricKeys
-              .map((key) => schema.rowAxis.find((m) => m.display === key))
-              .filter((m): m is NonNullable<typeof m> => Boolean(m));
-            if (members.length === msr.metricKeys.length && members.length > 0) inheritedMetricSet = { members };
-          }
-
-          const outcome = runAnalyticalAnalysis(
-            schema,
-            grids,
-            analyticalText,
-            lang === "ru" ? "ru" : "en",
-            inherited,
-            subjectOverride,
-            inheritedRanking,
-            inheritedComposite,
-            inheritedMetricSet,
-          );
-          const toTraceField = (t: AnalyticalTrace): NonNullable<ResultActionTrace["analyticalCompiler"]> => ({
-            originalText: t.originalText,
-            detectedOperation: t.detectedOperation,
-            resolvedSubject: t.resolvedSubject,
-            subjectScope: t.subjectScope,
-            measureBasis: t.measureBasis,
-            compiledSteps: t.compiledSteps,
-            planValid: t.planValid,
-            validationErrors: t.validationErrors,
-            routeChosen: t.routeChosen,
-            inheritedPeriodRef: t.inheritedPeriodRef,
-            ...(t.requestedStart ? { requestedStart: t.requestedStart } : {}),
-            ...(t.requestedEnd ? { requestedEnd: t.requestedEnd } : {}),
-            ...(t.executedStart ? { executedStart: t.executedStart } : {}),
-            ...(t.executedEnd ? { executedEnd: t.executedEnd } : {}),
-            silentSubstitution: t.silentSubstitution,
-            assumptions: t.assumptions,
-          });
-
-          if (outcome.kind === "decline") {
-            // Stage 25 §57 — never fall to the legacy flat analyzer for a
-            // schema-backed table without trying tool composition first.
-            if (!analyticalPlannerEnabled() || typeof chatClient.decideAgentStep !== "function" || typeof chatClient.narrate !== "function") return "flat";
-            setLanguage(lang);
-            setBusy(true);
-            committed = true;
-            selectionRef.current = snap;
-            sessionMemoryRef.current = rememberAnalyticalTable(sessionMemoryRef.current, { sheetName: schema.sheetName, sourceRange: schema.sourceRange });
-            if (!suppressCommandEcho) append({ kind: "command", id: nextId("cmd"), text: analyticalText });
-            // Stage 25.1.3c §4/§9 — the legacy compiler declining this turn
-            // must not drop an already-resolved pronoun subject: the Stage 25
-            // planner needs it just as much as the compiler would have.
-            await runStage25Planner(schema, grids, analyticalText, undefined, subjectOverride);
-            append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
-            return "handled";
-          }
-
-          // committed — this turn is analytical-schema work.
-          setLanguage(lang);
-          setBusy(true);
-          committed = true;
-          selectionRef.current = snap;
-          // Stage 24.8 §27–§29 — remember this table so a later single-cell
-          // click inside it still resolves the whole analytical range.
-          sessionMemoryRef.current = rememberAnalyticalTable(sessionMemoryRef.current, {
-            sheetName: schema.sheetName,
-            sourceRange: schema.sourceRange,
-          });
-          if (!suppressCommandEcho) append({ kind: "command", id: nextId("cmd"), text: analyticalText });
-
-          // Stage 25.1.1 §5/§35/§36 — Stage 24.x has NO compiled operation for
-          // any of these kinds (peak-distance, down/up-then pattern, stable
-          // growth, mean deviation) — whatever it decided (clarify / error /
-          // even a "successful" but structurally wrong plan) is never a
-          // legitimate answer to THIS class of request. Skip straight to the
-          // planner rather than showing an irrelevant clarification.
-          if (
-            outcome.kind !== "handled" &&
-            detectOperationKind(analyticalText) !== null &&
-            analyticalPlannerEnabled() &&
-            typeof chatClient.decideAgentStep === "function" &&
-            typeof chatClient.narrate === "function"
-          ) {
-            await runStage25Planner(schema, grids, analyticalText, undefined, subjectOverride);
-            append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
-            return "handled";
-          }
-
-          if (outcome.kind === "clarify") {
-            acTrace.analyticalCompiler = toTraceField(outcome.trace);
-            acTrace.outcome = "clarify";
-            commitTrace(acTrace);
-            sessionMemoryRef.current = setClarification(
-              sessionMemoryRef.current,
-              outcome.field === "period"
-                ? buildAnalysisPeriodClarification(analyticalText, outcome.candidates, schema.sourceRange, schema.sourceVersion, outcome.question)
-                : buildAnalysisSubjectClarification(analyticalText, outcome.needle, outcome.candidates, schema.sourceRange, schema.sourceVersion, outcome.question),
-            );
-            append({ kind: "response", id: nextId("res"), streaming: false, text: outcome.question });
-            conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: outcome.question }];
-            return "handled";
-          }
-
-          if (outcome.kind === "error") {
-            // Stage 25.1 §39/§94 — a schema-aware table must never surface a
-            // raw compiler error ("не удалось разрешить период" etc.) when
-            // the planner can still attempt the request via tool composition.
-            if (analyticalPlannerEnabled() && typeof chatClient.decideAgentStep === "function" && typeof chatClient.narrate === "function") {
-              await runStage25Planner(schema, grids, analyticalText, undefined, subjectOverride);
-              append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
-              return "handled";
-            }
-            acTrace.analyticalCompiler = toTraceField(outcome.trace);
-            acTrace.outcome = "error";
-            commitTrace(acTrace);
-            append({ kind: "response", id: nextId("res"), streaming: false, text: outcome.message });
-            conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: outcome.message }];
-            append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
-            return "handled";
-          }
-
-          // Stage 25.1/25.1.1 §12–§14/§21/§35/§36/§90 — a compiled, VALID plan
-          // is still not a full/correct answer when: (a) it covers only ONE
-          // clause of a multi-clause request (§14 "partial fast-path match is
-          // not success"); (b) the sentence names an operation kind Stage
-          // 24.x structurally cannot represent (§5/§35/§36 — "a generic
-          // growth route must NOT win" for peak-distance/pattern/stable-
-          // growth/mean-deviation requests); or (c) an explicit temporal mode
-          // ("previous_to_last"/"first_to_last") was requested but the
-          // executed interval is a different pair of periods (§6–§8/§41 —
-          // the exact release-blocker case). One semantic retry through the
-          // planner (§8/§26), never a silently dropped clause or substituted
-          // period.
-          const detectedOperationKind = detectOperationKind(analyticalText);
-          const detectedTemporalMode = detectTemporalMode(analyticalText);
-          const periodMismatch =
-            detectedTemporalMode !== null &&
-            outcome.plan.interval !== undefined &&
-            (() => {
-              const sorted = [...periodIndexForInherit.points].sort((a, b) => a.orderKey - b.orderKey);
-              if (sorted.length < 2) return false;
-              const expected =
-                detectedTemporalMode === "previous_to_last"
-                  ? [sorted[sorted.length - 2]!.canonical, sorted[sorted.length - 1]!.canonical]
-                  : [sorted[0]!.canonical, sorted[sorted.length - 1]!.canonical];
-              const executed = [outcome.plan.interval!.start.canonical, outcome.plan.interval!.end.canonical];
-              return expected[0] !== executed[0] || expected[1] !== executed[1];
-            })();
-          if (
-            (hasSecondAnalyticalClause(analyticalText) && !COMPOUND_AWARE_OPERATIONS.has(outcome.plan.operation)) ||
-            detectedOperationKind !== null ||
-            periodMismatch
-          ) {
-            if (analyticalPlannerEnabled() && typeof chatClient.decideAgentStep === "function" && typeof chatClient.narrate === "function") {
-              await runStage25Planner(schema, grids, analyticalText, undefined, subjectOverride);
-              append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
-              return "handled";
-            }
-          }
-
-          // handled
-          const acTurnId = nextId("turn");
-          const firstSec = outcome.execution.sections[0];
-          append({ kind: "response", id: nextId("res"), streaming: false, text: outcome.body });
-          conversationRef.current = [...conversationRef.current, { role: "user", content: analyticalText }, { role: "assistant", content: outcome.body }];
-          sessionMemoryRef.current = rememberResult(sessionMemoryRef.current, {
-            turnId: acTurnId,
-            kind: "temporal_analysis",
-            title: firstSec?.title ?? (lang === "ru" ? "Анализ" : "Analysis"),
-            spec: {
-              op: "analytical_compiler",
-              operation: outcome.plan.operation,
-              subjectScope: outcome.plan.subjectScope,
-              steps: outcome.trace.compiledSteps,
-              sourceCells: outcome.sourceCells,
-            },
-            columns: firstSec?.columns ?? [lang === "ru" ? "Показатель" : "Metric"],
-            rows: (firstSec?.rows ?? []).map((r) => r.map((c) => c as CellValue)),
-            rowsTruncated: false,
-            facts: [],
-            sourceSheet: schema.sheetName,
-            sourceRange: schema.sourceRange,
-            sourceVersion: schema.sourceVersion,
-            resolved: [],
-            ...(outcome.entityColumn && outcome.entityValues.length > 0
-              ? { entityColumn: outcome.entityColumn, entityValues: outcome.entityValues.map((v) => v as CellValue) }
-              : {}),
-          });
-          if (outcome.rememberInterval) {
-            sessionMemoryRef.current = rememberPeriod(sessionMemoryRef.current, {
-              turnId: acTurnId,
-              kind: "interval",
-              startCanonical: outcome.rememberInterval.start.canonical,
-              endCanonical: outcome.rememberInterval.end.canonical,
-              startHeaderPath: outcome.rememberInterval.start.headerPath,
-              endHeaderPath: outcome.rememberInterval.end.headerPath,
-              sourceRange: schema.sourceRange,
-              sourceVersion: schema.sourceVersion,
-            });
-          }
-          if (outcome.rememberRanking) {
-            sessionMemoryRef.current = rememberRanking(sessionMemoryRef.current, {
-              turnId: acTurnId,
-              startCanonical: outcome.rememberRanking.interval.start.canonical,
-              endCanonical: outcome.rememberRanking.interval.end.canonical,
-              startHeaderPath: outcome.rememberRanking.interval.start.headerPath,
-              endHeaderPath: outcome.rememberRanking.interval.end.headerPath,
-              ...(outcome.rememberRanking.limit !== undefined ? { limit: outcome.rememberRanking.limit } : {}),
-              sourceRange: schema.sourceRange,
-              sourceVersion: schema.sourceVersion,
-            });
-          }
-          if (outcome.rememberComposite) {
-            sessionMemoryRef.current = rememberComposite(sessionMemoryRef.current, {
-              turnId: acTurnId,
-              interval1: {
-                startCanonical: outcome.rememberComposite.interval1.start.canonical,
-                endCanonical: outcome.rememberComposite.interval1.end.canonical,
-                startHeaderPath: outcome.rememberComposite.interval1.start.headerPath,
-                endHeaderPath: outcome.rememberComposite.interval1.end.headerPath,
-              },
-              interval2: {
-                startCanonical: outcome.rememberComposite.interval2.start.canonical,
-                endCanonical: outcome.rememberComposite.interval2.end.canonical,
-                startHeaderPath: outcome.rememberComposite.interval2.start.headerPath,
-                endHeaderPath: outcome.rememberComposite.interval2.end.headerPath,
-              },
-              sourceRange: schema.sourceRange,
-              sourceVersion: schema.sourceVersion,
-            });
-          }
-          if (outcome.winningEvent) {
-            sessionMemoryRef.current = rememberEvent(sessionMemoryRef.current, {
-              turnId: acTurnId,
-              eventType: "adjacent_period_change",
-              metricKey: outcome.winningEvent.metricKey,
-              startCanonical: outcome.winningEvent.startPeriod.canonical,
-              endCanonical: outcome.winningEvent.endPeriod.canonical,
-              startHeaderPath: outcome.winningEvent.startPeriod.headerPath,
-              endHeaderPath: outcome.winningEvent.endPeriod.headerPath,
-              startValue: outcome.winningEvent.startValue,
-              endValue: outcome.winningEvent.endValue,
-              absoluteChange: outcome.winningEvent.absoluteChange,
-              percentageChange: outcome.winningEvent.percentageChange,
-              sourceCells: [outcome.winningEvent.startCell, outcome.winningEvent.endCell],
-              sourceRange: schema.sourceRange,
-              sourceVersion: schema.sourceVersion,
-            });
-          }
-          if (outcome.directionChangeWinner) {
-            sessionMemoryRef.current = rememberDirectionChange(sessionMemoryRef.current, {
-              turnId: acTurnId,
-              metricKey: outcome.directionChangeWinner.metricKey,
-              directionChangeCount: outcome.directionChangeWinner.count,
-              events: outcome.directionChangeWinner.events.map((e) => ({
-                pivotCanonical: e.pivotCanonical,
-                pivotHeaderPath: e.pivotHeaderPath,
-                previousDirection: e.previousDirection,
-                nextDirection: e.nextDirection,
-                sourceCell: e.sourceCell,
-              })),
-              sourceRange: schema.sourceRange,
-              sourceVersion: schema.sourceVersion,
-            });
-          }
-          if (outcome.metricSetLabels && outcome.metricSetLabels.length > 0) {
-            sessionMemoryRef.current = rememberMetricSet(sessionMemoryRef.current, {
-              turnId: acTurnId,
-              metricKeys: outcome.metricSetLabels,
-              origin: outcome.metricSetOrigin ?? "derived_analysis",
-              sourceRange: schema.sourceRange,
-              sourceVersion: schema.sourceVersion,
-            });
-          }
-          if (outcome.resultSet) {
-            sessionMemoryRef.current = rememberResultSet(sessionMemoryRef.current, {
-              turnId: acTurnId,
-              operation: outcome.resultSet.operation,
-              scoreField: outcome.resultSet.scoreField,
-              rows: outcome.resultSet.rows,
-              sourceRange: schema.sourceRange,
-              sourceVersion: schema.sourceVersion,
-            });
-          }
-          if (outcome.focusMetricKey) {
-            sessionMemoryRef.current = rememberMetricFocus(sessionMemoryRef.current, {
-              metricKey: outcome.focusMetricKey,
-              sourceRange: schema.sourceRange,
-              sourceVersion: schema.sourceVersion,
-            });
-          }
-          acTrace.analyticalCompiler = { ...toTraceField(outcome.trace), ...(sessionMemoryRef.current.lastResultId ? { resultId: sessionMemoryRef.current.lastResultId } : {}) };
-          acTrace.outcome = "analytical_result";
-          commitTrace(acTrace);
-          append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
-          return "handled";
-        } catch (error) {
-          if (!committed) return "flat";
-          append({ kind: "notice", id: nextId("ntc"), tone: "error", text: error instanceof Error ? error.message : "Could not run that analysis" });
-          return "handled";
-        } finally {
-          if (committed) setBusy(false);
-        }
-      };
-
       // ----- Stage 24.3A / 24.5: autonomous bounded cross-sheet comparison -
       const numericHeadersOf = (snap: SelectionSnapshot): Set<string> => {
         const out = new Set<string>();
@@ -2208,110 +1369,6 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             }
           }
           await runAgentTask(p.originalPrompt, { state: cont, answer: choices[0] ?? "" });
-          return true;
-        }
-        if (p.kind === "analytical_agent") {
-          // Stage 25.1.3 §15–§19 — resume the SAME Stage 25 analytical
-          // planner run (never the flat legacy agent — a different tool
-          // registry entirely) with the user's short slot-filling answer.
-          // The suspended request IS `cont.originalUserRequest` plus its
-          // accumulated observations/steps — no separate parallel state.
-          const cont = p.agentContinuation as AgentLoopState | undefined;
-          if (!cont) {
-            append({ kind: "response", id: nextId("res"), streaming: false, text: lang === "ru" ? "Не удалось возобновить прошлый анализ." : "I couldn't resume that earlier analysis." });
-            return true;
-          }
-          const known = sessionMemoryRef.current.lastAnalyticalTable;
-          if (!known) {
-            append({ kind: "response", id: nextId("res"), streaming: false, text: lang === "ru" ? "Не удалось возобновить прошлый анализ — таблица больше не выделена." : "I couldn't resume that earlier analysis — the table isn't in view any more." });
-            return true;
-          }
-          const freshSnap = await readAddressSnapshot(port, known.sourceRange).catch(() => undefined);
-          if (!freshSnap) {
-            append({ kind: "response", id: nextId("res"), streaming: false, text: lang === "ru" ? "Не удалось прочитать таблицу заново." : "I couldn't re-read that table." });
-            return true;
-          }
-          // §20/§21 — freshness is THIS RANGE's own version, never the
-          // whole-workbook identity: a mutation elsewhere, a clarification
-          // round-trip, or a planner retry must never invalidate it.
-          if (p.sourceIdentity && sourceVersionOf(freshSnap) !== p.sourceIdentity) {
-            append({
-              kind: "response",
-              id: nextId("res"),
-              streaming: false,
-              text: lang === "ru" ? "Таблица изменилась с момента вопроса — задайте его снова." : "That table changed since I asked that — please ask again.",
-            });
-            return true;
-          }
-          let resumeStartsBelowRow1 = false;
-          try {
-            const { localAddress } = splitSheetAddress(freshSnap.address);
-            resumeStartsBelowRow1 = parseLocalRange(localAddress || freshSnap.address).start.row > 0;
-          } catch {
-            /* keep false */
-          }
-          const resumeSchema = induceTableSchema({
-            values: freshSnap.values,
-            numberFormats: freshSnap.numberFormats,
-            formulas: freshSnap.formulas,
-            sheetName: freshSnap.sheetName,
-            sourceRange: freshSnap.address,
-            sourceVersion: sourceVersionOf(freshSnap),
-            startsBelowRow1: resumeStartsBelowRow1,
-          });
-          const resumeGrids: AnalysisGrids = { values: freshSnap.values, numberFormats: freshSnap.numberFormats };
-          selectionRef.current = freshSnap;
-          await runStage25Planner(resumeSchema, resumeGrids, p.originalPrompt, { state: cont, answer: choices[0] ?? "" });
-          append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
-          return true;
-        }
-        if (p.kind === "schema_norm" || p.kind === "schema_threshold") {
-          // 24.6.1 — `interpretClarificationAnswer` already resolved the answer to
-          // a clean marker: "statistical" | "threshold" | "threshold:<num>".
-          const marker = (choices[0] ?? "").toLowerCase();
-          const src = (label: string): string | undefined => p.observations.find((o) => o.label === label)?.text;
-          if (marker === "statistical") {
-            text = `${p.originalPrompt} — считать статистическими выбросами`;
-            suppressCommandEcho = true;
-            await runSchemaRoute(text, detectSchemaIntent(text));
-            return true;
-          }
-          const tm = /^threshold(?::(\d+(?:\.\d+)?))?$/.exec(marker);
-          if (tm && tm[1]) {
-            text = `${p.originalPrompt} — порог ${tm[1]}`;
-            suppressCommandEcho = true;
-            await runSchemaRoute(text, detectSchemaIntent(text));
-            return true;
-          }
-          // "threshold" with no number → ask for the value (a second clarification).
-          sessionMemoryRef.current = setClarification(
-            sessionMemoryRef.current,
-            buildSchemaThresholdClarification(p.originalPrompt, src("sourceRange") ?? "", src("sourceVersion") ?? "", lang),
-          );
-          append({ kind: "response", id: nextId("res"), streaming: false, text: sessionMemoryRef.current.pendingClarification!.question });
-          return true;
-        }
-        if (p.kind === "analysis_subject") {
-          // 24.7 §45 — the user picked which metric; re-compile the SAME request
-          // with the choice as the subject override. Never re-route elsewhere.
-          const choice = choices[0] ?? "";
-          suppressCommandEcho = true;
-          const handled = await runAnalyticalRoute(p.originalPrompt, choice);
-          if (handled === "flat") {
-            append({ kind: "response", id: nextId("res"), streaming: false, text: lang === "ru" ? "Не удалось выполнить этот анализ." : "I couldn't run that analysis." });
-          }
-          return true;
-        }
-        if (p.kind === "analysis_period") {
-          // 24.7.1 §21/§22 — the user picked which period/horizon to check the
-          // change over. Re-compile the SAME request with that phrase appended
-          // so the intent parser's relative-period regex resolves it.
-          const choice = choices[0] ?? "";
-          suppressCommandEcho = true;
-          const handled = await runAnalyticalRoute(`${p.originalPrompt} ${choice}`);
-          if (handled === "flat") {
-            append({ kind: "response", id: nextId("res"), streaming: false, text: lang === "ru" ? "Не удалось выполнить этот анализ." : "I couldn't run that analysis." });
-          }
           return true;
         }
         if (p.kind === "entity_action") {
@@ -2815,51 +1872,17 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
       // a turn that resolves no table AND has no analytical table behind it was
       // never accepted, so continuing the cascade is not a §11 fallback.
       {
-        const v2Slash = resolveSlashSubmission(text);
-        // The Stage 24 result a transform would act on, if there is one.
-        const v2LastV1Result =
-          sessionMemoryRef.current.recentResults.find((r) => r.id === sessionMemoryRef.current.lastResultId) ??
-          sessionMemoryRef.current.recentResults[sessionMemoryRef.current.recentResults.length - 1];
-        const v2Route = routeTurn(text, {
-          hasSelection: Boolean(selectionRef.current),
-          knownEntities: [],
-          hasPriorResult: sessionMemoryRef.current.recentResults.length > 0,
-        });
-        const ownerCtx = {
-          flagEnabled: unifiedAnalyticalEngineV2Enabled(),
+        const mem0 = sessionMemoryRef.current;
+        const ownerCtx = buildOwnershipContext(text, {
           canPlan: typeof chatClient.planAnalyticalTurn === "function",
-          isSlash: v2Slash !== null,
-          isUndo: isUndoPhrase(text),
-          hasResultAction: detectResultAction(text) !== null,
-          isMutation: isMutationRequest(text),
-          isResultTransform: v2LastV1Result !== undefined && detectResultTransform(text, v2LastV1Result).kind === "transform",
-          hasV1Result: sessionMemoryRef.current.recentResults.length > 0,
-          v1ClarificationPending: Boolean(sessionMemoryRef.current.pendingClarification),
+          isSlash: resolveSlashSubmission(text) !== null,
+          hasSelection: Boolean(selectionRef.current),
+          lastV1Result: mem0.recentResults.find((r) => r.id === mem0.lastResultId) ?? mem0.recentResults[mem0.recentResults.length - 1],
+          v1ResultCount: mem0.recentResults.length,
+          v1ClarificationPending: Boolean(mem0.pendingClarification),
           v2ClarificationPending: Boolean(analyticalStateRef.current.suspended),
-          // A message is the ANSWER to an outstanding question when it is not a
-          // turn in its own right. A short reply ("20%", "за первый квартал")
-          // routes as general chat and carries no request; anything that routes
-          // as analysis, structure or a mutation is the person moving on.
-          isTopicSwitch:
-            isConceptQuestion(text) ||
-            isMutationRequest(text) ||
-            detectResultAction(text) !== null ||
-            (v2Route.route !== "general_chat" && text.trim().split(/\s+/).length >= 4),
           hasV2Table: Boolean(analyticalStateRef.current.tableRef),
-          isConceptQuestion: isConceptQuestion(text),
-          hasWorkbookDeixis: hasWorkbookDeixis(text),
-          // §5 — capability, from the classifiers this file ALREADY routes by.
-          // `routeTurn`'s own "workbook_analysis" is the broadest of them and
-          // the reason this is not a phrase list: it is the same judgement the
-          // Stage 24 cascade makes about whether a turn is analysis at all.
-          isAnalytical:
-            v2Route.route === "workbook_analysis" ||
-            detectAnalyticalIntent(text).any ||
-            classifyIntent(text).analytical ||
-            isExploratoryRequest(text),
-          isAnalyticalFollowUp: isAnalyticalFollowUp(text),
-          route: v2Route,
-        };
+        });
         const provisional = classifyTurnOwner({ ...ownerCtx, hasTable: true, selectionIsForeign: false });
         if (provisional.owner === "V2_OWNED") {
           const v2Table = await resolveV2Table();
@@ -3012,247 +2035,6 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             setBusy(false);
           }
           return;
-        }
-
-        // Stage 24.8 §20/§21/§40–§43 — EventRef follow-ups resolve DIRECTLY
-        // from the stored event, never by re-analysing the workbook. Checked
-        // BEFORE the generic analytical route so "покажи его динамику" is
-        // never misread as "each metric" (an empty subject with no event).
-        const lastEvent = sessionMemoryRef.current.lastEventRef;
-        // Stage 24.9 §29/§37 — the GENERALIZED single-metric pronoun target:
-        // any producer that pins down one metric (event winner, direction-
-        // change winner, resultset top-1, any single-metric analytical query)
-        // sets this — "покажи его динамику" never needs a per-operation case.
-        const focusMetricKey = sessionMemoryRef.current.lastMetricFocusRef?.metricKey;
-        const lastDirectionChange = sessionMemoryRef.current.lastDirectionChangeRef;
-
-        // Stage 24.9 §26–§31 — COMPOUND requests: two independent analytical
-        // predicates joined by "и <triggerVerb>", sharing ONE subject. Clause
-        // 1 runs first (through whichever path it normally takes — a pronoun
-        // follow-up or a fresh analytical query); clause 2 then runs against
-        // the resulting focal metric. Neither clause is ever silently dropped
-        // (§31) — both render, in order.
-        // `\b` is ASCII-only in JS regex — Cyrillic letters are never "word"
-        // characters to it, so the trigger verb's own end (letter → comma)
-        // never counts as a boundary. A `(?![\p{L}])` lookaround is used
-        // instead (the SAME recurring bug class as Stage 24.7.1/24.8).
-        const compoundM = /^(.*?)\s+и\s+(?:а\s+также\s+)?(укажи|покажи|сравни|выведи|найди|определи)(?![\p{L}])[,:]?\s*(.*)$/isu.exec(text);
-        if (compoundM && compoundM[1]?.trim() && compoundM[3]?.trim()) {
-          const clause1Text = compoundM[1]!.trim();
-          const clause2Text = `${compoundM[2]} ${compoundM[3]}`.trim();
-          const clause1Followup = (lastEvent || focusMetricKey) ? detectEventFollowup(clause1Text) : null;
-          const clause1Analytical = detectAnalyticalIntent(clause1Text).any;
-          const clause2Analytical = detectAnalyticalIntent(clause2Text).any;
-          if ((clause1Followup || clause1Analytical) && clause2Analytical) {
-            setLanguage(lang);
-            append({ kind: "command", id: nextId("cmd"), text });
-            suppressCommandEcho = true;
-            let clause1Handled = false;
-            if (clause1Followup?.kind === "dynamics") {
-              const mk = focusMetricKey ?? lastEvent?.metricKey ?? lastDirectionChange?.metricKey;
-              if (mk) clause1Handled = (await runAnalyticalRoute(`Покажи динамику ${mk} по времени.`, mk)) === "handled";
-            }
-            if (!clause1Handled && clause1Analytical) {
-              clause1Handled = (await runAnalyticalRoute(clause1Text)) === "handled";
-            }
-            const focus2 = sessionMemoryRef.current.lastMetricFocusRef?.metricKey ?? focusMetricKey;
-            const clause2Handled = (await runAnalyticalRoute(clause2Text, focus2)) === "handled";
-            if (!clause1Handled && !clause2Handled) {
-              const msg = lang === "ru" ? "Не удалось выполнить составной запрос." : "I couldn't run that compound request.";
-              append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
-            }
-            return;
-          }
-        }
-
-        // Stage 24.9 §18/§43 — "В какие периоды он менял направление?" reads
-        // the stored DirectionChangeAnalysisRef's events directly.
-        if (lastDirectionChange && detectDirectionPeriodsFollowup(text)) {
-          setLanguage(lang);
-          append({ kind: "command", id: nextId("cmd"), text });
-          const lines = lastDirectionChange.events.map((e) => {
-            const from = e.previousDirection === "positive" ? (lang === "ru" ? "рост" : "up") : lang === "ru" ? "снижение" : "down";
-            const to = e.nextDirection === "positive" ? (lang === "ru" ? "рост" : "up") : lang === "ru" ? "снижение" : "down";
-            return `- ${e.pivotHeaderPath}: ${from} → ${to}`;
-          });
-          const msg =
-            lastDirectionChange.events.length > 0
-              ? (lang === "ru"
-                  ? `Показатель: ${lastDirectionChange.metricKey}\n\nСмена направления:\n${lines.join("\n")}`
-                  : `Metric: ${lastDirectionChange.metricKey}\n\nDirection changes:\n${lines.join("\n")}`)
-              : lang === "ru"
-                ? "Смен направления не найдено."
-                : "No direction changes found.";
-          append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
-          conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: msg }];
-          return;
-        }
-
-        // Stage 24.9 §5–§7/§35/§39/§69 — "какой из них самый волатильный?"
-        // answers from the stored ResultSetRef's order DIRECTLY — never a
-        // fresh full-workbook ranking. No compatible prior set → clarify,
-        // never infer an arbitrary workbook-wide universe.
-        const rsFollowup = detectResultSetFollowup(text);
-        if (rsFollowup) {
-          setLanguage(lang);
-          append({ kind: "command", id: nextId("cmd"), text });
-          const rs = sessionMemoryRef.current.lastResultSetRef;
-          const winner = rs?.rows[0];
-          if (!rs || !winner || (rsFollowup.operationHint && rs.operation !== rsFollowup.operationHint)) {
-            const msg = lang === "ru"
-              ? "Уточните, к какому предыдущему списку показателей относится «из них» — подходящего результата не нашлось."
-              : "Please clarify which earlier list \"of them\" refers to — I couldn't find a matching prior result.";
-            append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
-            conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: msg }];
-            return;
-          }
-          const msg = lang === "ru" ? `${winner.key} (оценка ${winner.score.toFixed(4)}).` : `${winner.key} (score ${winner.score.toFixed(4)}).`;
-          append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
-          conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: msg }];
-          sessionMemoryRef.current = rememberMetricFocus(sessionMemoryRef.current, {
-            metricKey: winner.key,
-            sourceRange: rs.sourceRange,
-            sourceVersion: rs.sourceVersion,
-          });
-          return;
-        }
-
-        // Stage 24.9 §29 — "покажи его/её динамику" resolves from the SHARED
-        // metric-focus authority, not only a prior EventRef.
-        // Stage 25.1.3a §1/§3/§5 — SUBJECT RESOLUTION != REQUEST COMPLETION:
-        // this shortcut may resolve "его", but when the sentence carries MORE
-        // than the one dynamics clause it covers, it must never terminate the
-        // turn early — the remaining clause(s) would be silently dropped.
-        // Hand the FULL text to the compositional route instead, with the
-        // subject already resolved (never re-parsed, never re-asked): Stage
-        // 24.x's own multi-clause override (or the Stage 25 planner, via
-        // `inherited.metricFocus` — unchanged) then covers every clause.
-        const focusDynamicsFollowup = focusMetricKey ? detectEventFollowup(text) : null;
-        if (focusDynamicsFollowup?.kind === "dynamics" && focusMetricKey) {
-          setLanguage(lang);
-          append({ kind: "command", id: nextId("cmd"), text });
-          suppressCommandEcho = true;
-          const fullyCovered = countAnalyticalClauses(text) <= 1;
-          const handled = await runAnalyticalRoute(fullyCovered ? `Покажи динамику ${focusMetricKey} по времени.` : text, focusMetricKey);
-          if (handled === "flat") {
-            const msg = lang === "ru" ? "Не удалось построить динамику для этого показателя." : "I couldn't build a time series for that metric.";
-            append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
-          }
-          return;
-        }
-
-        const eventFollowup = lastEvent ? detectEventFollowup(text) : null;
-        if (lastEvent && eventFollowup) {
-          setLanguage(lang);
-          append({ kind: "command", id: nextId("cmd"), text });
-          if (eventFollowup.kind === "when") {
-            const msg = lang === "ru"
-              ? `Между ${lastEvent.startHeaderPath} и ${lastEvent.endHeaderPath}.`
-              : `Between ${lastEvent.startHeaderPath} and ${lastEvent.endHeaderPath}.`;
-            append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
-            conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: msg }];
-            return;
-          }
-          if (eventFollowup.kind === "magnitude") {
-            const pct = lastEvent.percentageChange === null ? "—" : `${(lastEvent.percentageChange * 100).toFixed(2).replace(/\.?0+$/, "")}%`;
-            const msg = lang === "ru"
-              ? `${lastEvent.metricKey}: Δ абс. ${lastEvent.absoluteChange}, Δ % ${pct} (${lastEvent.startHeaderPath} → ${lastEvent.endHeaderPath}).`
-              : `${lastEvent.metricKey}: Δ abs ${lastEvent.absoluteChange}, Δ % ${pct} (${lastEvent.startHeaderPath} → ${lastEvent.endHeaderPath}).`;
-            append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
-            conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: msg }];
-            return;
-          }
-          if (eventFollowup.kind === "which_metric") {
-            const msg = lang === "ru" ? `Это показатель «${lastEvent.metricKey}».` : `That's the metric "${lastEvent.metricKey}".`;
-            append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
-            conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: msg }];
-            return;
-          }
-          if (eventFollowup.kind === "dynamics") {
-            suppressCommandEcho = true;
-            // Stage 25.1.3a §1/§3/§5 — same rule as the focus-based shortcut
-            // above: never terminate after only the dynamics clause when the
-            // sentence carries more analytical clauses than that.
-            const fullyCovered = countAnalyticalClauses(text) <= 1;
-            const handled = await runAnalyticalRoute(fullyCovered ? `Покажи динамику ${lastEvent.metricKey} по времени.` : text, lastEvent.metricKey);
-            if (handled === "flat") {
-              const msg = lang === "ru" ? "Не удалось построить динамику для этого показателя." : "I couldn't build a time series for that metric.";
-              append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
-            }
-            return;
-          }
-          // "before" / "after" — the adjacent canonical period one step beyond
-          // the event's own endpoint, read from a FRESH schema (never a raw
-          // Excel serial, never approximated).
-          setBusy(true);
-          try {
-            const snap = await readAddressSnapshot(port, lastEvent.sourceRange).catch(() => undefined);
-            const fail = (msg: string): void => {
-              append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
-              conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: msg }];
-            };
-            if (!snap) {
-              fail(lang === "ru" ? "Не удалось перечитать таблицу." : "Could not re-read the table.");
-              return;
-            }
-            let startsBelowRow1 = false;
-            try {
-              const { localAddress } = splitSheetAddress(snap.address);
-              startsBelowRow1 = parseLocalRange(localAddress || snap.address).start.row > 0;
-            } catch {
-              /* keep false */
-            }
-            const schema = induceTableSchema({
-              values: snap.values,
-              numberFormats: snap.numberFormats,
-              formulas: snap.formulas,
-              sheetName: snap.sheetName,
-              sourceRange: snap.address,
-              sourceVersion: sourceVersionOf(snap),
-              startsBelowRow1,
-            });
-            const grids = { values: snap.values, numberFormats: snap.numberFormats };
-            const pi = buildPeriodIndex(schema, grids);
-            const sorted = [...pi.points].sort((a, b) => a.orderKey - b.orderKey);
-            const anchorCanonical = eventFollowup.kind === "before" ? lastEvent.startCanonical : lastEvent.endCanonical;
-            const idx = sorted.findIndex((p) => p.canonical === anchorCanonical);
-            const target = eventFollowup.kind === "before" ? (idx > 0 ? sorted[idx - 1] : undefined) : idx >= 0 && idx < sorted.length - 1 ? sorted[idx + 1] : undefined;
-            if (idx === -1 || !target) {
-              fail(lang === "ru" ? "Соседний период недоступен — это край доступного диапазона дат." : "No adjacent period available — this is the edge of the available date range.");
-              return;
-            }
-            const mi = buildMetricIndex(schema);
-            const rm = resolveMetric(lastEvent.metricKey, mi);
-            const subject =
-              rm.kind === "resolved" && rm.entry.kind === "row_member" && rm.entry.member
-                ? { kind: "row_axis_member" as const, member: rm.entry.member }
-                : rm.kind === "resolved" && rm.entry.kind === "column" && rm.entry.column
-                  ? { kind: "column_measure" as const, column: rm.entry.column }
-                  : null;
-            const pt = subject ? getPointValue(schema, grids, subject, target) : null;
-            if (!pt) {
-              fail(lang === "ru" ? "Не удалось найти значение показателя за этот период." : "Could not find the metric's value for that period.");
-              return;
-            }
-            const val = pt.percent ? `${(pt.value * 100).toFixed(2).replace(/\.?0+$/, "")}%` : pt.value;
-            const msg = lang === "ru"
-              ? `${lastEvent.metricKey} на ${target.headerPath}: ${val}.`
-              : `${lastEvent.metricKey} at ${target.headerPath}: ${val}.`;
-            append({ kind: "response", id: nextId("res"), streaming: false, text: msg });
-            conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: msg }];
-          } finally {
-            setBusy(false);
-          }
-          return;
-        }
-
-        // 24.7 — universal analytical-intent compiler. Runs before the flat
-        // grouped-ranking and 24.6 schema routes; "flat" → this turn is not
-        // analytical work over a non-flat TableSchema (records tables decline).
-        if (detectAnalyticalIntent(text).any) {
-          recordAnalyticalExecution("stage24_compiler");
-          const analytical = await runAnalyticalRoute(text);
-          if (analytical === "handled") return;
         }
 
         // 24.5.4 — "N <entities> with the worst/best <metric>" is ONE compositional
@@ -3422,16 +2204,43 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
           return;
         }
 
-        // 24.6 — universal table schema route (deterministic; pre-empts the model
-        // for a recognised schema question). Records tables fall through to the
-        // existing flat pipeline unchanged.
-        {
-          const si = detectSchemaIntent(text);
-          if (si.any) {
-            recordAnalyticalExecution("stage24_schema");
-            const outcome = await runSchemaRoute(text, si);
-            if (outcome === "handled") return;
-            // "flat" → continue below with this turn (records table).
+        if (route.route === "workbook_qa") {
+          const descSnap = await readSelectionSnapshot(port).catch(() => undefined);
+          if (descSnap) {
+            let descStartsBelowRow1 = false;
+            try {
+              const { localAddress } = splitSheetAddress(descSnap.address);
+              descStartsBelowRow1 = parseLocalRange(localAddress || descSnap.address).start.row > 0;
+            } catch {
+              /* keep false */
+            }
+            const descSchema = induceTableSchema({
+              values: descSnap.values,
+              numberFormats: descSnap.numberFormats,
+              formulas: descSnap.formulas,
+              sheetName: descSnap.sheetName,
+              sourceRange: descSnap.address,
+              sourceVersion: sourceVersionOf(descSnap),
+              startsBelowRow1: descStartsBelowRow1,
+            });
+            if (descSchema.orientation === "row_records" && descSchema.confidence >= 0.5) {
+              setLanguage(lang);
+              selectionRef.current = descSnap;
+              if (!suppressCommandEcho) append({ kind: "command", id: nextId("cmd"), text });
+              const descLocal = descSnap.address.split("!").pop() ?? descSnap.address;
+              append({
+                kind: "activity",
+                id: nextId("act"),
+                activity: "reading",
+                title: `${descSnap.sheetName}!${descLocal} · ${descSnap.totalRowCount} rows × ${descSnap.totalColumnCount} columns`,
+                status: "done",
+              });
+              const descBody = describeSchema(descSchema, lang === "ru" ? "ru" : "en");
+              append({ kind: "response", id: nextId("res"), streaming: false, text: descBody });
+              conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: descBody }];
+              commitTrace({ text, at: new Date().toISOString(), routeChosen: "flat_table_describe", detectedResultAction: null, outcome: "described" });
+              return;
+            }
           }
         }
 
@@ -3607,109 +2416,6 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             setBusy(false);
           }
           return;
-        }
-
-        // Stage 25 §56 — LLM analytical planner. Tried after every more
-        // specific deterministic route above has declined, and before the
-        // flat bounded agent / general chat: a schema-backed table question
-        // no Stage 24.7–24.9 phrase/cue covers still gets a chance at tool
-        // composition instead of falling straight to the flat analyzer.
-        // Gated on the same broad `classifyIntent` heuristic already used for
-        // the flat model route, OR an explicit exploratory ask (§30/§40/§70 —
-        // "Что здесь самое необычное?" carries none of `classifyIntent`'s
-        // keywords, but must still reach the planner's exploratory mode, never
-        // a bare `metric.resolve("")`) — safe here because every route that
-        // owns a more specific turn shape (transforms, references, grouped
-        // ranking, cross-sheet compare, general chat) has already returned
-        // above.
-        // Stage 25.1.2 §4/§6/§9 — ALSO reached whenever this session already
-        // has an established analytical table, regardless of what the
-        // phrase-based classifiers think of THIS turn's wording: a
-        // schema-aware conversation's follow-up must stay schema-aware.
-        const knownForPlanner = sessionMemoryRef.current.lastAnalyticalTable;
-        // Stage 25.1.3f §2 — a follow-up on a standing structured result stays
-        // schema-aware even if this turn's own wording carries no analytical
-        // keyword of its own.
-        const followUpOnStandingResult = Boolean(sessionMemoryRef.current.lastAnalyticalResultSetRef) && isAnalyticalFollowUp(text);
-        if (
-          analyticalPlannerEnabled() &&
-          typeof chatClient.decideAgentStep === "function" &&
-          typeof chatClient.narrate === "function" &&
-          (classifyIntent(text).analytical || isExploratoryRequest(text) || Boolean(knownForPlanner) || followUpOnStandingResult)
-        ) {
-          let plannerSnap: SelectionSnapshot | undefined;
-          try {
-            plannerSnap = await readSelectionSnapshot(port);
-          } catch {
-            plannerSnap = undefined;
-          }
-          let plannerSchema: TableSchema | undefined;
-          const induceFrom = (snap: SelectionSnapshot): TableSchema => {
-            let startsBelowRow1 = false;
-            try {
-              const { localAddress } = splitSheetAddress(snap.address);
-              startsBelowRow1 = parseLocalRange(localAddress || snap.address).start.row > 0;
-            } catch {
-              /* keep false */
-            }
-            return induceTableSchema({
-              values: snap.values,
-              numberFormats: snap.numberFormats,
-              formulas: snap.formulas,
-              sheetName: snap.sheetName,
-              sourceRange: snap.address,
-              sourceVersion: sourceVersionOf(snap),
-              startsBelowRow1,
-            });
-          };
-          if (plannerSnap) plannerSchema = induceFrom(plannerSnap);
-          const plannerSnapValid = (snap: SelectionSnapshot | undefined, schema: TableSchema | undefined): schema is TableSchema =>
-            Boolean(snap && schema && schema.orientation !== "row_records" && schema.confidence >= 0.5);
-          // §4/§6 — the live selection may not resolve to a valid table even
-          // though this IS a schema-aware conversation (selection moved,
-          // read failed, or induction declined): retry against the
-          // REMEMBERED analytical table before giving up.
-          if (!plannerSnapValid(plannerSnap, plannerSchema) && knownForPlanner) {
-            const knownSnap = await readAddressSnapshot(port, knownForPlanner.sourceRange).catch(() => undefined);
-            if (knownSnap) {
-              const knownSchema = induceFrom(knownSnap);
-              if (plannerSnapValid(knownSnap, knownSchema)) {
-                plannerSnap = knownSnap;
-                plannerSchema = knownSchema;
-              }
-            }
-          }
-          if (plannerSnapValid(plannerSnap, plannerSchema)) {
-            setLanguage(lang);
-            setBusy(true);
-            selectionRef.current = plannerSnap;
-            append({ kind: "command", id: nextId("cmd"), text });
-            const plannerGrids: AnalysisGrids = { values: plannerSnap!.values, numberFormats: plannerSnap!.numberFormats };
-            try {
-              await runStage25Planner(plannerSchema, plannerGrids, text);
-            } finally {
-              setBusy(false);
-            }
-            return;
-          }
-          // §4/§6/§16 — this IS a schema-aware analytical conversation that
-          // could not resolve to a table this turn: terminate cleanly here.
-          // NEVER fall through to the legacy flat analyzer for schema-backed
-          // analytics.
-          if (knownForPlanner) {
-            setLanguage(lang);
-            setBusy(true);
-            append({ kind: "command", id: nextId("cmd"), text });
-            const body =
-              lang === "ru"
-                ? "Не удалось определить таблицу для анализа — выделите диапазон с данными и повторите запрос."
-                : "I couldn't resolve a table to analyze — select the data range and try again.";
-            append({ kind: "response", id: nextId("res"), streaming: false, text: body });
-            conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: body }];
-            append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
-            setBusy(false);
-            return;
-          }
         }
 
         // 24.4 §4–5 — bounded agentic analysis. LAST resort before the generic

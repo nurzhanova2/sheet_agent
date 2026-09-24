@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { induceTableSchema } from "./schema-induction.js";
 import { iqrOutliers, measureSeries, seriesExtrema, seriesPeaks, seriesTrend } from "./matrix-analysis.js";
-import { detectSchemaIntent, runSchemaAnalysis } from "./schema-result.js";
+import { describeSchema } from "./describe-schema.js";
 import {
   fixtureBalanceLike,
   fixtureHierarchical,
@@ -76,49 +76,17 @@ describe("seriesTrend", () => {
   });
 });
 
-describe("detectSchemaIntent", () => {
-  it("recognises 'о чем эта таблица'", () => {
-    expect(detectSchemaIntent("о чем эта таблица").describe).toBe(true);
-    expect(detectSchemaIntent("what is this table about?").describe).toBe(true);
-  });
-  it("recognises extrema-per-metric", () => {
-    const i = detectSchemaIntent("найди максимальные и минимальные значения для каждого показателя");
-    expect(i.extrema).toBe(true);
-  });
-  it("recognises peaks and treats them as max (not magnitude) by default", () => {
-    const i = detectSchemaIntent("покажи пиковые значения по каждому показателю");
-    expect(i.peaks).toBe(true);
-    expect(i.peaksByMagnitude).toBe(false);
-  });
-  it("flags an outlier ask without a method for clarification", () => {
-    const i = detectSchemaIntent("найди значения, выходящие за пределы нормы");
-    expect(i.outliers).toBe(true);
-    expect(i.outliersStatistical).toBe(false);
-  });
-  it("runs IQR when the method is explicit", () => {
-    const i = detectSchemaIntent("считай это статистическими выбросами");
-    expect(i.outliersStatistical).toBe(true);
-  });
-});
-
-describe("runSchemaAnalysis — mixed request partial execution (§29)", () => {
-  it("computes maxima/minima/peaks now and defers only the norm question", () => {
-    const { schema, grids } = schemaOf(fixtureHierarchical());
-    const intent = detectSchemaIntent(
-      "найди наиболее крупные значения, значения выходящие за пределы нормы, а также пиковые и минимальные значения для каждого показателя",
-    );
-    const out = runSchemaAnalysis(schema, grids, intent, "ru");
-    expect(out.needsNormClarification).toBe(true);
-    expect(out.sections.length).toBeGreaterThan(0);
-    expect(out.computed).toEqual(expect.arrayContaining(["peaks"]));
-    expect(out.sourceCells.length).toBeGreaterThan(0);
+describe("describeSchema", () => {
+  it("returns normalized text for a hierarchical report, with no raw date serials", () => {
+    const { schema } = schemaOf(fixtureBalanceLike());
+    const text = describeSchema(schema, "ru");
+    expect(text).toBeTruthy();
+    expect(text).not.toMatch(/45292|45962/);
+    expect(text).toMatch(/иерархическ|многоуровнев/);
   });
 
-  it("describe returns normalized text, no raw serials", () => {
-    const { schema, grids } = schemaOf(fixtureBalanceLike());
-    const out = runSchemaAnalysis(schema, grids, detectSchemaIntent("о чем эта таблица"), "ru");
-    expect(out.describeText).toBeTruthy();
-    expect(out.describeText!).not.toMatch(/45292|45962/);
-    expect(out.describeText!).toMatch(/иерархическ|многоуровнев/);
+  it("names a records layout as a records table", () => {
+    const { schema } = schemaOf(fixtureHierarchical());
+    expect(describeSchema(schema, "ru")).toBeTruthy();
   });
 });

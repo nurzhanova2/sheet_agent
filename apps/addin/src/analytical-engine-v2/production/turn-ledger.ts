@@ -1,15 +1,7 @@
 import type { OwnershipReason, TurnOwner } from "./turn-owner.js";
 
 /** Every route that can produce an analytical answer. §3's audit, as a type. */
-export type AnalyticalEngine =
-  | "analytical_engine_v2"
-  | "stage24_compiler"
-  | "stage24_schema"
-  | "stage24_grouped_ranking"
-  | "stage24_followup"
-  | "stage24_agent"
-  | "stage25_planner"
-  | "flat_analyzer";
+export type AnalyticalEngine = "analytical_engine_v2" | "stage24_grouped_ranking" | "stage24_agent";
 
 export interface TurnLedgerEntry {
   readonly turnId: string;
