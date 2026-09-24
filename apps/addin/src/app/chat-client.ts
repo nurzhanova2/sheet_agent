@@ -229,26 +229,6 @@ export interface ChatClient {
     signal: AbortSignal,
     model?: string,
   ): Promise<string>;
-  /**
-   * Stage 27.2A §2/§3 — one bounded ANALYTICAL DECISION for the iterative loop.
-   *
-   * The fifth role, and separate from all four for the usual reason: it has
-   * its own grammar. This one returns a typed decision envelope — INSPECT,
-   * EXECUTE_CODE, CALL_TOOL, CLARIFY, COMPLETE — and its failure mode is a
-   * CONTROL_ERROR handled on its own budget (§16), which is not what a failed
-   * code generation or a failed narration means.
-   *
-   * It is NOT `decideAgentStep`: that carries the Stage 24.4 flat-agent
-   * prompt and a different decision vocabulary. Sharing the method would mean
-   * one prompt change could silently retarget the other loop.
-   *
-   * Optional: without it the engine runs the one-shot sandbox path.
-   */
-  decideAnalysisStep?(
-    messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
-    signal: AbortSignal,
-    model?: string,
-  ): Promise<string>;
 }
 
 const ACTION_FENCE = /```sheet-agent-actions\s*([\s\S]*?)```/;
@@ -842,21 +822,6 @@ export class HttpChatClient implements ChatClient {
     model?: string,
   ): Promise<string> {
     return this.runCompletion(messages, model, () => {}, signal, "en", "code");
-  }
-
-  /**
-   * Stage 27.2A §2 — the iterative loop's decision completion.
-   *
-   * Runs at the `agent` generation profile (temperature 0): a decision is a
-   * choice among five typed actions, and sampling variety in it buys nothing
-   * an analysis wants.
-   */
-  async decideAnalysisStep(
-    messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
-    signal: AbortSignal,
-    model?: string,
-  ): Promise<string> {
-    return this.runCompletion(messages, model, () => {}, signal, "en", "agent");
   }
 
   /**

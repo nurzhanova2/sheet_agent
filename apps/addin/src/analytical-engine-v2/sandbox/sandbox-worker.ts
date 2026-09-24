@@ -103,47 +103,6 @@ export async function startSandboxWorker(): Promise<void> {
           send({ type: "result", id: message.id, envelope: JSON.parse(raw) });
           return;
         }
-        // Stage 27.2 §15/§16 — the iterative session, over the same worker.
-        //
-        // These are four more `runPython` calls into the same bootstrapped
-        // interpreter, carrying no new capability: the session namespace is
-        // built by the same `__sa_namespace` a one-shot run uses, under the
-        // same restricted builtins. What crosses the boundary is a session
-        // id, which is a string the host chose.
-        if (message.type === "step") {
-          const payload = JSON.stringify(message.dataset);
-          const raw = String(
-            py.runPython(`__sa_step(${JSON.stringify(message.sessionId)}, ${JSON.stringify(message.code)}, ${JSON.stringify(payload)}, ${message.maxRows})`),
-          );
-          send({ type: "observation", id: message.id, observation: JSON.parse(raw) });
-          return;
-        }
-        if (message.type === "look") {
-          const payload = JSON.stringify(message.dataset);
-          const raw = String(
-            py.runPython(
-              `__sa_look(${JSON.stringify(message.sessionId)}, ${JSON.stringify(message.target)}, ${JSON.stringify(message.variable)}, ${JSON.stringify(payload)}, ${message.limit})`,
-            ),
-          );
-          send({ type: "observation", id: message.id, observation: JSON.parse(raw) });
-          return;
-        }
-        if (message.type === "inspect") {
-          const payload = JSON.stringify(message.dataset);
-          const raw = String(py.runPython(`__sa_inspect(${JSON.stringify(message.sessionId)}, ${JSON.stringify(payload)})`));
-          send({ type: "observation", id: message.id, observation: JSON.parse(raw) });
-          return;
-        }
-        if (message.type === "finish") {
-          const raw = String(py.runPython(`__sa_finish(${JSON.stringify(message.sessionId)}, ${message.maxRows})`));
-          send({ type: "result", id: message.id, envelope: JSON.parse(raw) });
-          return;
-        }
-        if (message.type === "dispose") {
-          py.runPython(`__sa_dispose(${JSON.stringify(message.sessionId)})`);
-          send({ type: "observation", id: message.id, observation: { status: "ok" } });
-          return;
-        }
       } catch (err) {
         const id = (message as { id?: number }).id;
         const text = String(err);

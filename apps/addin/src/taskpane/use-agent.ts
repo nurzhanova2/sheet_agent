@@ -71,8 +71,6 @@ import {
 } from "../analytical-engine-v2/production/answer-ux.js";
 import { EMPTY_ANALYTICAL_STATE, withoutSuspension, type AnalyticalConversationState } from "../analytical-engine-v2/state/conversation-state.js";
 import { getAnalyticalTraces, renderTrace } from "../analytical-engine-v2/debug/analytical-trace.js";
-import { getAgentTraces, recordAgentTrace, renderAgentTraces } from "../analytical-engine-v2/debug/agent-trace.js";
-import { analyticalAgentLoopEnabled, analyticalAgentLoopFlagSource } from "../analytical-engine-v2/feature-flag.js";
 import { commitTrace, getResultActionTraces, type MutableResultActionTrace, type ResultActionTrace } from "../app/result-action-trace.js";
 import { commonNumericColumns, planCrossSheetComparison } from "../app/cross-sheet-compare.js";
 import { buildCompareReport, isCompareError } from "../app/commands/compare.js";
@@ -464,25 +462,6 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
       // primary/supporting, references, table + freshness identity,
       // clarification state, serialization recovery and the narrator path —
       // none of which ever appears in a normal answer (§18).
-      // §36 — the iterative loop's own surface. Matched BEFORE the engine
-      // pattern below, which would otherwise swallow "analytical-agent".
-      if (/^\/debug[\s-]?analytical[\s-]agent\s*$/i.test(text)) {
-        setLanguage(lang);
-        append({ kind: "command", id: nextId("cmd"), text });
-        const body = [
-          "```",
-          buildInfoLine(),
-          `iterative analytical loop: ${analyticalAgentLoopEnabled() ? "ON" : "OFF"}  (${analyticalAgentLoopFlagSource()})`,
-          `decision transport: ${typeof chatClient.decideAnalysisStep === "function" ? "available" : "MISSING"}`,
-          "",
-          `AGENT TRACES (${getAgentTraces().length}, most recent last)`,
-          renderAgentTraces(),
-          "```",
-        ].join(String.fromCharCode(10));
-        append({ kind: "response", id: nextId("res"), streaming: false, text: body });
-        return;
-      }
-
       if (/^\/debug[\s-]?analytical(?:[\s-]engine)?\s*$/i.test(text)) {
         setLanguage(lang);
         append({ kind: "command", id: nextId("cmd"), text });
@@ -1699,27 +1678,6 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
               ? (() => {
                   const analysis = analysisCapability({
                     generateCode: (messages) => chatClient.generateAnalysisCode!(messages, controller.signal, model),
-                    // Stage 27.2A §2 — the iterative loop's decision channel.
-                    // Present only when the transport offers it; the engine's
-                    // own flag decides whether it is used at all.
-                    ...(typeof chatClient.decideAnalysisStep === "function"
-                      ? { decideStep: (messages: readonly { readonly role: "system" | "user"; readonly content: string }[]) => chatClient.decideAnalysisStep!(messages, controller.signal, model) }
-                      : {}),
-                    // §36/§37 — the trace goes to the DEBUG ring and nowhere
-                    // else. Nothing on the answer path can reach it, which is
-                    // what keeps a NameError out of a user's reply.
-                    onTrace: (trace) => {
-                      recordAgentTrace({
-                        turnId: String(seq),
-                        request: text,
-                        text: trace.text,
-                        at: Date.now(),
-                        rounds: trace.metrics.decisionRounds,
-                        codeExecutions: trace.metrics.codeExecutions,
-                        executionErrors: trace.metrics.executionErrors,
-                        recovered: trace.metrics.selfRecoverySuccess,
-                      });
-                    },
                     currentSourceVersion: () =>
                       selectionRef.current ? sourceVersionOf(selectionRef.current) : table.schema.sourceVersion,
                   });

@@ -257,9 +257,6 @@ describe.skipIf(!live)("Stage 27.2C §50 — targeted live capability review", (
           `capability errors: unavailable=${c?.capabilityUnavailableErrors ?? 0} unknownTool=${c?.unknownToolErrors ?? 0} discovery=${c?.toolDiscoveryRequests ?? 0} leaks=${c?.toolSchemaLeaks ?? 0}`,
           `tool context ${c?.initialToolContextChars ?? 0} chars of ${fullCatalogChars} full; prompt ${c?.initialPromptChars ?? 0} chars`,
           `latency ${s.elapsedMs}ms (planner ${s.report.stages.plannerMs}ms, sandbox ${s.report.stages.sandboxExecMs}ms, narration ${s.report.stages.narrationMs}ms)`,
-          s.report.analysis?.agent
-            ? `AGENT LOOP: rounds=${s.report.analysis.agent.decisionRounds} code=${s.report.analysis.agent.codeExecutions} toolCalls=${s.report.analysis.agent.toolCalls} distinctTools=${s.report.analysis.agent.calledToolCount} discovery=${s.report.analysis.agent.toolDiscoveryRequests} exposed=${s.report.analysis.agent.initiallyExposedToolCount}->${s.report.analysis.agent.finalExposedToolCount} capabilityErrors=${s.report.analysis.agent.capabilityUnavailableErrors} unknownTool=${s.report.analysis.agent.unknownToolErrors}`
-            : "AGENT LOOP: (no sandbox analysis in this turn)",
           `ANALYSIS: requested=${s.report.analysis?.requested ?? false} attempts=${s.report.analysis?.attempts ?? 0}${s.report.analysis?.failureCode ? ` failure=${s.report.analysis.failureCode}` : ""}`,
           "",
           ...(s.failureReason ? [`FAILED: ${s.failureReason}`, `failure class: ${s.failureClass ?? "-"}`, "PLANNER ROUNDS:", ...s.rounds, ""] : []),

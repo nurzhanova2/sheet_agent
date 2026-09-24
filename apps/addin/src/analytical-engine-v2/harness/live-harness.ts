@@ -3,8 +3,6 @@ import type { TableSchema } from "../../app/schema/schema-induction.js";
 import type { ChatClient } from "../../app/chat-client.js";
 import { runAnalyticalEngine, type EngineTurn } from "../engine.js";
 import type { AnalysisCapability } from "../sandbox/analysis-runner.js";
-import type { IterativeCapability } from "../sandbox/iterative-runner.js";
-import type { AgentMetrics } from "../sandbox/analysis-agent.js";
 import type { AnalyticalRuntime } from "../sandbox/executor.js";
 import { renderTrace, type AnalyticalTraceV2 } from "../debug/analytical-trace.js";
 import { EMPTY_ANALYTICAL_STATE, type AnalyticalConversationState } from "../state/conversation-state.js";
@@ -72,9 +70,6 @@ export interface HarnessTurnReport {
   readonly stages: StageTimings;
   /** Stage 27 §84 — what the sandbox was asked for, and what it did. */
   readonly analysis?: AnalysisReport;
-  /** §38 — what the loop's DECISION calls cost, apart from code generation. */
-  readonly decisionMs?: number;
-  readonly decisionCalls?: number;
   readonly trace: AnalyticalTraceV2;
 }
 
@@ -121,17 +116,6 @@ export interface AnalysisReport {
    * because the failure and the line that caused it are only useful together.
    */
   readonly attemptLog?: readonly AttemptNote[];
-  /**
-   * Stage 27.2A §26/§47 — the iterative loop's own record.
-   *
-   * Absent when the turn ran the one-shot path, which is the distinction the
-   * §47 metrics table needs: SELF_RECOVERY_RATE is defined over turns that
-   * CONTAINED an execution error, and a turn with no loop contributes to
-   * neither half of that ratio.
-   */
-  readonly agent?: AgentMetrics;
-  /** §36 — the decision trace, for the report only. Never user-facing (§37). */
-  readonly agentTrace?: string;
 }
 
 export interface AttemptNote {
@@ -294,11 +278,6 @@ export async function runHarnessTurn(
   let sandboxAttempts = 0;
   const attemptLog: AttemptNote[] = [];
   let narrationMs = 0;
-  // Stage 27.2A §38/§47 — the iterative loop's own costs and outcome.
-  let decisionMs = 0;
-  let decisionCalls = 0;
-  let agentMetrics: AgentMetrics | undefined;
-  let agentTrace: string | undefined;
 
   const timed = async <T>(fn: () => Promise<T>, add: (ms: number) => void): Promise<T> => {
     const at = Date.now();
@@ -309,7 +288,7 @@ export async function runHarnessTurn(
     }
   };
 
-  const analysis: (AnalysisCapability & Partial<IterativeCapability>) | undefined = params.runtime
+  const analysis: AnalysisCapability | undefined = params.runtime
     ? {
         runtime: params.runtime,
         generateCode: async (messages) => {
@@ -320,27 +299,6 @@ export async function runHarnessTurn(
               codeGenMs += ms;
             },
           );
-        },
-        // Stage 27.2A §2/§46 — the iterative loop's decision channel, timed at
-        // its own boundary. A decision call is not a code-generation call and
-        // must not be counted as one: §38 asks for decision latency and
-        // execution latency separately, and one bucket cannot answer both.
-        ...(typeof chatClient.decideAnalysisStep === "function"
-          ? {
-              decideStep: async (messages: readonly { readonly role: "system" | "user"; readonly content: string }[]) => {
-                decisionCalls += 1;
-                return timed(async () => chatClient.decideAnalysisStep!(messages, signal, params.model), (ms) => {
-                  decisionMs += ms;
-                });
-              },
-            }
-          : {}),
-        // §26/§47 — the self-recovery record, which only the loop can report.
-        onMetrics: (metrics: AgentMetrics) => {
-          agentMetrics = metrics;
-        },
-        onTrace: (trace: { readonly text: string }) => {
-          agentTrace = trace.text;
         },
         onAttempt: (record) => {
           sandboxAttempts += 1;
@@ -395,10 +353,7 @@ export async function runHarnessTurn(
   const mismatches = checkExpectations(turn, question.expect);
   const failureClass = classify(turn, trace, mismatches);
   const elapsedMs = Date.now() - started;
-  const base = describeAnalysis(trace, sandboxAttempts, attemptLog);
-  const analysisReport = base
-    ? { ...base, ...(agentMetrics ? { agent: agentMetrics } : {}), ...(agentTrace ? { agentTrace } : {}) }
-    : base;
+  const analysisReport = describeAnalysis(trace, sandboxAttempts, attemptLog);
   const report: HarnessTurnReport = {
     id: question.id,
     question: question.text,
@@ -431,7 +386,6 @@ export async function runHarnessTurn(
       engineMs: Math.max(0, elapsedMs - plannerMs - codeGenMs - sandboxExecMs - narrationMs),
     },
     ...(analysisReport ? { analysis: analysisReport } : {}),
-    ...(decisionCalls > 0 ? { decisionMs, decisionCalls } : {}),
     trace,
   };
 

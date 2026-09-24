@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { VENDORED_INDEX_URL, resolvedAgainstDocument } from "./sandbox/runtime-factory.js";
-import { analyticalAgentLoopEnabled, analyticalAgentLoopFlagSource } from "./feature-flag.js";
 
 const DIST = "dist";
 const built = existsSync(join(DIST, "taskpane.html"));
@@ -78,10 +77,17 @@ describe.skipIf(!built)("Stage 27.4 §39/§47 — the build output carries what 
   });
 });
 
-describe("Stage 27.4 §13 — the one remaining agent flag", () => {
-  it("keeps the iterative agent loop off by default", () => {
-    expect(analyticalAgentLoopEnabled()).toBe(false);
-    expect(analyticalAgentLoopFlagSource()).toBe("default(off)");
+describe("Stage 28G §6 — no architecture-generation feature flag remains", () => {
+  const ARCHITECTURE_FLAG = /VITE_(?:ANALYTICAL_AGENT_LOOP|UNIFIED_ANALYTICAL_ENGINE_V2|ANALYTICAL_PLANNER_V1)/u;
+
+  it("no source file selects an analytical architecture from an environment flag", () => {
+    const sourceFiles = (dir: string): readonly string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) return entry.name === "node_modules" ? [] : sourceFiles(path);
+        return entry.isFile() && /\.tsx?$/u.test(entry.name) ? [path] : [];
+      });
+    expect(sourceFiles("src").filter((path) => ARCHITECTURE_FLAG.test(readFileSync(path, "utf8")))).toEqual([]);
   });
 });
 

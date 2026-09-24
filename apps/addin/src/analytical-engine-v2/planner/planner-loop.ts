@@ -557,19 +557,6 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
       const run = await params.analyze(decision, store, params.signal);
       budget.analyses = analyses;
       if (!run.ok) {
-        // Stage 27.2A §23/§24 — an analysis that asked a QUESTION did not fail.
-        //
-        // The iterative loop can emit CLARIFY when the request is genuinely
-        // ambiguous, and that has to reach the user as a question. It used to
-        // arrive here as an ordinary analysis failure, so «за какой период?»
-        // was shown as "анализ недоступен" — the one response that guarantees
-        // the user cannot answer it. It exits through the SAME clarification
-        // path a planner question does (§24: one clarification lifecycle, not
-        // two), so the suspended state and the resume both already work.
-        if (run.code === "CLARIFICATION_REQUIRED") {
-          trace.set({ analysisFailure: { code: run.code, message: run.message, attempts: run.attempts } });
-          return finish({ kind: "clarify", question: run.message, options: [] }, "clarify");
-        }
         // §67 — the requested analysis could not be completed. The turn ends
         // saying so. It does NOT continue with the deterministic tools and
         // present their output as the answer to a question they cannot

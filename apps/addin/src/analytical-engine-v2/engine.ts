@@ -11,8 +11,6 @@ import { scanPresented } from "./narration/presented-claims.js";
 import { answerIntentFromResult } from "./narration/answer-shape.js";
 import { planPresentation } from "./narration/presentation-plan.js";
 import { createAnalysisRunner, type AnalysisCapability } from "./sandbox/analysis-runner.js";
-import { createIterativeRunner, supportsSessions, type IterativeCapability } from "./sandbox/iterative-runner.js";
-import { analyticalAgentLoopEnabled } from "./feature-flag.js";
 import { commitState } from "./state/state-commit.js";
 import { storeResult, type AnalyticalConversationState, type SuspendedPlannerState } from "./state/conversation-state.js";
 import {
@@ -48,16 +46,7 @@ export interface EngineRunParams {
    * planner may choose it for operations no tool performs. Nothing in between:
    * there is no mode where the sandbox is advertised and then unavailable.
    */
-  /**
-   * Stage 27.2A — either capability.
-   *
-   * An `IterativeCapability` is an `AnalysisCapability` plus a decision
-   * channel, and the engine accepts both: the flag and `isIterativeCapability`
-   * below decide which loop drives the sandbox. Typing this as the narrower
-   * one meant callers had to cast to hand over something the engine genuinely
-   * supports.
-   */
-  readonly analysis?: AnalysisCapability | IterativeCapability;
+  readonly analysis?: AnalysisCapability;
   /** Stage 27 §70 — cancels planning, analysis and narration together. */
   readonly signal?: AbortSignal;
   readonly onProgress?: ExecutionProgress;
@@ -104,11 +93,6 @@ export type EngineTurn =
  * §23 — one bounded coverage retry. The retry re-enters the SAME planner loop
  * with an appended note; it never implements the missing part itself.
  */
-/** Did the caller wire the decision channel the iterative loop needs? */
-function isIterativeCapability(capability: AnalysisCapability): capability is IterativeCapability {
-  return typeof (capability as Partial<IterativeCapability>).decideStep === "function";
-}
-
 function coverageNote(request: string, detail: string, language: "ru" | "en"): string {
   return language === "ru"
     ? `${request}\n\n(Предыдущая попытка не охватила весь запрос: ${detail}. Назови все результаты, которых требует запрос — основной и вспомогательные.)`
@@ -197,32 +181,8 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
 
   // §4 — built once per turn, so two analyses in one turn cannot disagree
   // about the data they were given.
-  //
-  // Stage 27.2A §2 — which loop drives the sandbox.
-  //
-  // The choice is made ONCE per turn, and the two paths are never mixed: a
-  // turn is either iterative or one-shot from its first analysis to its last.
-  // Falling back mid-turn would mean a turn whose early steps assumed a live
-  // session and whose later ones did not, and the session is exactly what
-  // makes the early steps mean anything.
-  //
-  // Three things must all hold: the flag is on, the caller wired a decision
-  // channel, and the runtime actually has the session API. The last is not
-  // paranoia — the direct (non-worker) Pyodide runtime has it, but a host that
-  // cannot bound Python is refused by the loop itself anyway (§40).
   const capability = params.analysis ? { ...params.analysis, ...(params.onProgress ? { onProgress: params.onProgress } : {}), timings } : params.analysis;
-  const iterative = analyticalAgentLoopEnabled() && capability !== undefined && isIterativeCapability(capability) && supportsSessions(capability.runtime);
-  const analyze = capability
-    ? iterative
-      ? createIterativeRunner({
-          capability,
-          schema: params.schema,
-          grids: params.grids,
-          request: () => params.request,
-          state: () => cleared,
-        })
-      : createAnalysisRunner({ capability, schema: params.schema, grids: params.grids })
-    : undefined;
+  const analyze = capability ? createAnalysisRunner({ capability, schema: params.schema, grids: params.grids }) : undefined;
 
   const plan = (notes?: readonly string[]) =>
     runPlannerLoop({

@@ -1,6 +1,6 @@
 import type { SandboxDataset, SandboxError, SandboxLimits, SandboxResult, SourceLineage } from "./types.js";
 import { SANDBOX_LIMITS } from "./types.js";
-import type { CodeViolation, ExecuteOutcome, LookObservation, LookTarget, StepObservation, TableInspection } from "./pyodide-runtime.js";
+import type { CodeViolation, ExecuteOutcome } from "./pyodide-runtime.js";
 import { repairHintFor } from "./failure-classes.js";
 import type { SandboxDiagnostic } from "../production/execution-progress.js";
 
@@ -23,21 +23,13 @@ export type SandboxWorkerFactory = () => SandboxWorkerLike;
 export type HostMessage =
   | { readonly type: "init"; readonly indexURL?: string; readonly packages?: readonly string[] }
   | { readonly type: "validate"; readonly id: number; readonly code: string }
-  | { readonly type: "run"; readonly id: number; readonly code: string; readonly dataset: unknown; readonly maxRows: number }
-  // Stage 27.2 §15 — the iterative session. `sessionId` scopes a Python
-  // namespace to one analytical turn; nothing else about the protocol changes.
-  | { readonly type: "step"; readonly id: number; readonly sessionId: string; readonly code: string; readonly dataset: unknown; readonly maxRows: number }
-  | { readonly type: "inspect"; readonly id: number; readonly sessionId: string; readonly dataset: unknown }
-  | { readonly type: "look"; readonly id: number; readonly sessionId: string; readonly target: string; readonly variable: string; readonly dataset: unknown; readonly limit: number }
-  | { readonly type: "finish"; readonly id: number; readonly sessionId: string; readonly maxRows: number }
-  | { readonly type: "dispose"; readonly id: number; readonly sessionId: string };
+  | { readonly type: "run"; readonly id: number; readonly code: string; readonly dataset: unknown; readonly maxRows: number };
 
 export type WorkerMessage =
   | { readonly type: "ready" }
   | { readonly type: "boot_error"; readonly message: string }
   | { readonly type: "violations"; readonly id: number; readonly violations: readonly CodeViolation[] }
   | { readonly type: "result"; readonly id: number; readonly envelope: Record<string, unknown> }
-  | { readonly type: "observation"; readonly id: number; readonly observation: Record<string, unknown> }
   | { readonly type: "failed"; readonly id: number; readonly code: string; readonly message: string };
 
 interface Pending {
@@ -291,169 +283,6 @@ export class WorkerSandboxRuntime {
     return { ok: true, result, stdout: String(reply.envelope["stdout"] ?? ""), durationMs: Date.now() - started };
   }
 
-  // -------------------------------------------------------------------------
-  // Stage 27.2 §15/§16 — the iterative session.
-  //
-  // The security posture is unchanged (§47). Every step is validated by the
-  // same AST gate before it runs; the namespace is built by the same
-  // `__sa_namespace` as a one-shot analysis; and the timeout still works the
-  // way it has to in this runtime — by TERMINATING the worker, which is the
-  // only thing that bounds CPU-bound Python. A terminated worker loses its
-  // sessions, which is correct: a turn whose step had to be killed has no
-  // state worth resuming.
-  // -------------------------------------------------------------------------
-
-  /** §16 — run one step; a Python error comes back as an observation. */
-  async step(sessionId: string, code: string, dataset: SandboxDataset, signal?: AbortSignal): Promise<StepObservation | { readonly refused: SandboxError }> {
-    const started = Date.now();
-    if (signal?.aborted) return { refused: { code: "CANCELLED", message: "cancelled before execution" } };
-    if (code.length > this.#limits.maxCodeLength) {
-      return { refused: { code: "CODE_VALIDATION_ERROR", message: `code is ${code.length} characters, over the ${this.#limits.maxCodeLength} limit` } };
-    }
-    try {
-      await this.ready();
-    } catch (err) {
-      return { refused: { code: "SANDBOX_UNAVAILABLE", message: `the analytical runtime did not start: ${String(err)}` } };
-    }
-
-    // §47 — per STEP, not per turn.
-    const violations = await this.validate(code);
-    if (violations.length > 0) {
-      const syntax = violations.find((v) => v.code === "SYNTAX");
-      // §1 lists SyntaxError first among the things an agent should recover
-      // from on its own, so it is an observation. An unsafe capability request
-      // is not, and is never retried (Stage 27 §68).
-      if (syntax) {
-        return {
-          status: "error",
-          errorType: "SyntaxError",
-          message: syntax.detail,
-          line: syntax.line ?? null,
-          failingLine: code.split(NEWLINE)[Math.max(0, (syntax.line ?? 1) - 1)]?.trim() ?? null,
-          stdout: "",
-          available: {},
-          prepared: PREPARED_NAMES,
-          durationMs: Date.now() - started,
-        };
-      }
-      return {
-        refused: {
-          code: "UNSAFE_CODE",
-          message: `the analysis code requests capabilities the sandbox denies: ${violations.map((v) => `${v.code}:${v.detail}`).join(", ")}`,
-          ...(violations[0] ? { line: violations[0].line } : {}),
-        },
-      };
-    }
-
-    const id = (this.#seq += 1);
-    const request = this.#send({ type: "step", id, sessionId, code, dataset: datasetPayload(dataset), maxRows: this.#limits.maxResultRows });
-    const reply = await this.#race(request, signal);
-    if ("stopped" in reply) return { refused: reply.stopped };
-    if (reply.message.type === "failed") return { refused: { code: reply.message.code as SandboxError["code"], message: reply.message.message } };
-    if (reply.message.type !== "observation") return { refused: { code: "INVALID_RESULT", message: `unexpected reply: ${reply.message.type}` } };
-    return { ...(reply.message.observation as unknown as Omit<StepObservation, "durationMs">), durationMs: Date.now() - started };
-  }
-
-  /** §11/§12 — one bounded look, over the same worker protocol. */
-  async look(sessionId: string, target: LookTarget, variable: string | null, dataset: SandboxDataset, limit = 10, signal?: AbortSignal): Promise<LookObservation | { readonly refused: SandboxError }> {
-    try {
-      await this.ready();
-    } catch (err) {
-      return { refused: { code: "SANDBOX_UNAVAILABLE", message: `the analytical runtime did not start: ${String(err)}` } };
-    }
-    const id = (this.#seq += 1);
-    const request = this.#send({ type: "look", id, sessionId, target, variable: variable ?? "", dataset: datasetPayload(dataset), limit });
-    const reply = await this.#race(request, signal);
-    if ("stopped" in reply) return { refused: reply.stopped };
-    if (reply.message.type !== "observation") return { refused: { code: "INVALID_RESULT", message: "the runtime could not inspect that" } };
-    return reply.message.observation as unknown as LookObservation;
-  }
-
-  /** §13 — structural inspection without serialising the frame. */
-  async inspect(sessionId: string, dataset: SandboxDataset, signal?: AbortSignal): Promise<TableInspection | { readonly refused: SandboxError }> {
-    try {
-      await this.ready();
-    } catch (err) {
-      return { refused: { code: "SANDBOX_UNAVAILABLE", message: `the analytical runtime did not start: ${String(err)}` } };
-    }
-    const id = (this.#seq += 1);
-    const request = this.#send({ type: "inspect", id, sessionId, dataset: datasetPayload(dataset) });
-    const reply = await this.#race(request, signal);
-    if ("stopped" in reply) return { refused: reply.stopped };
-    if (reply.message.type !== "observation") return { refused: { code: "INVALID_RESULT", message: "the runtime could not inspect the table" } };
-    return reply.message.observation as unknown as TableInspection;
-  }
-
-  /** §26 — collect through the SAME envelope path a one-shot analysis uses. */
-  async finish(sessionId: string, dataset: SandboxDataset, signal?: AbortSignal): Promise<ExecuteOutcome> {
-    const started = Date.now();
-    const fail = (error: SandboxError): ExecuteOutcome => ({ ok: false, error, durationMs: Date.now() - started });
-    try {
-      await this.ready();
-    } catch (err) {
-      return fail({ code: "SANDBOX_UNAVAILABLE", message: `the analytical runtime did not start: ${String(err)}` });
-    }
-    const id = (this.#seq += 1);
-    const request = this.#send({ type: "finish", id, sessionId, maxRows: this.#limits.maxResultRows });
-    const reply = await this.#race(request, signal);
-    if ("stopped" in reply) return fail(reply.stopped);
-    if (reply.message.type === "failed") return fail({ code: "INVALID_RESULT", message: reply.message.message });
-    if (reply.message.type !== "result") return fail({ code: "INVALID_RESULT", message: `unexpected reply: ${reply.message.type}` });
-    return { ok: true, result: envelopeToResult(reply.message.envelope, dataset, started), stdout: "", durationMs: Date.now() - started };
-  }
-
-  /**
-   * §15 — one turn, one session.
-   *
-   * Named `endSession` rather than `dispose` because the runtime already has a
-   * `dispose()` that releases the WORKER. Two lifetimes live here and they are
-   * not the same: a session ends every analytical turn, the worker survives
-   * the whole task-pane session.
-   */
-  async endSession(sessionId: string): Promise<void> {
-    if (!this.#worker) return;
-    try {
-      const id = (this.#seq += 1);
-      await this.#send({ type: "dispose", id, sessionId });
-    } catch {
-      /* a worker that has already gone has no session to end */
-    }
-  }
-
-  /**
-   * The timeout/cancellation race, shared by every session call.
-   *
-   * §12 again: only `terminate()` bounds CPU-bound Python, so a stop discards
-   * the worker. Factored out so a future session method cannot accidentally
-   * be the one that forgets to.
-   */
-  async #race(request: Promise<WorkerMessage>, signal?: AbortSignal): Promise<{ readonly message: WorkerMessage } | { readonly stopped: SandboxError }> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<SandboxError>((resolve) => {
-      timer = setTimeout(() => resolve({ code: "SANDBOX_TIMEOUT", message: `the step exceeded ${this.#limits.executionTimeoutMs} ms` }), this.#limits.executionTimeoutMs);
-    });
-    const cancelled = new Promise<SandboxError>((resolve) => {
-      if (!signal) return;
-      signal.addEventListener("abort", () => resolve({ code: "CANCELLED", message: "cancelled during execution" }), { once: true });
-    });
-    try {
-      const outcome = await Promise.race([
-        request.then((m) => ({ kind: "reply" as const, m })),
-        timeout.then((e) => ({ kind: "stop" as const, e })),
-        cancelled.then((e) => ({ kind: "stop" as const, e })),
-      ]);
-      if (outcome.kind === "stop") {
-        await this.#discard(outcome.e);
-        return { stopped: outcome.e };
-      }
-      return { message: outcome.m };
-    } catch (err) {
-      return { stopped: { code: "SANDBOX_RUNTIME_ERROR", message: String(err) } };
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
   /** Release the worker; the next call boots a fresh one. */
   async dispose(): Promise<void> {
     await this.#discard({ code: "CANCELLED", message: "runtime disposed" });
@@ -463,10 +292,8 @@ export class WorkerSandboxRuntime {
 /**
  * The collected envelope as a `SandboxResult`.
  *
- * Shared by `execute` and `finish`: §26 requires an emitted result to go
- * through the same normalization, validation, lineage and numeric
- * verification as any other, and two constructors would be two chances for
- * those to diverge.
+ * §26 requires an emitted result to go through the same normalization,
+ * validation, lineage and numeric verification as any other.
  */
 function envelopeToResult(envelope: Record<string, unknown>, dataset: SandboxDataset, started: number): SandboxResult {
   const lineage: SourceLineage = {
@@ -491,12 +318,6 @@ function envelopeToResult(envelope: Record<string, unknown>, dataset: SandboxDat
     sourceLineage: lineage,
   } as unknown as SandboxResult;
 }
-
-/** §27 — the names that ALWAYS exist, repeated in every failure observation. */
-const PREPARED_NAMES: readonly string[] = ["data", "numeric_data", "entity_data", "X", "numeric_columns", "entity_columns", "table", "result"];
-
-/** A real newline, from its code point. */
-const NEWLINE = String.fromCharCode(10);
 
 /** §9 — exactly what crosses into the worker. No handles, no tokens. */
 function datasetPayload(dataset: SandboxDataset): Record<string, unknown> {
