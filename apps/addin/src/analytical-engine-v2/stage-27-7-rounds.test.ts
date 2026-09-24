@@ -47,11 +47,11 @@ const discoveryRoute: Script = (m) => {
   const previous = idOf(p, "period.previous");
   if (!previous) return call("period.previous", { ofRef: latest });
   const compared = idOf(p, "change.compare_periods");
-  if (!compared) return call("change.compare_periods", { startPeriodRef: previous, endPeriodRef: latest });
+  if (!compared) return call("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
   return JSON.stringify({ kind: "complete", primaryResultRef: compared, supportingResultRefs: [] });
 };
 
-const directRoute: Script = () => call("change.compare_periods", {}, true);
+const directRoute: Script = () => call("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } }, true);
 
 describe("Stage 27.7 §3/§4 — the same answer, measured in model round trips", () => {
   it("took four planner rounds and a narration before this stage", async () => {

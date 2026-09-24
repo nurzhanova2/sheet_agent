@@ -150,7 +150,7 @@ describe("Stage 27.7 §3 — a simple deterministic request does not replan for 
     let rounds = 0;
     const script: Script = () => {
       rounds += 1;
-      return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: {}, final: true });
+      return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { periodIntent: { kind: "latest_vs_previous" } }, final: true });
     };
     const turn = await runTurn(fixtureOperations(), "Как изменились показатели относительно предыдущего периода?", script);
     expect(turn.kind).toBe("answered");
@@ -165,7 +165,7 @@ describe("Stage 27.7 §3 — a simple deterministic request does not replan for 
       rounds += 1;
       const prompt = lastUser(m);
       const id = idOf(prompt, "change.compare_periods");
-      if (!id) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: {} });
+      if (!id) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { periodIntent: { kind: "latest_vs_previous" } } });
       return JSON.stringify({ kind: "complete", primaryResultRef: id, supportingResultRefs: [] });
     };
     const turn = await runTurn(fixtureOperations(), "Как изменились показатели относительно предыдущего периода?", script);
@@ -185,7 +185,7 @@ describe("Stage 27.7 §3 — a simple deterministic request does not replan for 
         return JSON.stringify({ kind: "plan", outputs: ["изменение", "самый сильный"], primaryOutputId: "o2" });
       }
       const id = idOf(prompt, "change.compare_periods");
-      if (!id) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: {}, final: true });
+      if (!id) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { periodIntent: { kind: "latest_vs_previous" } }, final: true });
       return JSON.stringify({
         kind: "complete",
         primaryResultRef: id,
@@ -215,7 +215,7 @@ describe("Stage 27.7 §9 — latest versus immediately previous, without a disco
     const store = new ResultStore(table.schema.sourceRange, table.schema.sourceVersion, { maxRowsPerResult: 200, maxResultCells: 5000 });
     const env = buildToolEnv(table.schema, table.grids, store, EMPTY_ANALYTICAL_STATE);
     const spec = findTool("change.compare_periods");
-    const outcome = spec!.run({}, env);
+    const outcome = spec!.run({ periodIntent: { kind: "latest_vs_previous" } }, env);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     const points = [...env.periodIndex.points].sort((a, b) => a.orderKey - b.orderKey);
@@ -227,7 +227,7 @@ describe("Stage 27.7 §9 — latest versus immediately previous, without a disco
     const store = new ResultStore(table.schema.sourceRange, table.schema.sourceVersion, { maxRowsPerResult: 200, maxResultCells: 5000 });
     const env = buildToolEnv(table.schema, table.grids, store, EMPTY_ANALYTICAL_STATE);
     const points = [...env.periodIndex.points].sort((a, b) => a.orderKey - b.orderKey);
-    const outcome = findTool("change.compare_periods")!.run({ endPeriod: points[2]!.canonical }, env);
+    const outcome = findTool("change.compare_periods")!.run({ periodIntent: { kind: "named_pair", start: points[1]!.canonical, end: points[2]!.canonical } }, env);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.result.periodCanonicals).toEqual([points[1]!.canonical, points[2]!.canonical]);
@@ -238,10 +238,10 @@ describe("Stage 27.7 §9 — latest versus immediately previous, without a disco
     const store = new ResultStore(table.schema.sourceRange, table.schema.sourceVersion, { maxRowsPerResult: 200, maxResultCells: 5000 });
     const env = buildToolEnv(table.schema, table.grids, store, EMPTY_ANALYTICAL_STATE);
     const points = [...env.periodIndex.points].sort((a, b) => a.orderKey - b.orderKey);
-    const outcome = findTool("change.compare_periods")!.run({ endPeriod: points[0]!.canonical }, env);
+    const outcome = findTool("change.compare_periods")!.run({ periodIntent: { kind: "latest_vs_previous" }, endPeriod: points[0]!.canonical }, env);
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    expect(outcome.error.message).toMatch(/earliest period/u);
+    expect(outcome.error.message).toMatch(/endpoints require periodIntent/u);
   });
 });
 
@@ -404,7 +404,7 @@ describe("Stage 27.7 §8 — the deterministic renderer is preferred where it wr
 
   it("skips the narrator call entirely on a deterministic turn", async () => {
     let narrations = 0;
-    const script: Script = () => JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: {}, final: true });
+    const script: Script = () => JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { periodIntent: { kind: "latest_vs_previous" } }, final: true });
     const turn = await runAnalyticalEngine({
       turnId: "turn_det",
       request: "Как изменились показатели относительно предыдущего периода?",
@@ -454,7 +454,7 @@ describe("Stage 27.7 §4/§11 — the turn reports what it spent", () => {
 describe("Stage 27.7 §9/§10 — the answer says which two periods it compared", () => {
   it("names both dates for a single-metric change", async () => {
     const turn = await runTurn(fixtureOperations(), "На сколько выросла Throughput index?", () =>
-      JSON.stringify({ kind: "tool_call", tool: "change.compute", arguments: { metric: "Throughput index" }, final: true }),
+      JSON.stringify({ kind: "tool_call", tool: "change.compute", arguments: { metric: "Throughput index", periodIntent: { kind: "latest_vs_previous" } }, final: true }),
     );
     expect(turn.kind).toBe("answered");
     if (turn.kind !== "answered") return;
@@ -464,7 +464,7 @@ describe("Stage 27.7 §9/§10 — the answer says which two periods it compared"
 
   it("names the shared period once for a multi-metric comparison", async () => {
     const turn = await runTurn(fixtureOperations(), "Как изменились показатели?", () =>
-      JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: {}, final: true }),
+      JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { periodIntent: { kind: "latest_vs_previous" } }, final: true }),
     );
     expect(turn.kind).toBe("answered");
     if (turn.kind !== "answered") return;

@@ -771,7 +771,9 @@ export function extractFindings(result: EngineResult, rawContext: ExtractContext
         confidence: row.confidence,
         caveats: row.caveats,
         provenance,
-        ...(row.detail !== undefined ? { detail: row.detail } : {}),
+        ...(result.metadata["periodIntent"] !== undefined || row.detail !== undefined
+          ? { detail: { ...(row.detail ?? {}), ...(result.metadata["periodIntent"] !== undefined ? { periodIntent: result.metadata["periodIntent"], resolvedPeriods: result.periodCanonicals } : {}) } }
+          : {}),
       },
       ctx,
     ),

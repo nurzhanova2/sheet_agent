@@ -62,7 +62,7 @@ const competent: Reply = (p) => {
   const latest = periodsOf(p, "period.latest")[0]!;
   if (!has(p, "period.previous")) return call("period.previous", { of: latest });
   const previous = periodsOf(p, "period.previous")[0]!;
-  if (!has(p, "change.compare_periods")) return call("change.compare_periods", { startPeriod: previous, endPeriod: latest });
+  if (!has(p, "change.compare_periods")) return call("change.compare_periods", { startPeriod: previous, endPeriod: latest, periodIntent: { kind: "named_pair", start: previous, end: latest } });
   return complete(idOf(p, "change.compare_periods")!);
 };
 
@@ -90,7 +90,7 @@ describe("Stage 26.2 §48/§49 — the harness runs a real conversation through 
       const latest = periodsOf(p, "period.latest")[0]!;
       if (!has(p, "period.previous")) return call("period.previous", { of: latest });
       const previous = periodsOf(p, "period.previous")[0]!;
-      if (!has(p, "change.compare_periods")) return call("change.compare_periods", { startPeriod: previous, endPeriod: latest });
+      if (!has(p, "change.compare_periods")) return call("change.compare_periods", { startPeriod: previous, endPeriod: latest, periodIntent: { kind: "named_pair", start: previous, end: latest } });
       const cmp = idOf(p, "change.compare_periods")!;
       if (asksFilter) {
         if (!has(p, "set.filter")) return call("set.filter", { inputRef: cmp, field: "percentageChange", op: "<", value: 0 });

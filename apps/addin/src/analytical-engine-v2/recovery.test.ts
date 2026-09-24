@@ -129,7 +129,7 @@ describe("Stage 26.4 §29 — a misplaced argument is recoverable", () => {
         return JSON.stringify({
           kind: "tool_call",
           tool: "change.compare_periods",
-          arguments: { startPeriodRef: idOf(prompt, "period.previous"), endPeriodRef: idOf(prompt, "period.latest") },
+          arguments: { periodIntent: { kind: "latest_vs_previous" } },
         });
       }
       return JSON.stringify({ kind: "complete", primaryResultRef: idOf(prompt, "change.compare_periods"), supportingResultRefs: [] });
@@ -274,7 +274,7 @@ describe("Stage 26.4 §31 — a completion that misses a declared output is re-b
       const cmp = idOf(prompt, "change.compare_periods");
       if (!latest) return JSON.stringify({ kind: "tool_call", tool: "period.latest", arguments: {} });
       if (!prev) return JSON.stringify({ kind: "tool_call", tool: "period.previous", arguments: { ofRef: latest } });
-      if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { startPeriodRef: prev, endPeriodRef: latest } });
+      if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { periodIntent: { kind: "latest_vs_previous" } } });
       return JSON.stringify({ kind: "complete", primaryResultRef: cmp, supportingResultRefs: [] });
     });
     expect(turn.kind).toBe("answered");
@@ -429,7 +429,7 @@ describe("Stage 26.4 §34 — absent history is data, not a crash", () => {
       const prev = idOf(prompt, "period.previous");
       const cmp = idOf(prompt, "change.compare_periods");
       if (!prev) return JSON.stringify({ kind: "tool_call", tool: "period.previous", arguments: { ofRef: latest } });
-      if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { startPeriodRef: prev, endPeriodRef: latest } });
+      if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { periodIntent: { kind: "latest_vs_previous" } } });
       return JSON.stringify({ kind: "complete", primaryResultRef: cmp, supportingResultRefs: [] });
     });
     expect(turn.kind).toBe("answered");
@@ -491,7 +491,7 @@ describe("Stage 26.4 §11 — re-declaring a plan is idempotent, not a violation
       const winner = idOf(prompt, "set.argmax");
       if (!latest) return JSON.stringify({ kind: "tool_call", tool: "period.latest", arguments: {} });
       if (!prev) return JSON.stringify({ kind: "tool_call", tool: "period.previous", arguments: { ofRef: latest } });
-      if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { startPeriodRef: prev, endPeriodRef: latest } });
+      if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { periodIntent: { kind: "latest_vs_previous" } } });
       if (!winner) return JSON.stringify({ kind: "tool_call", tool: "set.argmax", arguments: { inputRef: cmp, field: "percentageChange", magnitude: true } });
       return JSON.stringify({
         kind: "complete",
@@ -540,7 +540,7 @@ describe("Stage 26.4 §11 — re-declaring a plan is idempotent, not a violation
       const cmp = idOf(prompt, "change.compare_periods");
       if (!latest) return JSON.stringify({ kind: "tool_call", tool: "period.latest", arguments: {} });
       if (!prev) return JSON.stringify({ kind: "tool_call", tool: "period.previous", arguments: { ofRef: latest } });
-      if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { startPeriodRef: prev, endPeriodRef: latest } });
+      if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { periodIntent: { kind: "latest_vs_previous" } } });
       return JSON.stringify({
         kind: "complete",
         primaryResultRef: cmp,

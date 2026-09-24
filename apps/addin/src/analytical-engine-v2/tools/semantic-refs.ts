@@ -1,6 +1,7 @@
 import type { RowAxisMember } from "../../app/schema/schema-induction.js";
 import type { CanonicalPeriod } from "../../app/schema/analytical/types.js";
-import { toolError, type EngineResult } from "../types.js";
+import type { PeriodIndex } from "../../app/schema/analytical/period-index.js";
+import { toolError, type EngineResult, type PeriodIntent } from "../types.js";
 import { isErr, memberFor, periodFor, sortedPoints, unknownReference, type Resolved, type ToolEnv } from "./contracts.js";
 
 /** A resultId as the planner spells it. Used to catch one pushed into a literal slot. */
@@ -134,36 +135,63 @@ export const PERIOD_REF_DESCRIBE =
 /** All period labels, for a recoverable error (§5). */
 export const allPeriodCanonicals = (env: ToolEnv): readonly string[] => sortedPoints(env).map((p) => p.canonical);
 
-export function periodPairDefaults(args: Readonly<Record<string, unknown>>, env: ToolEnv): Resolved<Readonly<Record<string, unknown>>> {
-  const hasStart = args["startPeriod"] !== undefined || args["startPeriodRef"] !== undefined;
-  const hasEnd = args["endPeriod"] !== undefined || args["endPeriodRef"] !== undefined;
-  if (hasStart && hasEnd) return args;
+export interface ResolvedPeriodIntent {
+  readonly intent: PeriodIntent;
+  readonly periods: readonly CanonicalPeriod[];
+}
 
-  const points = sortedPoints(env);
-  if (points.length < 2) {
-    return { error: toolError("INVALID_ARGUMENT", "the table has fewer than two periods, so a comparison needs both endpoints named", allPeriodCanonicals(env)) };
-  }
+export type PeriodIntentResolution =
+  | { readonly ok: true; readonly value: ResolvedPeriodIntent }
+  | { readonly ok: false; readonly message: string };
 
-  if (!hasStart && !hasEnd) {
-    return { ...args, startPeriod: points[points.length - 2]!.canonical, endPeriod: points[points.length - 1]!.canonical };
+/** The sole V2 authority that turns a semantic intent into canonical periods. */
+export function resolvePeriodIntent(intent: PeriodIntent, periodIndex: PeriodIndex): PeriodIntentResolution {
+  const points = [...periodIndex.points].sort((a, b) => a.orderKey - b.orderKey);
+  const named = (canonical: string): CanonicalPeriod | undefined => points.find((point) => point.canonical === canonical);
+  switch (intent.kind) {
+    case "latest_vs_previous":
+      return points.length >= 2
+        ? { ok: true, value: { intent, periods: [points[points.length - 2]!, points[points.length - 1]!] } }
+        : { ok: false, message: "the table has fewer than two periods, so latest_vs_previous cannot be resolved" };
+    case "named_pair": {
+      const start = named(intent.start);
+      const end = named(intent.end);
+      return start && end
+        ? { ok: true, value: { intent, periods: [start, end] } }
+        : { ok: false, message: "named_pair must use canonical periods from this table" };
+    }
+    case "full_range":
+      return points.length > 0 ? { ok: true, value: { intent, periods: points } } : { ok: false, message: "the table has no dated periods" };
+    case "single": {
+      const at = named(intent.at);
+      return at ? { ok: true, value: { intent, periods: [at] } } : { ok: false, message: "single must use a canonical period from this table" };
+    }
   }
-  if (!hasEnd) return { ...args, endPeriod: points[points.length - 1]!.canonical };
+}
 
-  const endLiteral = args["endPeriod"];
-  if (typeof endLiteral !== "string") {
-    return { error: toolError("INVALID_ARGUMENT", '"startPeriod" (a canonical period) or "startPeriodRef" (a result reference) is required', allPeriodCanonicals(env)) };
+function readPeriodIntent(value: unknown): PeriodIntent | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record["kind"] === "latest_vs_previous" || record["kind"] === "full_range") return { kind: record["kind"] };
+  if (record["kind"] === "named_pair" && typeof record["start"] === "string" && typeof record["end"] === "string") return { kind: "named_pair", start: record["start"], end: record["end"] };
+  if (record["kind"] === "single" && typeof record["at"] === "string") return { kind: "single", at: record["at"] };
+  return null;
+}
+
+/** Adapts the central resolver for change tools; endpoint pairs need named_pair. */
+export function resolveComparisonPeriodIntent(args: Readonly<Record<string, unknown>>, env: ToolEnv): Resolved<Readonly<Record<string, unknown>>> {
+  const intent = readPeriodIntent(args["periodIntent"]);
+  if (!intent) return { error: toolError("INVALID_ARGUMENT", '"periodIntent" is required: use latest_vs_previous, named_pair, or full_range', allPeriodCanonicals(env)) };
+  const hasEndpoint = args["startPeriod"] !== undefined || args["startPeriodRef"] !== undefined || args["endPeriod"] !== undefined || args["endPeriodRef"] !== undefined;
+  if (hasEndpoint && intent.kind !== "named_pair") {
+    return { error: toolError("INVALID_ARGUMENT", 'period endpoints require periodIntent.kind "named_pair"; use latest_vs_previous without endpoints for the current comparison', allPeriodCanonicals(env)) };
   }
-  const at = points.findIndex((p) => p.canonical === endLiteral);
-  if (at < 1) {
-    return {
-      error: toolError(
-        "INVALID_ARGUMENT",
-        at === 0
-          ? `"${endLiteral}" is the earliest period in the table, so there is no period before it to compare against`
-          : '"startPeriod" (a canonical period) or "startPeriodRef" (a result reference) is required',
-        allPeriodCanonicals(env),
-      ),
-    };
+  if (intent.kind === "named_pair" && (args["startPeriod"] !== undefined || args["endPeriod"] !== undefined) && (args["startPeriod"] !== intent.start || args["endPeriod"] !== intent.end)) {
+    return { error: toolError("INVALID_ARGUMENT", 'startPeriod and endPeriod must exactly match periodIntent named_pair', allPeriodCanonicals(env)) };
   }
-  return { ...args, startPeriod: points[at - 1]!.canonical };
+  const resolved = resolvePeriodIntent(intent, env.periodIndex);
+  if (!resolved.ok) return { error: toolError("INVALID_ARGUMENT", resolved.message, allPeriodCanonicals(env)) };
+  if (resolved.value.periods.length < 2) return { error: toolError("INVALID_ARGUMENT", `${intent.kind} resolves to one period and cannot be used by a change comparison`, allPeriodCanonicals(env)) };
+  const periods = resolved.value.periods;
+  return { ...args, startPeriod: periods[0]!.canonical, endPeriod: periods[periods.length - 1]!.canonical, periodIntent: resolved.value.intent };
 }

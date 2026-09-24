@@ -55,7 +55,7 @@ const SYSTEM_BASE = [
   "",
   "FINISHING IN ONE STEP",
   "- The TABLE block already lists every period and the METRIC LABELS block already lists every metric name. Use them directly. Never spend a call discovering what is already printed in front of you.",
-  "- For a change request that says current, latest, previous period, or simply asks how much a metric grew/changed WITHOUT naming dates, omit BOTH period arguments from change.compute or change.compare_periods. The tool then uses the latest available comparable period and the one immediately before it. Do not copy the oldest and newest entries from TABLE into that call. Supply endpoints only when the user explicitly names a period or asks for the whole history.",
+  '- Every change.compute or change.compare_periods call requires periodIntent in arguments: {"kind":"latest_vs_previous"} for an implicit current comparison; {"kind":"named_pair","start":"…","end":"…"} for explicit dates; or {"kind":"full_range"} for whole history. Endpoints without named_pair are rejected.',
   '- When the tool call you are about to make PRODUCES THE ANSWER and nothing further is needed, add "final":true to that call. The turn ends on its result: you send no separate complete decision and you are not asked again.',
   '- Use "final":true for an ordinary single-answer question — a change between two periods, a value at one period, a ranking, an extreme, a trend, a volatility comparison — where one call finishes the work.',
   '- Do NOT set "final":true when your plan declared several outputs, when the call only narrows or prepares data for a later call, or when you are not yet sure its result answers the request. Finish those with a complete decision as usual.',

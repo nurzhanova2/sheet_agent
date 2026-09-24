@@ -2,9 +2,9 @@ import type { CellValue } from "@sheet-agent/application";
 import { seriesExtrema, comparePoints } from "../../app/schema/analytical/temporal-primitives.js";
 import { compareMetricSetAtTwoPoints, getPointValue } from "../../app/schema/analytical/temporal-series.js";
 import { seriesMean, seriesStdDev, seriesSum } from "../../app/schema/analytical/series-aggregates.js";
-import { toolError } from "../types.js";
+import { toolError, type PeriodIntent } from "../types.js";
 import { METRIC_FIELD, cell, isErr, metricScope, num, seriesOf, text, type ToolSpec } from "./contracts.js";
-import { METRIC_REF_DESCRIBE, PERIOD_REF_DESCRIBE, periodPairDefaults, resolveMetricInput, resolvePeriodInput } from "./semantic-refs.js";
+import { METRIC_REF_DESCRIBE, PERIOD_REF_DESCRIBE, resolveComparisonPeriodIntent, resolveMetricInput, resolvePeriodInput } from "./semantic-refs.js";
 
 const COMPARISON_FIELDS = [METRIC_FIELD, num("startValue"), num("endValue"), num("absoluteChange"), num("percentageChange"), cell("startCell"), cell("endCell")];
 
@@ -14,6 +14,10 @@ const METRIC_SCOPE_ARGS = {
 } as const;
 
 const SCOPE_ACCEPTS = ["metric_set", "comparison", "filtered_set", "ranked_set", "metric_winner", "aggregate", "trend", "volatility", "stability", "derived", "joined", "table"] as const;
+
+function matchesNamedPair(intent: PeriodIntent, start: string, end: string): boolean {
+  return intent.kind !== "named_pair" || (intent.start === start && intent.end === end);
+}
 
 const changeComparePeriods: ToolSpec = {
   name: "change.compare_periods",
@@ -25,13 +29,14 @@ const changeComparePeriods: ToolSpec = {
     startPeriodRef: { type: "periodRef", describe: PERIOD_REF_DESCRIBE },
     endPeriod: { type: "string", describe: "canonical period (later)" },
     endPeriodRef: { type: "periodRef", describe: PERIOD_REF_DESCRIBE },
+    periodIntent: { type: "object", required: true, describe: 'one of {kind:"latest_vs_previous"}, {kind:"named_pair",start,end}, or {kind:"full_range"}' },
     ...METRIC_SCOPE_ARGS,
   },
   returns: "comparison",
   accepts: [...SCOPE_ACCEPTS],
   reads: true,
   run: (rawArgs, env) => {
-    const defaulted = periodPairDefaults(rawArgs, env);
+    const defaulted = resolveComparisonPeriodIntent(rawArgs, env);
     if (isErr(defaulted)) return defaulted.error;
     const args = defaulted;
     const startPicked = resolvePeriodInput(args, env, "startPeriod");
@@ -40,6 +45,8 @@ const changeComparePeriods: ToolSpec = {
     const endPicked = resolvePeriodInput(args, env, "endPeriod");
     if (isErr(endPicked)) return endPicked.error;
     const end = endPicked.value;
+    const periodIntent = args["periodIntent"] as PeriodIntent;
+    if (!matchesNamedPair(periodIntent, start.canonical, end.canonical)) return toolError("INVALID_ARGUMENT", "period references must resolve to the canonical start and end declared by periodIntent named_pair");
     const scope = metricScope(args, env);
     if (isErr(scope)) return scope.error;
 
@@ -60,7 +67,7 @@ const changeComparePeriods: ToolSpec = {
         rows,
         periodCanonicals: [start.canonical, end.canonical],
         parents: [...scope.parents, ...startPicked.parents, ...endPicked.parents],
-        metadata: { startLabel: start.headerPath, endLabel: end.headerPath },
+        metadata: { startLabel: start.headerPath, endLabel: end.headerPath, periodIntent: args["periodIntent"] },
       }),
     };
   },
@@ -78,11 +85,12 @@ const changeCompute: ToolSpec = {
     startPeriodRef: { type: "periodRef", describe: PERIOD_REF_DESCRIBE },
     endPeriod: { type: "string", describe: "canonical period (later)" },
     endPeriodRef: { type: "periodRef", describe: PERIOD_REF_DESCRIBE },
+    periodIntent: { type: "object", required: true, describe: 'one of {kind:"latest_vs_previous"}, {kind:"named_pair",start,end}, or {kind:"full_range"}' },
   },
   returns: "comparison",
   reads: true,
   run: (rawArgs, env) => {
-    const defaulted = periodPairDefaults(rawArgs, env);
+    const defaulted = resolveComparisonPeriodIntent(rawArgs, env);
     if (isErr(defaulted)) return defaulted.error;
     const args = defaulted;
     const picked = resolveMetricInput(args, env);
@@ -94,6 +102,8 @@ const changeCompute: ToolSpec = {
     const endPicked = resolvePeriodInput(args, env, "endPeriod");
     if (isErr(endPicked)) return endPicked.error;
     const end = endPicked.value;
+    const periodIntent = args["periodIntent"] as PeriodIntent;
+    if (!matchesNamedPair(periodIntent, start.canonical, end.canonical)) return toolError("INVALID_ARGUMENT", "period references must resolve to the canonical start and end declared by periodIntent named_pair");
     const subject = { kind: "row_axis_member", member } as const;
     const a = getPointValue(env.schema, env.grids, subject, start);
     const b = getPointValue(env.schema, env.grids, subject, end);
@@ -108,7 +118,7 @@ const changeCompute: ToolSpec = {
         rows: [[member.display, a.value, b.value, cmp.absoluteChange, cmp.percentChange, a.cell, b.cell]],
         metricKeys: [member.display],
         periodCanonicals: [start.canonical, end.canonical],
-        metadata: { startLabel: start.headerPath, endLabel: end.headerPath },
+        metadata: { startLabel: start.headerPath, endLabel: end.headerPath, periodIntent: args["periodIntent"] },
         parents: [...picked.parents, ...startPicked.parents, ...endPicked.parents],
       }),
     };

@@ -40,11 +40,11 @@ describe("Stage 27.8 — period correctness and financial note composition", () 
       state: EMPTY_ANALYTICAL_STATE,
       decide: (messages) => {
         firstPrompt = messages.find((message) => message.role === "user")?.content ?? "";
-        return JSON.stringify({ kind: "tool_call", tool: "change.compute", arguments: { metric: "Defect ratio" }, final: true });
+        return JSON.stringify({ kind: "tool_call", tool: "change.compute", arguments: { metric: "Defect ratio", periodIntent: { kind: "latest_vs_previous" } }, final: true });
       },
       narrate: async () => "",
     });
-    expect(firstPrompt).toContain("default comparison:");
+    expect(firstPrompt).toContain("periodIntent");
     expect(turn.kind).toBe("answered");
     if (turn.kind !== "answered") return;
     const points = [...buildPeriodIndex(table.schema, table.grids).points].sort((a, b) => a.orderKey - b.orderKey);

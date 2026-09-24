@@ -83,7 +83,7 @@ describe("Stage 26.7 §43/§22/§52 — a five-turn chain keeps its lineage", ()
       const cmp = idOf(prompt, "change.compare_periods");
       if (!latest) return call("period.latest");
       if (!prev) return call("period.previous", { ofRef: latest });
-      if (!cmp) return call("change.compare_periods", { startPeriodRef: prev, endPeriodRef: latest });
+      if (!cmp) return call("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
       return complete(cmp);
     });
     const s1 = stateOf(t1);
@@ -379,7 +379,7 @@ describe("Stage 26.7 §51/§21 — memory never outranks an explicit current req
       const cmp = idOf(prompt, "change.compare_periods");
       if (!latest) return call("period.latest");
       if (!prev) return call("period.previous", { ofRef: latest });
-      if (!cmp) return call("change.compare_periods", { startPeriodRef: prev, endPeriodRef: latest });
+      if (!cmp) return call("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
       return complete(cmp);
     }));
     const remembered = s1.lastPeriodRange!;
@@ -388,7 +388,7 @@ describe("Stage 26.7 §51/§21 — memory never outranks an explicit current req
     // turn 2 NAMES the first two periods explicitly
     const t2 = await turn((_r, prompt) => {
       const cmp = idOf(prompt, "change.compare_periods");
-      if (!cmp) return call("change.compare_periods", { startPeriod: first, endPeriod: second });
+      if (!cmp) return call("change.compare_periods", { startPeriod: first, endPeriod: second, periodIntent: { kind: "named_pair", start: first, end: second } });
       return complete(cmp);
     }, { state: s1, request: "Now compare the two earliest dates instead." });
 

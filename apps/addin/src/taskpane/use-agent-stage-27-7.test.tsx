@@ -95,7 +95,7 @@ function client(script: (messages: readonly { readonly role: string; readonly co
 const deterministicScript = (messages: readonly { readonly role: string; readonly content: string }[]): string => {
   const p = lastUser(messages);
   const cmp = idOf(p, "change.compare_periods");
-  if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: {}, final: true });
+  if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { periodIntent: { kind: "latest_vs_previous" } }, final: true });
   return JSON.stringify({ kind: "complete", primaryResultRef: cmp, supportingResultRefs: [] });
 };
 

@@ -62,7 +62,7 @@ const compareLatestVsPrevious: Script = (m) => {
   const latest = periodsOf(p, "period.latest")[0]!;
   if (!has(p, "period.previous")) return call("period.previous", { of: latest });
   const previous = periodsOf(p, "period.previous")[0]!;
-  if (!has(p, "change.compare_periods")) return call("change.compare_periods", { startPeriod: previous, endPeriod: latest });
+  if (!has(p, "change.compare_periods")) return call("change.compare_periods", { startPeriod: previous, endPeriod: latest, periodIntent: { kind: "named_pair", start: previous, end: latest } });
   return complete(idOf(p, "change.compare_periods")!);
 };
 

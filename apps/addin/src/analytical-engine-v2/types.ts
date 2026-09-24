@@ -4,6 +4,13 @@ import type { CellValue } from "@sheet-agent/application";
 /** An engine-minted handle. The planner may pass these back, never invent them. */
 export type ResultId = string;
 
+/** Semantic period scope; PeriodIndex alone resolves it to workbook periods. */
+export type PeriodIntent =
+  | { readonly kind: "latest_vs_previous" }
+  | { readonly kind: "named_pair"; readonly start: string; readonly end: string }
+  | { readonly kind: "full_range" }
+  | { readonly kind: "single"; readonly at: string };
+
 /**
  * §17 — what a result IS, so downstream consumers (state commit, renderer,
  * narrator) never have to re-infer it from row shape or tool name.

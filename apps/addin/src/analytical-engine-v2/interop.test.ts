@@ -80,7 +80,7 @@ describe("Stage 26.3 §22 — a typed reference flows into the next tool", () =>
     const m = s.ok("metric.resolve", { text: METRIC });
     const latest = s.ok("period.latest");
     const prev = s.ok("period.previous", { ofRef: latest.resultId });
-    const change = s.ok("change.compute", { metricRef: m.resultId, startPeriodRef: prev.resultId, endPeriodRef: latest.resultId });
+    const change = s.ok("change.compute", { metricRef: m.resultId, startPeriodRef: prev.resultId, endPeriodRef: latest.resultId, periodIntent: { kind: "named_pair", start: prev.periodCanonicals[0]!, end: latest.periodCanonicals[0]! } });
     expect(change.type).toBe("comparison");
     expect(change.metricKeys).toEqual([METRIC]);
   });
@@ -115,7 +115,7 @@ describe("Stage 26.3 §22 — a typed reference flows into the next tool", () =>
     const s = session();
     const latest = s.ok("period.latest");
     const prev = s.ok("period.previous", { ofRef: latest.resultId });
-    const cmp = s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId });
+    const cmp = s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId, periodIntent: { kind: "named_pair", start: prev.periodCanonicals[0]!, end: latest.periodCanonicals[0]! } });
     expect(cmp.periodCanonicals).toEqual([prev.periodCanonicals[0], latest.periodCanonicals[0]]);
     const range = s.ok("period.range", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId });
     expect(range.type).toBe("period_range");
@@ -125,7 +125,7 @@ describe("Stage 26.3 §22 — a typed reference flows into the next tool", () =>
     const s = session();
     const latest = s.ok("period.latest");
     const prev = s.ok("period.previous", { ofRef: latest.resultId });
-    const cmp = s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId });
+    const cmp = s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId, periodIntent: { kind: "named_pair", start: prev.periodCanonicals[0]!, end: latest.periodCanonicals[0]! } });
     const winner = s.ok("set.argmax", { inputRef: cmp.resultId, field: "percentageChange", magnitude: true });
     const series = s.ok("series.get", { metricRef: winner.resultId });
     expect(series.metricKeys).toEqual(winner.metricKeys);
@@ -177,7 +177,7 @@ describe("Stage 26.3 §23 — coercion stays strongly typed", () => {
     const s = session();
     const latest = s.ok("period.latest");
     const prev = s.ok("period.previous", { ofRef: latest.resultId });
-    const cmp = s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId });
+    const cmp = s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId, periodIntent: { kind: "named_pair", start: prev.periodCanonicals[0]!, end: latest.periodCanonicals[0]! } });
     const outcome = s.call("period.previous", { ofRef: cmp.resultId });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error.message).toMatch(/spans 2 periods/);
@@ -252,7 +252,7 @@ describe("Stage 26.3 §24 — a dereferenced input is a lineage edge", () => {
     const latest = s.ok("period.latest");
     const prev = s.ok("period.previous", { ofRef: latest.resultId });
     expect(prev.parents).toContain(latest.resultId);
-    const cmp = s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId });
+    const cmp = s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId, periodIntent: { kind: "named_pair", start: prev.periodCanonicals[0]!, end: latest.periodCanonicals[0]! } });
     expect(cmp.parents).toEqual(expect.arrayContaining([prev.resultId, latest.resultId]));
   });
 
@@ -260,7 +260,7 @@ describe("Stage 26.3 §24 — a dereferenced input is a lineage edge", () => {
     const s = session();
     const latest = s.ok("period.latest");
     const prev = s.ok("period.previous", { ofRef: latest.resultId });
-    const cmp = s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId });
+    const cmp = s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId, periodIntent: { kind: "named_pair", start: prev.periodCanonicals[0]!, end: latest.periodCanonicals[0]! } });
     const filtered = s.ok("set.filter", { inputRef: cmp.resultId, field: "percentageChange", op: "<", value: 0 });
     const lineage = s.env.store.lineageOf(filtered.resultId).map((r) => r.resultId);
     expect(lineage).toEqual(expect.arrayContaining([cmp.resultId, prev.resultId, latest.resultId]));
@@ -280,7 +280,7 @@ describe("Stage 26.3 §25 — an empty result is a finding, not a fault", () => 
   const buildComparison = (s: ReturnType<typeof session>) => {
     const latest = s.ok("period.latest");
     const prev = s.ok("period.previous", { ofRef: latest.resultId });
-    return s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId });
+    return s.ok("change.compare_periods", { startPeriodRef: prev.resultId, endPeriodRef: latest.resultId, periodIntent: { kind: "named_pair", start: prev.periodCanonicals[0]!, end: latest.periodCanonicals[0]! } });
   };
 
   it("a numeric filter matching nothing succeeds with zero rows", () => {
@@ -395,7 +395,7 @@ describe("Stage 26.3 §26 — a scripted planner composes purely by reference", 
         const filtered = idOf(prompt, "set.filter");
         if (!latest) return JSON.stringify({ kind: "tool_call", tool: "period.latest", arguments: {} });
         if (!prev) return JSON.stringify({ kind: "tool_call", tool: "period.previous", arguments: { ofRef: latest } });
-        if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { startPeriodRef: prev, endPeriodRef: latest } });
+        if (!cmp) return JSON.stringify({ kind: "tool_call", tool: "change.compare_periods", arguments: { periodIntent: { kind: "latest_vs_previous" } } });
         if (!filtered) return JSON.stringify({ kind: "tool_call", tool: "set.filter", arguments: { inputRef: cmp, field: "percentageChange", op: "<", value: -1e9 } });
         return JSON.stringify({ kind: "complete", primaryResultRef: filtered, supportingResultRefs: [] });
       },

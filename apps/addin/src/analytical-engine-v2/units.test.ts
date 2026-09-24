@@ -238,7 +238,7 @@ describe("Stage 26 §16/§24/§25/§26/§29 — the tool adapters", () => {
     expect(prev?.ok).toBe(true);
     if (!latest.ok || !prev?.ok) return;
     const narrow = s.put({ tool: "set.filter", type: "comparison", fields: [METRIC], rows: [["Defect ratio"], ["Queue depth"]] });
-    const outcome = run(table, "change.compare_periods", { startPeriod: prev.result.periodCanonicals[0], endPeriod: latest.result.periodCanonicals[0], inputRef: narrow.resultId }, s);
+    const outcome = run(table, "change.compare_periods", { startPeriod: prev.result.periodCanonicals[0], endPeriod: latest.result.periodCanonicals[0], periodIntent: { kind: "named_pair", start: prev.result.periodCanonicals[0]!, end: latest.result.periodCanonicals[0]! }, inputRef: narrow.resultId }, s);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.result.metricKeys).toEqual(["Defect ratio", "Queue depth"]);

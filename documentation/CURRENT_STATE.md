@@ -2,6 +2,15 @@ RESUME HERE
 documentation/HANDOFF_STAGE_27_8.md is the authoritative resume document.
 Read it first. This file is the short status summary only.
 
+STAGE 28A — P0-0 is complete (baseline `2f5f54a`). P0-2 period ownership is
+implemented and committed: `PeriodIntent` is owned by `analytical-engine-v2/types.ts` and
+`resolvePeriodIntent` in `tools/semantic-refs.ts` is the authoritative V2
+resolver over `PeriodIndex`. Stage 24/25 period implementations remain outside
+V2 and intentionally untouched. Focused period tests, the full add-in suite,
+root Node tests, tsc and eslint pass. Every current V2 change-tool caller now
+declares its intent. Next step: P0-1 AnswerIntent. Do not mark all of Stage 28
+PASS.
+
 STAGE 28 AUDIT COMPLETED — NO REFACTOR IMPLEMENTED YET.
 Stage 28 is NOT marked PASS. It was an audit-only session: no production source,
 tests or installer were changed.

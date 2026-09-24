@@ -21,16 +21,16 @@ export interface EngineContext {
 
 /** §6 — TableSchemaContext: shape and confidence, never values. */
 function buildTableBlock(schema: TableSchema, periodIndex: PeriodIndex): string {
-  const points = [...periodIndex.points].sort((a, b) => a.orderKey - b.orderKey);
-  const shown = points.slice(-MAX_PERIODS_SHOWN);
+  const points = [...periodIndex.points].sort((a, b) => b.orderKey - a.orderKey);
+  const shown = points.slice(0, MAX_PERIODS_SHOWN);
   const lines = [
     `sheet: ${schema.sheetName}`,
     `range: ${schema.sourceRange}`,
     `orientation: ${schema.orientation}`,
     `metrics: ${schema.rowAxis.length}`,
     `schemaConfidence: ${schema.confidence.toFixed(2)}`,
-    `periods (${points.length} total, showing ${shown.length}, oldest first — use these canonical strings verbatim):`,
-    `default comparison: ${points[points.length - 2]?.canonical ?? "(none)"} -> ${points[points.length - 1]?.canonical ?? "(none)"} (latest available period versus immediately previous comparable period)`,
+    `periods (${points.length} total, showing ${shown.length}, newest first):`,
+    `current comparison is selected only by periodIntent {kind:"latest_vs_previous"}; the resolver uses the latest period and its immediately previous comparable period.`,
     ...shown.map((p) => `  - ${p.canonical} (${p.headerPath})`),
   ];
   return lines.join("\n");
