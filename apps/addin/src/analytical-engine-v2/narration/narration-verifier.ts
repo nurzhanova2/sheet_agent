@@ -1,11 +1,40 @@
 import type { NumberLocale } from "../../analysis/format-number.js";
 import type { VerifiedFinding } from "../insight/verified-finding.js";
+import { evaluateAnswer, type AnswerEvaluation } from "./answer-evaluator.js";
+import { resolveNumericClaims, type NarrationFactSet, type UnsupportedClaim } from "./narration-facts.js";
 
-export interface NarrationCheck {
+export interface VerificationInput {
+  readonly draft: string;
+  readonly findings: readonly VerifiedFinding[];
+  readonly locale: NumberLocale;
+  readonly request?: string;
+  readonly hasResults?: boolean;
+  readonly facts?: NarrationFactSet;
+  readonly structural?: ReadonlySet<number>;
+  readonly narratorAttempt?: number;
+}
+
+export interface VerificationResult {
   readonly ok: boolean;
   readonly reasons: readonly string[];
   /** §71 — which checks were applicable, for the trace. */
   readonly applied: readonly string[];
+  readonly unsupported: readonly UnsupportedClaim[];
+  readonly retryableNarration: boolean;
+  readonly answerQuality?: AnswerEvaluation;
+}
+
+export type NarrationCheck = VerificationResult;
+
+const INTERNAL_ID_RE = /\b(?:res|fact|event|analysis)_[a-z0-9_]+\b/i;
+const LEGACY_LEAK_RE = /\bFAILED\b|ANALYSIS RESULT|\brejected\b|\(rejected\)|requested operation\(s\)|analysis unavailable|РђРЅР°Р»РёР· РЅРµРґРѕСЃС‚СѓРїРµРЅ/i;
+const TOOL_NAME_LEAK_RE = /\b(?:resultId|AgentObservation|tool_call|ExprNode|UNRESOLVED_METRIC|derive\.compute|set\.filter)\b/i;
+const CANONICAL_FIELD_LEAK_RE = /\b(?:startPeriodCanonical|endPeriodCanonical|periodCanonical|metricCanonical|start\s*period\s*canonical|end\s*period\s*canonical|source\s*cells?)\b/i;
+const INTERNAL_FIELD_LEAK_RE = /\b\w+\s+in\s+#\d+\b|#\d+\s*[:)]|\bdirection\s+(?:increasing|decreasing)\b|\bmatched\s*=\s*\d\b|\bsource\s+observation\b|\bresult\s+row\b|\btool\s+output\b/i;
+const RAW_JSON_LEAK_RE = /^\s*\{|"kind"\s*:\s*"(?:tool_call|clarify|final)"|"tool"\s*:\s*"[a-z_][a-z0-9_.]*"/i;
+
+export function containsForbiddenLeak(text: string): boolean {
+  return TOOL_NAME_LEAK_RE.test(text) || INTERNAL_ID_RE.test(text) || LEGACY_LEAK_RE.test(text) || RAW_JSON_LEAK_RE.test(text) || INTERNAL_FIELD_LEAK_RE.test(text) || CANONICAL_FIELD_LEAK_RE.test(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +255,7 @@ function checkScoreExplained(text: string, findings: readonly VerifiedFinding[],
  * Returns reasons, never a rewritten answer: a failing draft is replaced by
  * the deterministic prose (§57), it is never patched into passing.
  */
-export function verifyNarration(draft: string, findings: readonly VerifiedFinding[], locale: NumberLocale): NarrationCheck {
+function semanticVerification(draft: string, findings: readonly VerifiedFinding[], locale: NumberLocale): { reasons: string[]; applied: string[] } {
   const applied: string[] = [];
   const reasons: string[] = [];
 
@@ -243,5 +272,63 @@ export function verifyNarration(draft: string, findings: readonly VerifiedFindin
   applied.push("score_explained");
   reasons.push(...checkScoreExplained(draft, findings, locale));
 
-  return { ok: reasons.length === 0, reasons, applied };
+  return { reasons, applied };
+}
+
+export function verifyNarration(input: VerificationInput): VerificationResult;
+export function verifyNarration(draft: string, findings: readonly VerifiedFinding[], locale: NumberLocale): NarrationCheck;
+export function verifyNarration(
+  inputOrDraft: VerificationInput | string,
+  legacyFindings?: readonly VerifiedFinding[],
+  legacyLocale?: NumberLocale,
+): VerificationResult {
+  const input: VerificationInput = typeof inputOrDraft === "string"
+    ? { draft: inputOrDraft, findings: legacyFindings ?? [], locale: legacyLocale ?? "en" }
+    : inputOrDraft;
+  const semantic = semanticVerification(input.draft, input.findings, input.locale);
+  const applied = [...semantic.applied];
+  const reasons = [...semantic.reasons];
+  let unsupported: readonly UnsupportedClaim[] = [];
+  let answerQuality: AnswerEvaluation | undefined;
+  let numericReasons: string[] = [];
+
+  if (input.facts) {
+    applied.push("numeric_claims");
+    const resolution = resolveNumericClaims({
+      text: input.draft,
+      facts: input.facts,
+      structural: input.structural ?? new Set<number>(),
+      narratorAttempt: input.narratorAttempt ?? 1,
+    });
+    unsupported = resolution.unsupported;
+    numericReasons = resolution.unsupported.map((u) =>
+      `unsupported numeric claim ${u.numericToken} (${u.reason}); it matches no verified fact — nearest: ${u.nearestFacts.join(", ") || "none"}`,
+    );
+    reasons.push(...numericReasons);
+  }
+
+  if (input.request !== undefined) {
+    applied.push("answer_quality");
+    answerQuality = evaluateAnswer({
+      answer: input.draft,
+      findings: input.findings,
+      request: input.request,
+      locale: input.locale,
+      hasResults: input.hasResults ?? input.findings.length > 0,
+    });
+    reasons.push(...answerQuality.details.map((d) => `${d.issue}${d.evidence ? `: ${d.evidence}` : ""}`));
+  }
+
+  applied.push("internal_leaks");
+  if (containsForbiddenLeak(input.draft)) reasons.push("internal identifier or execution detail leaked into narration");
+
+  const nonNumeric = reasons.filter((reason) => !reason.startsWith("unsupported numeric claim "));
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    applied,
+    unsupported,
+    retryableNarration: numericReasons.length > 0 && nonNumeric.length === 0,
+    ...(answerQuality ? { answerQuality } : {}),
+  };
 }

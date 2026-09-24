@@ -1,3 +1,17 @@
+STAGE 28D - P0-4 ONE NARRATION VERIFIER - COMPLETE
+
+P0-4 is complete at the current worktree. The authoritative V2 narration gate is
+`verifyNarration` in `apps/addin/src/analytical-engine-v2/narration/narration-verifier.ts`.
+Numeric authority remains `resolveNumericClaims`; causal and leak checks are
+consolidated in the V2 facade, while `scanPresented` remains the actual-text
+boundary and the taskpane final leak gate remains the final UI defense. V2 no
+longer converts EngineResult/VerifiedFinding into AgentObservation for narration
+validation and no longer imports `agent/evidence.ts` for that purpose.
+
+Validation: focused verifier 7/7; full add-in 2364 passed, 27 skipped, 0 failed.
+No live Qwen or installer build. Commit: `refactor(v2): consolidate narration verification`.
+Next: P1 engine/routing consolidation. Stage 28 is not PASS.
+
 STAGE 28C.1 - P0-3 PRESENTATION PLAN - PASS
 
 RESUME HERE

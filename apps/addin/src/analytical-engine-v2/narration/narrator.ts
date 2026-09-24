@@ -1,8 +1,6 @@
 import type { CellValue } from "@sheet-agent/application";
 import type { NumberLocale } from "../../analysis/format-number.js";
-import type { AgentObservation } from "../../agent/types.js";
-import { agentEvidenceFacts, validateAgentAnswer } from "../../agent/evidence.js";
-import { containsForbiddenLeak, renderTableForUser } from "../../analytics-agent/narrator.js";
+import { renderTableForUser } from "../../analytics-agent/narrator.js";
 import { allowedNumbers } from "../insight/extract-findings.js";
 import { criterionLabel, executedMethods, readCriterion, type MethodComparison } from "../sandbox/method-comparison.js";
 import { measureWord } from "../insight/measure-words.js";
@@ -17,7 +15,6 @@ import { verifyNarration, type NarrationCheck } from "./narration-verifier.js";
 import {
   compileNarrationFacts,
   renderAllowedFigures,
-  resolveNumericClaims,
   type NarrationFactSet,
   type UnsupportedClaim,
 } from "./narration-facts.js";
@@ -317,12 +314,7 @@ export function buildNarratorMessages(input: NarrationInput): readonly NarratorM
 
 /** §54 — the evidence table, when the plan decided one helps. */
 function evidenceTable(result: EngineResult, locale: NumberLocale): string {
-  return renderTableForUser(
-    result.fields.map((f) => f.name),
-    result.rows as readonly (readonly CellValue[])[],
-    locale,
-    12,
-  );
+  return renderTableForUser(result.fields.map((f) => f.name), result.rows as readonly (readonly CellValue[])[], locale, 12);
 }
 
 /**
@@ -448,18 +440,6 @@ export function renderDeterministic(input: NarrationInput, options: Deterministi
 
 /** §37 — the same numeric evidence gate, reused by adapting results into observations. */
 /** §21/§37 — the comparison as evidence, so its numbers are citable. */
-function comparisonObservation(comparison: MethodComparison): AgentObservation {
-  const ran = executedMethods(comparison);
-  const metricNames = [...new Set(ran.flatMap((m) => Object.keys(m.metrics)))];
-  const extra = Object.keys(comparison.selectionEvidence);
-  const rows: readonly CellValue[][] = ran.map((m) => [
-    m.name,
-    ...metricNames.map((k) => m.metrics[k] ?? null),
-    ...extra.map((k) => (m.name === comparison.selectedMethod ? (comparison.selectionEvidence[k] ?? null) : null)),
-  ]);
-  return { tool: "sandbox.method_comparison", ok: true, kind: "table", columns: ["method", ...metricNames, ...extra], rows, rowCount: rows.length };
-}
-
 /**
  * §31/§37 — the findings themselves, as evidence the gate recognises.
  *
@@ -477,27 +457,6 @@ function comparisonObservation(comparison: MethodComparison): AgentObservation {
  * provenance the row facts have, and a figure the narrator invents still has
  * no fact behind it.
  */
-function findingsObservation(findings: readonly VerifiedFinding[]): AgentObservation | null {
-  const names = [...new Set(findings.flatMap((f) => f.values.map((v) => v.name)))];
-  if (names.length === 0) return null;
-  const rows: readonly CellValue[][] = findings.map((f, i) => [
-    f.subject.trim() === "" ? `finding_${i + 1}` : f.subject,
-    ...names.map((n) => f.values.find((v) => v.name === n)?.value ?? null),
-  ]);
-  return { tool: "insight.findings", ok: true, kind: "table", columns: ["subject", ...names], rows, rowCount: rows.length };
-}
-
-function asObservation(result: EngineResult): AgentObservation {
-  return {
-    tool: result.tool,
-    ok: true,
-    kind: "table",
-    columns: result.fields.map((f) => f.name),
-    rows: result.rows as readonly (readonly CellValue[])[],
-    rowCount: result.rows.length,
-  };
-}
-
 export interface NarratedAnswerV2 {
   readonly text: string;
   readonly usedFallback: boolean;
@@ -619,15 +578,12 @@ export function gateNarration(draft: string, input: NarrationInput, narratorAtte
       ...nothing,
     };
   }
-  const observations = [input.analysis.primary, ...input.analysis.supporting].map(asObservation);
+  /* Legacy AgentObservation conversion removed in P0-4. */
   // §21 — the comparison's metrics are measured numbers the narrator was shown
   // on purpose, so the fact gate has to know about them. Without this, an
   // answer that cites the silhouette it was handed is rejected for using a
   // number "not in the data" and quietly replaced by the fallback.
-  const withComparison = input.method?.comparison ? [...observations, comparisonObservation(input.method.comparison)] : observations;
-  const fromFindings = findingsObservation(input.findings);
-  const evidence = fromFindings ? [...withComparison, fromFindings] : withComparison;
-  const facts = agentEvidenceFacts(evidence);
+  const narrationFacts = narrationFactsFor(input);
 
   // Stage 27.x.1 §25 — ONE numeric authority, and it is the fact resolver.
   //
@@ -640,41 +596,33 @@ export function gateNarration(draft: string, input: NarrationInput, narratorAtte
   // and everything the Stage 26 gate checks BESIDES numbers — causal claims,
   // "combined" comparisons, superlatives against a ranking, leaked
   // identifiers — runs exactly as before. Nothing is skipped; one check moved.
-  const rowCounts = withComparison.map((o) => o.rowCount ?? 0);
-  const narrationFacts = narrationFactsFor(input);
-  const resolution = resolveNumericClaims({
-    text: draft,
+  const rowCounts = [input.analysis.primary.rows.length, ...input.analysis.supporting.map((r) => r.rows.length)];
+  // Row counts come from the REAL results only. The findings table is a view
+  // of what was already shown, not a result anyone can open, so counting its
+  // rows would let "все 15 показателей" be checked against the wrong total.
+  const verification = verifyNarration({
+    draft,
+    findings: input.findings,
+    locale: input.locale,
+    request: input.request,
+    hasResults: input.analysis.primary.rows.length > 0,
     facts: narrationFacts,
     structural: new Set<number>([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 100, ...rowCounts]),
     narratorAttempt,
   });
-  const numeric = resolution.unsupported.map(
-    (u) =>
-      `unsupported numeric claim ${u.numericToken} (${u.reason}); it matches no verified fact — nearest: ${u.nearestFacts.join(", ") || "none"}`,
-  );
-
-  // Row counts come from the REAL results only. The findings table is a view
-  // of what was already shown, not a result anyone can open, so counting its
-  // rows would let "все 15 показателей" be checked against the wrong total.
-  const base = validateAgentAnswer(draft, facts, rowCounts, new Set(resolution.considered));
-  const leaked = containsForbiddenLeak(draft);
-  const stage27 = verifyNarration(draft, input.findings, input.locale);
-
-  const other = [...base.reasons, ...stage27.reasons, ...(leaked ? ["internal identifier leaked"] : [])];
-  const reasons = [...numeric, ...other];
-  if (reasons.length === 0) {
-    return { text: draft, usedFallback: false, reasons: [], check: stage27, retryableNarration: false, unsupported: [] };
+  if (verification.ok) {
+    return { text: draft, usedFallback: false, reasons: [], check: verification, retryableNarration: false, unsupported: [] };
   }
   return {
     text: renderDeterministic(input),
     usedFallback: true,
-    reasons,
-    check: stage27,
+    reasons: verification.reasons,
+    check: verification,
     // §26 — a second narration is only worth a call when numbers were the
     // whole problem. If anything else failed, the model did not merely quote
     // badly, and asking again would spend a model call to be told the same.
-    retryableNarration: numeric.length > 0 && other.length === 0,
-    unsupported: resolution.unsupported,
+    retryableNarration: verification.retryableNarration,
+    unsupported: verification.unsupported,
   };
 }
 
