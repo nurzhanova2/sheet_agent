@@ -1,44 +1,36 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §13/§14/§18/§24/§28/§30/§66 — asking a model for analysis code.
-//
-// The prompt is short on encouragement and long on contract, because almost
-// every way this goes wrong is a contract failure rather than a reasoning one:
-// the script prints instead of assigning, fills a gap with zero, writes a
-// sentence into the result, or forgets to seed a stochastic method so two runs
-// of the same question disagree.
-//
-// Two rules deserve their prominence here.
-//
-// §28 — Python calculates, the narrator explains. The model is told, in the
-// system prompt and again in the envelope description, that no field may
-// contain a sentence about the business. This is not stylistic: a conclusion
-// written by generated code has bypassed the §31 numeric verification and the
-// §56 narration checks entirely, and would reach the user unexamined.
-//
-// §23/§25 — a missing value is not zero. The dataset arrives with NaN where
-// the workbook had no observation, and the prompt requires the script to
-// DECLARE what it did about them. A declared `exclude` is auditable; a silent
-// `fillna(0)` turns an empty cell into "нет продаж" two layers downstream.
-// ---------------------------------------------------------------------------
-
 import { dimensionBrief, type ExplorationDimension } from "./exploration.js";
 import { criteriaForPrompt } from "./method-comparison.js";
+import { buildResultContract, renderResultContract } from "./result-contract.js";
 import type { CodeRequest } from "./executor.js";
-import type { SandboxDataset } from "./types.js";
+import type { SandboxDataset, SandboxPlan } from "./types.js";
 
 export interface CodeMessage {
   readonly role: "system" | "user";
   readonly content: string;
 }
 
-const SYSTEM = [
+const SANDBOX_RULE_LINES: readonly string[] = [
   "You write short Python analysis scripts. Output ONLY Python code — no prose, no explanation, no markdown fences.",
   "",
   "WHAT YOU ARE GIVEN (already in scope, do not create or load them)",
-  "  data     pandas.DataFrame — the table to analyse. NaN means the cell was EMPTY.",
+  "  data          pandas.DataFrame — the whole table. NaN means the cell was EMPTY.",
+  "  numeric_data  DataFrame of the numeric columns only, float dtype, same rows and index as data.",
+  "  entity_data   DataFrame of the label columns only, same rows and index as data.",
+  "  X             numpy float matrix of numeric_data. NaN preserved — nothing was filled.",
+  "  numeric_columns, entity_columns   their column names.",
   "  meta     list of dicts, one per column: name, semanticType, unit, missingCount, zeroCount.",
   "  periods  list of period labels in order, or None if the table has no time axis.",
   "  pd, np   pandas and numpy, already imported.",
+  "",
+  "WHICH ONE TO USE",
+  "  numeric_data or X for anything numeric — sklearn, scipy, regression, distances, clustering.",
+  "  data for raw values and labels; entity_data to map results back to the entities they describe.",
+  "  Never hand `data` to a numerical algorithm: it holds the text label column and will raise.",
+  "  X is a numpy array, NOT a DataFrame. It has no fillna, dropna, isna, groupby, iterrows,",
+  "  apply, loc, iloc, .index or .columns. Do every pandas step on numeric_data, and convert",
+  "  at the end — `numeric_data.dropna().to_numpy()` — or use the prepared X if you changed nothing.",
+  "  A pandas boolean mask cannot index X either: `X[mask.to_numpy()]`, or filter numeric_data first.",
+  "  All three share one index, so a mask built on one lines up with the others.",
   "",
   "WHAT YOU MUST PRODUCE",
   "  Assign a dict to RESULT. Nothing else is read — printing is not a result.",
@@ -59,22 +51,60 @@ const SYSTEM = [
   "  }",
   "  Include only the keys your analysis actually produces.",
   "",
+  "NAMING — every name you write here can end up in front of a reader",
+  "  Name each entry of tables/series/scalars/groups after WHAT IT HOLDS, in lowercase English:",
+  '  "december_total", "cluster_profiles", "monthly_growth" — never "a1", "out1", "result", "df".',
+  "  A `subject` and a table's first column MUST be a label the data actually carries — a value",
+  "  from the metric/entity column. Never a row position, an index number, a column letter, or an",
+  "  id from this prompt. If you cannot attach a real label to a number, leave it out of findings.",
+  "",
   "RULES",
   "- NO sentences anywhere in RESULT. No conclusions, no business meaning, no recommendations.",
   "  Return numbers and structures; something else turns them into an answer.",
   "- NEVER fill a missing value with 0. NaN means 'not observed'; 0 means 'observed as zero'.",
-  "  Choose a policy (exclude / impute / interpolate) and DECLARE it in preprocessing.missingValuePolicy.",
+  "  Choose a policy (exclude / impute / interpolate), APPLY it to the frame BEFORE you fit or",
+  "  score anything, and DECLARE the one you applied in preprocessing.missingValuePolicy.",
+  "  Declaring without applying is the usual failure: sklearn estimators raise on NaN, so",
+  "  `X = frame.dropna()` (exclude) or `X = frame.apply(lambda s: s.fillna(s.median()), axis=1)`",
+  "  (impute) has to run first. Report how many rows or columns that touched.",
   "- Any random or iterative method must set random_state=0 and report it in method.",
   "- Respect semanticType: never average an entity_id or a category; a percent_fraction is",
   "  already 0..1, so do not divide it by 100 again.",
   "- Available: numpy, pandas, scipy, sklearn, and the Python maths modules.",
   "  NOT available: os, sys, io, subprocess, socket, requests, urllib, open(), eval(), exec().",
   "  The data is already in `data` — never read a file or a URL.",
-  "- Keep it under 60 lines. Prefer one clear method to three half-finished ones.",
-].join("\n");
+  "- Prefer one clear method to three half-finished ones. A script that runs and returns less",
+  "  is worth more than one that covers everything and raises.",
+];
+
+export const SANDBOX_SYSTEM_RULES = SANDBOX_RULE_LINES.join(String.fromCharCode(10));
+
+/**
+ * Stage 27.2A — the same rules, WITHOUT the one-shot RESULT envelope.
+ *
+ * The iterative path shares every fact above about what is in scope, which
+ * view to use, how to name things, and what never to do with a missing value.
+ * It must NOT share the "assign a dict to RESULT" contract, and the reason is
+ * mechanical rather than stylistic: `result` wraps the RESULT dict that exists
+ * when the session opens, so a step that REBINDS `RESULT` to a fresh dict
+ * leaves the emitter writing into the old one. The first live run produced
+ * exactly that — a script that built a `RESULT` dict and also called
+ * `result.emit`, which is two half-recorded analyses rather than one.
+ *
+ * So the envelope section is cut here and the iterative prompt states its own.
+ * Everything else stays shared, which keeps the ACI described in one place.
+ */
+export const SANDBOX_INPUT_RULES = ((): string => {
+  const start = SANDBOX_RULE_LINES.findIndex((line) => line.startsWith("WHAT YOU MUST PRODUCE"));
+  const end = SANDBOX_RULE_LINES.findIndex((line) => line.includes("Include only the keys your analysis actually produces"));
+  if (start < 0 || end < 0 || end < start) return SANDBOX_SYSTEM_RULES;
+  return [...SANDBOX_RULE_LINES.slice(0, start), ...SANDBOX_RULE_LINES.slice(end + 1)]
+    .join(String.fromCharCode(10))
+    .replace("NO sentences anywhere in RESULT.", "NO sentences anywhere in what you emit.");
+})();
 
 /** §9 — the schema the script is written against, as compact prose. */
-function describeDataset(dataset: SandboxDataset): string {
+export function describeDataset(dataset: SandboxDataset): string {
   const lines = dataset.columns.map((c) => {
     const bits = [`${c.name}: ${c.semanticType}`];
     if (c.unit) bits.push(`unit ${c.unit}`);
@@ -150,8 +180,11 @@ function explorationSection(dimensions: readonly ExplorationDimension[]): readon
     ...dimensions.map((d) => `  ${d}: ${dimensionBrief(d)}`),
     "",
     'Put every observation in RESULT["findings"] as {"kind": <the dimension name>, "subject": <what it is about>, "values": {<name>: <number>}}.',
+    'The "subject" is the entity or column label FROM THE DATA — "Мезень", "Дек" — never a row',
+    "number and never one of the ids in this prompt. An unlabelled finding cannot be reported.",
     "EVERY dimension above needs at least one entry, including the ones where nothing stood out —",
-    'use values like {"count": 0} to say so. A dimension you leave out reads as one you never ran.',
+    'use values like {"count": 0} with subject "" to say so. A dimension you leave out reads as',
+    "one you never ran.",
     "Use the value names given above where they are given: they are what the report is built from.",
     "Do not rank the dimensions or decide which matters most. Report what you measured.",
   ];
@@ -179,17 +212,48 @@ function repairSection(request: CodeRequest): readonly string[] {
   ];
 }
 
+/**
+ * §14/§38 — how much code this request is actually asking for.
+ *
+ * The old prompt ended with a flat "keep it under 60 lines" while the section
+ * above it could be asking for six exploration dimensions and four compared
+ * methods. That is not a tight budget, it is a contradiction, and the live run
+ * showed how a model resolves one: it silently drops dimensions, which comes
+ * back as §29's coverage failure, or it compresses until something raises.
+ *
+ * So the budget is derived from the same plan that sets the work. It is still
+ * a ceiling — nothing here invites a longer script — but it is a ceiling the
+ * request can actually fit inside.
+ */
+function lineBudget(plan: SandboxPlan): number {
+  const dimensions = plan.explorationDimensions?.length ?? 0;
+  const methods = plan.methodConstraints?.length ?? 0;
+  const budget = 60 + Math.max(0, dimensions - 1) * 20 + (methods >= 2 ? methods * 15 : 0);
+  return Math.min(budget, 160);
+}
+
 /** §13 — the plan, the data and (on a retry) the failure. */
 export function buildCodeMessages(request: CodeRequest): readonly CodeMessage[] {
   const { plan, dataset } = request;
-  const outputs = plan.requestedOutputs.map((o) => `  - ${o.id} (${o.shape}): ${o.description}`);
+  // §18 — the planner's output IDs stay out of this message. They are handles
+  // for binding a result to a declared output, they mean nothing to whoever
+  // writes the code, and a model shown one under "your RESULT must contain
+  // each of these" will use it as the key. Shape and description are the whole
+  // contract; naming is governed by the NAMING rule in the system prompt.
+  // The shape is named as the RESULT KEY it has to arrive under, which is the
+  // only thing the script can act on. "one groups" was neither.
+  //
+  // Stage 27.x.1 §9 — and the key alone was not enough either. The full
+  // contract is derived from the same requestedOutputs and printed as a
+  // literal to fill in, because ENGINE_CONTRACT_ERROR was almost never a
+  // wrong analysis: it was a right number filed under a name nobody had
+  // stated. Naming it costs a dozen lines of prompt and no execution.
   const user = [
     "=== OBJECTIVE ===",
     plan.objective,
-    "",
-    "=== REQUIRED OUTPUTS ===",
-    "Your RESULT must contain each of these, in the shape named:",
-    ...outputs,
+    // §23/§24 — the contract has to know whether gaps exist, because that is
+    // what makes the missing-value declaration required rather than optional.
+    ...renderResultContract(buildResultContract(plan), dataset.columns.some((c) => c.missingCount > 0)),
     ...methodSection(plan.methodConstraints ?? []),
     ...explorationSection(plan.explorationDimensions ?? []),
     ...(plan.assumptions && plan.assumptions.length > 0 ? ["", "=== ASSUMPTIONS ===", ...plan.assumptions.map((a) => `  - ${a}`)] : []),
@@ -198,11 +262,11 @@ export function buildCodeMessages(request: CodeRequest): readonly CodeMessage[] 
     describeDataset(dataset),
     ...repairSection(request),
     "",
-    "Return the Python script only.",
+    `Keep the script under ${lineBudget(plan)} lines. Return the Python script only.`,
   ].join("\n");
 
   return [
-    { role: "system", content: SYSTEM },
+    { role: "system", content: SANDBOX_SYSTEM_RULES },
     { role: "user", content: user },
   ];
 }

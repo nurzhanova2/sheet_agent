@@ -1,21 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §32/§33/§34 — a sandbox result becomes an ordinary engine result.
-//
-// This is the join that makes hybrid analysis and conversation continuity work
-// without either of them being a special case.
-//
-// §34 wants deterministic tools to run over what the sandbox produced, and §33
-// wants "какой кластер самый нестабильный?" to reach back to it a turn later.
-// Both fall out for free if a sandbox table enters the ResultStore as a
-// `table` — the same type `set.filter`, `set.top` and `set.argmax` already
-// accept — rather than as a new kind everything downstream has to learn.
-//
-// What does NOT cross over is the method. A sandbox result carries how it was
-// computed in its metadata, and that metadata is read by the trace (§71), the
-// "показать расчёт" surface (§63) and the narrator's method note (§60) — never
-// by a tool deciding what to do next. Tools see rows.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ResultStore } from "../results/result-store.js";
 import type { EngineResult, ResultField, ResultId } from "../types.js";
@@ -89,6 +71,15 @@ export interface AdaptParams {
   readonly attempts: number;
   /** §32 — engine results this analysis was composed with (hybrid). */
   readonly parents?: readonly ResultId[];
+  /**
+   * Stage 27.2A §19 — the results the AGENT named as the answer.
+   *
+   * When an iterative turn completes it says which of its results answer the
+   * question, and that statement outranks the shape rule below. §19 rules out
+   * picking for it, and the shape rule is a pick: it is the right one when
+   * nobody said, and the wrong one the moment somebody did.
+   */
+  readonly primaryRefs?: readonly string[];
 }
 
 /**
@@ -266,6 +257,21 @@ export function storeSandboxResult(params: AdaptParams): StoredAnalysis {
   // PLANNER named leads, so the order is the plan's and not the data's.
   const leadDimension = plan.explorationDimensions?.find((d) => byDimension.has(d));
   const exploration = leadDimension ? stored.find((r) => r.metadata["explorationDimension"] === leadDimension) : undefined;
-  const primary = exploration ?? (principal ? byShape.get(principal.shape) : undefined) ?? stored[0]!;
+  // §19 — an explicitly named primary wins over every heuristic here.
+  //
+  // A scalar is the case that needs care: every scalar this analysis emitted
+  // is stored in ONE aggregate result under `outputName: "scalars"`, so an
+  // agent naming `december_total` is naming a row of it, not a result of its
+  // own. Matching its `metricKeys` is what makes "the answer is that number"
+  // resolvable to the result that holds it.
+  const refs = params.primaryRefs ?? [];
+  const named = refs.length
+    ? stored.find((r) => {
+        const name = String(r.metadata["outputName"] ?? "");
+        if (refs.includes(name)) return true;
+        return name === "scalars" && r.metricKeys.some((key) => refs.includes(key));
+      })
+    : undefined;
+  const primary = named ?? exploration ?? (principal ? byShape.get(principal.shape) : undefined) ?? stored[0]!;
   return { primary, all: stored, method: metadata };
 }

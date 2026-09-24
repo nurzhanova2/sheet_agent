@@ -70,11 +70,70 @@ public sealed class ProviderClient
         catch (JsonException) { throw new ProviderException("MALFORMED_RESPONSE", "The AI provider returned an unreadable response."); }
     }
 
+    /// <summary>
+    /// Stage 27.2 §7 — generation parameters the add-in may set per role.
+    ///
+    /// Everything the client sends used to be discarded except `messages`, and
+    /// that single line was the cause of a measured problem: with no
+    /// temperature reaching the provider, the deployment's own default applied,
+    /// and three identical requests through this path returned 618392, 482917
+    /// and 482915 for "invent a 6-digit number". Identical code produced
+    /// materially different benchmark outcomes for the same reason, which is
+    /// why Stage 27.2 §0 stops treating live runs as precise measurements.
+    ///
+    /// The allow-list stays SHORT and is validated here rather than trusted.
+    /// A local caller is not automatically a safe one: an out-of-range value
+    /// forwarded verbatim earns a provider 400 that surfaces to the user as a
+    /// generic failure, so each entry is bounds-checked and silently omitted
+    /// when it does not make sense.
+    ///
+    /// `model` is deliberately NOT taken from the request. Which model this
+    /// companion talks to is its own configuration (env or default), and
+    /// letting a page choose would make the trust boundary decorative.
+    ///
+    /// `tools` is deliberately NOT forwarded — see the audit. Forwarding tool
+    /// definitions without also reading `delta.tool_calls` and round-tripping
+    /// assistant tool-call messages would advertise a capability that silently
+    /// produces nothing, which is worse than not offering it.
+    /// </summary>
+    private static readonly (string Name, double Min, double Max)[] NumericPassThrough =
+    [
+        ("temperature", 0d, 2d),
+        ("top_p", 0d, 1d),
+        ("presence_penalty", -2d, 2d),
+        ("frequency_penalty", -2d, 2d),
+    ];
+
     private byte[] CreateProviderPayload(JsonElement requestBody, bool stream)
     {
         if (!requestBody.TryGetProperty("messages", out var messages) || messages.ValueKind != JsonValueKind.Array)
             throw new ProviderException("INVALID_REQUEST", "The request does not contain any messages.");
-        return JsonSerializer.SerializeToUtf8Bytes(new { model = Model, stream, messages });
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["model"] = Model,
+            ["stream"] = stream,
+            ["messages"] = messages,
+        };
+
+        foreach (var (name, min, max) in NumericPassThrough)
+        {
+            if (requestBody.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number
+                && value.TryGetDouble(out var number) && !double.IsNaN(number) && number >= min && number <= max)
+            {
+                payload[name] = number;
+            }
+        }
+
+        // Integers, bounds-checked separately: a fractional seed or a negative
+        // token budget is a client bug, not an instruction to pass along.
+        if (requestBody.TryGetProperty("seed", out var seed) && seed.ValueKind == JsonValueKind.Number && seed.TryGetInt64(out var seedValue))
+            payload["seed"] = seedValue;
+        if (requestBody.TryGetProperty("max_tokens", out var maxTokens) && maxTokens.ValueKind == JsonValueKind.Number
+            && maxTokens.TryGetInt32(out var maxTokensValue) && maxTokensValue > 0)
+            payload["max_tokens"] = maxTokensValue;
+
+        return JsonSerializer.SerializeToUtf8Bytes(payload);
     }
 
     private async Task<HttpResponseMessage> SendAsync(byte[] payload, HttpCompletionOption option, CancellationToken cancellationToken)

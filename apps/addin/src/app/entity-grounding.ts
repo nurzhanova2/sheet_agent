@@ -1,28 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.5 §8–§9 — deterministic entity → source-row grounding.
-//
-// A remembered analytical result exposes an entity column and a set of canonical
-// entity values (e.g. Manager ∈ {Aigerim, Aruzhan, Timur}). To act on those
-// entities in Excel we must map them back to concrete source rows — WITHOUT a
-// model call, without fuzzy matching, without joins.
-//
-// Matching rules (documented, exact):
-//   • the entity column is resolved against the source headers by exact name,
-//     then case-insensitive / whitespace-collapsed name; unknown or ambiguous
-//     column ⇒ fail closed (no rows).
-//   • each cell value and each requested value is normalised: strings are
-//     trimmed, lower-cased and whitespace-collapsed; numbers compared by value
-//     (with a 1e-9 epsilon); booleans by `String(v)`. Empty cells never match.
-//   • a row matches (mode "in") when its normalised entity cell equals one of
-//     the normalised requested values; mode "not_in" inverts this over the
-//     non-empty entity cells.
-//   • matched sheet rows are 1-based absolute, de-duplicated, kept in natural
-//     workbook order.
-//
-// The SAME returned row set drives the displayed count, the Preview, the
-// Office.js mutation target and the Undo snapshot (§9).
-// ---------------------------------------------------------------------------
-
 import type { CellValue, ExcelPort } from "@sheet-agent/application";
 import { parseLocalRange, splitSheetAddress } from "./a1.js";
 import { readAddressSnapshot } from "./workbook-context.js";

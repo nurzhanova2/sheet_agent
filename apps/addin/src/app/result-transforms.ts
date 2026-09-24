@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.2B — deterministic read-only transforms over a remembered ResultRef.
-//
-// A follow-up like "show only the top 2 by Fact" or "which one is worst" must be
-// answered from the STRUCTURED rows of the earlier result — never by re-parsing
-// assistant markdown, and never by the model re-deriving numbers. These pure
-// functions take a ResultRef's own `columns` / `rows` and produce a new grid
-// plus a plain-language answer; the caller persists the output as a derived
-// ResultRef with `derivedFromResultId` lineage.
-//
-// `\b` is ASCII-only in JS regex — Russian alternatives use explicit classes.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ResultKind, ResultRef } from "./session-memory.js";
 

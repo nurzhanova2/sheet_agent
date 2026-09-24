@@ -1,9 +1,12 @@
 import { useEffect, useRef } from "react";
-import type { ActivityEntry, TranscriptEntry } from "../../app/agent-session.js";
+import { formatSeconds, type ActivityEntry, type TranscriptEntry } from "../../app/agent-session.js";
 import type { ResponseLanguage } from "../../app/language.js";
 import { MarkdownLite } from "./MarkdownLite.js";
 import { ChangePreview } from "./ChangePreview.js";
 import { ChartCard, type ChartInsertDims } from "./ChartCard.js";
+import { ExecutionCode } from "./ExecutionCode.js";
+import { ExecutionSummary } from "./ExecutionSummary.js";
+import { TurnTimer } from "./TurnTimer.js";
 
 export interface AgentTranscriptProps {
   readonly entries: readonly TranscriptEntry[];
@@ -12,11 +15,12 @@ export interface AgentTranscriptProps {
   readonly onReject: (id: string) => void;
   readonly language?: ResponseLanguage;
   readonly onInsertChart?: (base64Png: string, suggestedName: string, dims?: ChartInsertDims) => Promise<void> | void;
+  readonly turnStartedAt?: number | null;
 }
 
 const STATUS_GLYPH: Record<ActivityEntry["status"], string> = { running: "●", done: "✓", error: "✕" };
 
-export function AgentTranscript({ entries, busy, onApprove, onReject, language = "en", onInsertChart }: AgentTranscriptProps) {
+export function AgentTranscript({ entries, busy, onApprove, onReject, language = "en", onInsertChart, turnStartedAt = null }: AgentTranscriptProps) {
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (typeof endRef.current?.scrollIntoView === "function") endRef.current.scrollIntoView({ block: "end" });
@@ -51,6 +55,9 @@ export function AgentTranscript({ entries, busy, onApprove, onReject, language =
                 </span>
                 <span className="term-act-body">
                   <span className="term-act-title">{entry.title}</span>
+                  {entry.durationMs !== undefined && (
+                    <span className="term-act-elapsed">· {formatSeconds(entry.durationMs, language === "ru" ? "ru" : "en")}</span>
+                  )}
                   {entry.detail && <span className="term-act-detail">{entry.detail}</span>}
                 </span>
               </div>
@@ -78,8 +85,13 @@ export function AgentTranscript({ entries, busy, onApprove, onReject, language =
                 {...(onInsertChart ? { onInsert: onInsertChart } : {})}
               />
             );
+          case "code":
+            return <ExecutionCode key={entry.id} entry={entry} language={language} />;
+          case "execution":
+            return <ExecutionSummary key={entry.id} entry={entry} language={language} />;
         }
       })}
+      {turnStartedAt !== null && <TurnTimer startedAt={turnStartedAt} language={language} />}
       <div ref={endRef} />
     </div>
   );

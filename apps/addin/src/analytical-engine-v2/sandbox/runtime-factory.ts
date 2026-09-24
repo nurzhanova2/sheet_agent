@@ -1,22 +1,6 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §12/§16/§70 — choosing a runtime, and refusing an unsafe one.
-//
-// Two implementations exist and they are NOT interchangeable. The worker one
-// can stop a runaway analysis; the in-process one cannot, because `runPython`
-// blocks the thread that would have to fire the timer (measured, see
-// `pyodide-runtime.ts`). Handing untrusted generated code to a runtime whose
-// timeout is advisory would make §12 a comment rather than a bound.
-//
-// So the choice is made here, once, and the executor is given a runtime that
-// is honest about what it enforces. Where no Worker exists — a test process,
-// an unusual host — the factory returns the in-process runtime and says so;
-// the caller decides whether that is acceptable, and for a production turn it
-// is not.
-// ---------------------------------------------------------------------------
-
 import type { AnalyticalRuntime } from "./executor.js";
 import { PyodideSandboxRuntime } from "./pyodide-runtime.js";
-import { WorkerSandboxRuntime, type SandboxWorkerLike } from "./worker-runtime.js";
+import { WorkerSandboxRuntime, type SandboxEnvironment, type SandboxWorkerLike } from "./worker-runtime.js";
 import type { SandboxLimits } from "./types.js";
 
 /**
@@ -61,8 +45,55 @@ function browserWorkerFactory(): SandboxWorkerLike {
   return new Worker(new URL("./sandbox-worker.ts", import.meta.url), { type: "module", name: "sheet-agent-analysis" }) as unknown as SandboxWorkerLike;
 }
 
+/**
+ * Where this bundle is served from.
+ *
+ * Reported instead of the worker's own URL, and the reason is the comment
+ * above: vite only emits the worker chunk when `new URL(..., import.meta.url)`
+ * is written INSIDE the `new Worker(...)` call, so there is no second place
+ * that expression may appear. The worker chunk is a sibling of this module, so
+ * this is the base a reader needs to check a 404 against — and it is the value
+ * that was wrong in every packaging failure this project has had.
+ */
+function moduleURL(): string {
+  try {
+    return import.meta.url;
+  } catch (error) {
+    return `(unresolvable: ${String(error)})`;
+  }
+}
+
+function documentBaseURI(): string {
+  return (globalThis as { document?: { baseURI?: string } }).document?.baseURI ?? "(no document)";
+}
+
+function pageOrigin(): string {
+  const location = (globalThis as { location?: { origin?: string } }).location;
+  return location?.origin ?? "(no location)";
+}
+
+export function describeSandboxEnvironment(indexURL: string, workerAvailable: boolean): SandboxEnvironment {
+  return {
+    indexURL,
+    moduleURL: workerAvailable ? moduleURL() : "(no worker)",
+    origin: pageOrigin(),
+    baseURI: documentBaseURI(),
+    workerType: workerAvailable ? "module" : "none",
+  };
+}
+
+export function resolvedAgainstDocument(indexURL: string): string {
+  try {
+    const base = (globalThis as { document?: { baseURI?: string } }).document?.baseURI;
+    return base === undefined ? indexURL : new URL(indexURL, base).toString();
+  } catch {
+    return indexURL;
+  }
+}
+
 export function createSandboxRuntime(options: RuntimeFactoryOptions = {}): SandboxRuntimeChoice {
-  const indexURL = options.indexURL ?? VENDORED_INDEX_URL;
+  const indexURL = options.indexURL ?? resolvedAgainstDocument(VENDORED_INDEX_URL);
+  const supplied = options.workerFactory !== undefined;
   const factory = options.workerFactory ?? (canConstructWorker() ? browserWorkerFactory : null);
 
   if (factory) {
@@ -70,6 +101,7 @@ export function createSandboxRuntime(options: RuntimeFactoryOptions = {}): Sandb
       runtime: new WorkerSandboxRuntime({
         factory,
         indexURL,
+        environment: describeSandboxEnvironment(indexURL, !supplied && canConstructWorker()),
         ...(options.limits ? { limits: options.limits } : {}),
       }),
       kind: "worker",

@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.7 §39–§42 — the HELD-OUT multi-turn conversation benchmark.
-//
-// None of these sentences appears in the planner prompt or in a tool
-// description, and none of the tables is one an earlier stage tuned against
-// (§41). What is under test is whether a conversation's ANALYTICAL STATE
-// survives from one turn to the next: the pronouns, the partitives, "the same
-// period", a clarification answered three messages later, a table switched
-// underneath the conversation.
-//
-// Each turn declares only what a CORRECT ANSWER looks like — never the route
-// (§57 of Stage 26.2), and never which reference tool to call.
-// ---------------------------------------------------------------------------
-
 import { buildDatedTable, buildLabelledTable, type SyntheticTable } from "../__fixtures__/synthetic-tables.js";
 
 /**

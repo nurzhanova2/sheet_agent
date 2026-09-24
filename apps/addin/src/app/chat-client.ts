@@ -9,6 +9,7 @@ import { canonicalizeAnalysisRequest } from "../analysis/canonical.js";
 import { groupMetricLabel, reorderGroupGrid } from "../analysis/group-grid.js";
 import { renderVerifiedFacts, validateClaimsAgainstFacts, type VerifiedFact } from "../analysis/facts.js";
 import { projectCompoundFacts, renderProjectedFactsForModel, type FactProjection } from "../analysis/fact-projection.js";
+import { generationFields, type GenerationRole } from "./generation-profile.js";
 import {
   checkCoverage,
   compileGoalIntents,
@@ -207,6 +208,43 @@ export interface ChatClient {
    * completion. Optional: without it the V2 engine cannot run.
    */
   planAnalyticalTurn?(
+    messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
+    signal: AbortSignal,
+    model?: string,
+  ): Promise<string>;
+  /**
+   * Stage 27 §13/§14 — one analytical Python script for the sandbox.
+   *
+   * A FOURTH role, separate for the same reason the other three are separate:
+   * it carries its own contract prompt, its own failure mode (a script that
+   * does not parse) and its own repair loop. Folding it into `narrate` because
+   * both return text would tie the narrator prompt to the code contract, and
+   * the next change to either would silently move the other.
+   *
+   * Optional: without it the engine still runs, and every analyze decision is
+   * answered with a capability error rather than a substitute (§5).
+   */
+  generateAnalysisCode?(
+    messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
+    signal: AbortSignal,
+    model?: string,
+  ): Promise<string>;
+  /**
+   * Stage 27.2A §2/§3 — one bounded ANALYTICAL DECISION for the iterative loop.
+   *
+   * The fifth role, and separate from all four for the usual reason: it has
+   * its own grammar. This one returns a typed decision envelope — INSPECT,
+   * EXECUTE_CODE, CALL_TOOL, CLARIFY, COMPLETE — and its failure mode is a
+   * CONTROL_ERROR handled on its own budget (§16), which is not what a failed
+   * code generation or a failed narration means.
+   *
+   * It is NOT `decideAgentStep`: that carries the Stage 24.4 flat-agent
+   * prompt and a different decision vocabulary. Sharing the method would mean
+   * one prompt change could silently retarget the other loop.
+   *
+   * Optional: without it the engine runs the one-shot sandbox path.
+   */
+  decideAnalysisStep?(
     messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
     signal: AbortSignal,
     model?: string,
@@ -784,7 +822,7 @@ export class HttpChatClient implements ChatClient {
    */
   async decideAgentStep(request: AgentDecisionRequest, signal: AbortSignal): Promise<string> {
     const messages = buildAgentDecisionMessages(request).map((m) => ({ role: m.role, content: m.content }));
-    return this.runCompletion(messages, request.model, () => {}, signal, request.language);
+    return this.runCompletion(messages, request.model, () => {}, signal, request.language, "agent");
   }
 
   /**
@@ -794,7 +832,31 @@ export class HttpChatClient implements ChatClient {
    * prompts/temperatures without coupling (§62).
    */
   async narrate(messages: readonly { readonly role: "system" | "user"; readonly content: string }[], signal: AbortSignal, model?: string): Promise<string> {
-    return this.runCompletion(messages, model, () => {}, signal, "en");
+    return this.runCompletion(messages, model, () => {}, signal, "en", "narrator");
+  }
+
+  /** Stage 27 §14 — the analytical code generator. Carries no product prompt. */
+  async generateAnalysisCode(
+    messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
+    signal: AbortSignal,
+    model?: string,
+  ): Promise<string> {
+    return this.runCompletion(messages, model, () => {}, signal, "en", "code");
+  }
+
+  /**
+   * Stage 27.2A §2 — the iterative loop's decision completion.
+   *
+   * Runs at the `agent` generation profile (temperature 0): a decision is a
+   * choice among five typed actions, and sampling variety in it buys nothing
+   * an analysis wants.
+   */
+  async decideAnalysisStep(
+    messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
+    signal: AbortSignal,
+    model?: string,
+  ): Promise<string> {
+    return this.runCompletion(messages, model, () => {}, signal, "en", "agent");
   }
 
   /**
@@ -808,7 +870,7 @@ export class HttpChatClient implements ChatClient {
     signal: AbortSignal,
     model?: string,
   ): Promise<string> {
-    return this.runCompletion(messages, model, () => {}, signal, "en");
+    return this.runCompletion(messages, model, () => {}, signal, "en", "planner");
   }
 
   async stream(request: ChatStreamRequest, handlers: ChatStreamHandlers, signal: AbortSignal): Promise<ChatResult> {
@@ -1724,11 +1786,18 @@ export class HttpChatClient implements ChatClient {
     onDelta: (text: string) => void,
     signal: AbortSignal,
     language: ResponseLanguage = "en",
+    // Stage 27.2 §8 — which role is asking, so it can decode accordingly.
+    // Defaults to `chat`, whose profile is empty, so every existing caller
+    // keeps the exact request body it had before this stage.
+    role: GenerationRole = "chat",
   ): Promise<string> {
     const response = await this.fetchImpl(this.endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider: "litellm", model: model ?? this.model, stream: true, messages }),
+      // §7 — the generation fields are sent here and forwarded by the
+      // companion only from the build carrying the §7 change. Against an older
+      // binary they are dropped, which is a no-op rather than a failure.
+      body: JSON.stringify({ provider: "litellm", model: model ?? this.model, stream: true, messages, ...generationFields(role) }),
       signal,
     });
     if (!response.ok || !response.body) {

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Reflection;
 using System.Text.Json;
+using Microsoft.AspNetCore.StaticFiles;
 using SheetAgent.Companion;
 
 internal static class Program
@@ -65,6 +66,7 @@ internal static class Program
         // content-hashed taskpane-<hash>.js is immutable and cached hard.
         app.UseStaticFiles(new StaticFileOptions
         {
+            ContentTypeProvider = StaticContentTypes(),
             OnPrepareResponse = ctx =>
             {
                 var name = ctx.File.Name;
@@ -90,6 +92,25 @@ internal static class Program
         app.MapPost("/v1/chat", StreamChatAsync);
         app.MapPost("/v1/custom-functions", CompleteCustomFunctionsAsync);
         app.MapFallbackToFile("taskpane.html");
+    }
+
+    internal static readonly IReadOnlyList<(string Extension, string ContentType)> AdditionalContentTypes = new[]
+    {
+        (".whl", "application/octet-stream"),
+        (".mjs", "text/javascript"),
+        (".wasm", "application/wasm"),
+        (".zip", "application/zip"),
+    };
+
+    internal static FileExtensionContentTypeProvider StaticContentTypes()
+    {
+        var provider = new FileExtensionContentTypeProvider();
+        foreach (var (extension, contentType) in AdditionalContentTypes)
+        {
+            provider.Mappings[extension] = contentType;
+        }
+
+        return provider;
     }
 
     private static async Task StreamChatAsync(HttpContext context, ProviderClient provider)

@@ -1,31 +1,7 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §6/§7/§8/§11/§12/§15/§70 — the Pyodide-backed analytical sandbox.
-//
-// Why a WASM runtime and not a host Python. §7 requires the analysis to be
-// unable to reach the filesystem, the registry, PowerShell, subprocesses or
-// the network, and §16 requires that isolation to hold INDEPENDENTLY of the
-// AST check. A host CPython meets that only behind an OS sandbox — an
-// AppContainer or a restricted token — which is a large amount of Windows
-// security code whose failure mode is silent. A WASM runtime has no syscalls
-// to begin with: there is no host path to traverse, no process to spawn, and
-// cancelling it is terminating a worker rather than killing a process tree
-// that may have spawned children (§70).
-//
-// What the runtime does NOT give for free is documented in
-// `python-runtime.ts`: `import js` hands Python the whole JavaScript scope.
-// That door is shut in the bootstrap, and the shutting is verified by tests
-// rather than assumed.
-//
-// One implementation serves two environments. In the task pane it runs inside
-// a Worker (`worker-runtime.ts`), so a 30-second analysis never freezes the
-// pane and cancellation is `terminate()`. In tests it runs in-process, which
-// is what makes the §72 escape tests exercise the same bootstrap the product
-// ships rather than a mock of it.
-// ---------------------------------------------------------------------------
-
 import type { SandboxDataset, SandboxError, SandboxLimits, SandboxResult, SourceLineage } from "./types.js";
 import { SANDBOX_LIMITS } from "./types.js";
 import { BOOTSTRAP_SOURCES } from "./python-runtime.js";
+import { repairHintFor } from "./failure-classes.js";
 
 /** The slice of Pyodide's API this module uses. Kept narrow on purpose. */
 export interface PyodideApi {
@@ -37,9 +13,11 @@ export interface PyodideApi {
 
 export type PyodideLoader = (options: { readonly indexURL?: string }) => Promise<PyodideApi>;
 
+export type DeniedCapability = "NETWORK" | "PROCESS" | "FILESYSTEM" | "BRIDGE";
+
 /** §15 — one refusal from the AST contract. */
 export interface CodeViolation {
-  readonly code: "SYNTAX" | "IMPORT" | "CALL" | "ATTR" | "NAME" | "IO";
+  readonly code: "SYNTAX" | "IMPORT" | "CALL" | "ATTR" | "NAME" | "IO" | DeniedCapability;
   readonly detail: string;
   readonly line: number;
 }
@@ -68,6 +46,105 @@ export const DEFAULT_PACKAGES: readonly string[] = ["numpy", "pandas", "scikit-l
 export type ExecuteOutcome =
   | { readonly ok: true; readonly result: SandboxResult; readonly stdout: string; readonly durationMs: number }
   | { readonly ok: false; readonly error: SandboxError; readonly durationMs: number };
+
+/**
+ * Stage 27.2 §16/§17 — what one STEP of an iterative analysis reports back.
+ *
+ * The distinction from `ExecuteOutcome` is the whole of §16. An
+ * `ExecuteOutcome` says whether an ANALYSIS succeeded; a `StepObservation`
+ * says what HAPPENED, and a Python error is an ordinary value of it rather
+ * than a failure of the turn. The agent reads this and decides what to do
+ * next — the same agent, not a separate repair architecture.
+ */
+export interface StepObservation {
+  readonly status: "ok" | "error";
+  /** Present on error: the exception class, e.g. "NameError". */
+  readonly errorType?: string;
+  readonly message?: string;
+  readonly line?: number | null;
+  readonly failingLine?: string | null;
+  readonly stdout: string;
+  /** §28 — names the step created, with types and shapes but not contents. */
+  readonly available: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  /** §27 — the names that always exist, repeated on failure so none is guessed. */
+  readonly prepared?: readonly string[];
+  /** Whether anything has been emitted into RESULT yet. */
+  readonly hasResult?: boolean;
+  /** The NAMES emitted so far — what a COMPLETE may point at. */
+  readonly emitted?: readonly string[];
+  readonly durationMs: number;
+}
+
+/**
+ * Stage 27.2A §11/§12 — the bounded inspection targets.
+ *
+ * Every one of these is capped in rows and columns on the Python side. There
+ * is no target that serialises a whole frame, on purpose: §11 rules out
+ * arbitrary dumps, and an agent that needs an aggregate should compute it in
+ * a step rather than read the table and do arithmetic in prose.
+ */
+export const LOOK_TARGETS = [
+  "table.info",
+  "table.schema",
+  "table.head",
+  "variable.summary",
+  "variable.head",
+  "variable.shape",
+  "variable.dtype",
+  "variable.columns",
+  "result.preview",
+] as const;
+
+export type LookTarget = (typeof LOOK_TARGETS)[number];
+
+/** Whether a target names a variable and therefore needs one. */
+export function targetNeedsVariable(target: LookTarget): boolean {
+  return target.startsWith("variable.");
+}
+
+/**
+ * The answer to one LOOK.
+ *
+ * `status` carries the §16 principle into inspection: asking about a name
+ * that does not exist is an observation with `unknown_variable` and the list
+ * of what DOES exist, not an exception that ends the turn.
+ */
+export interface LookObservation {
+  readonly target: string;
+  readonly status: "ok" | "unknown_variable" | "not_tabular" | "error";
+  readonly variable?: string;
+  readonly type?: string;
+  readonly shape?: readonly number[];
+  readonly dtype?: string;
+  readonly dtypes?: Readonly<Record<string, number>>;
+  readonly columns?: readonly string[];
+  readonly rows?: readonly (readonly unknown[])[];
+  /** A number for a variable; a per-column map for `table.info`. */
+  readonly missing?: number | Readonly<Record<string, number>>;
+  readonly entityColumns?: readonly string[];
+  readonly numericColumns?: readonly string[];
+  readonly matrixShape?: readonly number[];
+  /** `[finite, total]` — §12's "finite: 106/108". */
+  readonly finite?: readonly [number, number];
+  readonly schema?: readonly Readonly<Record<string, unknown>>[];
+  readonly emitted?: Readonly<Record<string, readonly string[]>>;
+  readonly available?: Readonly<Record<string, unknown>>;
+  readonly prepared?: readonly string[];
+  readonly errorType?: string;
+  readonly message?: string;
+}
+
+/** §13 — a compact structural look at the table, without serialising it. */
+export interface TableInspection {
+  readonly shape: readonly number[];
+  readonly entityColumns: readonly string[];
+  readonly numericColumns: readonly string[];
+  readonly missing: Readonly<Record<string, number>>;
+  readonly matrixShape: readonly number[];
+  readonly schema: readonly Readonly<Record<string, unknown>>[];
+  readonly preview: readonly (readonly unknown[])[];
+  readonly available: Readonly<Record<string, unknown>>;
+}
 
 /**
  * §11 — the runtime holds an ephemeral workspace per analysis, not a session.
@@ -146,6 +223,184 @@ export class PyodideSandboxRuntime {
    * with no Worker), and the Worker wrapper is the one that ships. `hardTimeout`
    * says which you are holding.
    */
+  /**
+   * Stage 27.2 §15/§16 — run ONE step inside a named ephemeral session.
+   *
+   * The session is a Python namespace that survives between steps of a single
+   * analytical turn, so `features` built in step 1 is still there in step 3.
+   * It is disposed at the end of the turn (§15) — nothing arbitrary crosses
+   * into an unrelated user turn, and `dispose()` is called from a `finally`
+   * so that holds even when the turn fails.
+   *
+   * SECURITY IS UNCHANGED (§47). Every step goes through the same AST
+   * validator, the same restricted builtins and the same interrupt-based
+   * timeout as a one-shot execution. A session does not widen what code can
+   * reach; it lengthens the life of a dict.
+   *
+   * The return type is the point. A Python exception comes back as an
+   * observation with `status: "error"` rather than propagating — see §16.
+   * The two things that are still hard failures are the ones the agent cannot
+   * act on: code the validator refuses, and a runtime that will not start.
+   */
+  async step(sessionId: string, code: string, dataset: SandboxDataset, signal?: AbortSignal): Promise<StepObservation | { readonly refused: SandboxError }> {
+    const started = Date.now();
+    if (signal?.aborted) return { refused: { code: "CANCELLED", message: "cancelled before execution" } };
+    if (code.length > this.#limits.maxCodeLength) {
+      return { refused: { code: "CODE_VALIDATION_ERROR", message: `code is ${code.length} characters, over the ${this.#limits.maxCodeLength} limit` } };
+    }
+
+    let py: PyodideApi;
+    try {
+      py = await this.ready();
+    } catch (err) {
+      return { refused: { code: "SANDBOX_UNAVAILABLE", message: `the analytical runtime did not start: ${String(err)}` } };
+    }
+
+    // §47 — the security gate runs per STEP, not per turn. A session does not
+    // buy the agent a pass on the second action.
+    const violations = await this.validate(code);
+    if (violations.length > 0) {
+      const syntax = violations.find((v) => v.code === "SYNTAX");
+      // A SyntaxError is an ordinary thing for an agent to write and an
+      // ordinary thing to fix, so it is an OBSERVATION (§1 lists it first).
+      // An unsafe capability request is not: it is refused, and §68 of Stage
+      // 27 says such code is never retried.
+      if (syntax) {
+        return {
+          status: "error",
+          errorType: "SyntaxError",
+          message: syntax.detail,
+          line: syntax.line,
+          failingLine: code.split(NEWLINE)[Math.max(0, (syntax.line ?? 1) - 1)]?.trim() ?? null,
+          stdout: "",
+          available: {},
+          prepared: PREPARED_NAMES,
+          durationMs: Date.now() - started,
+        };
+      }
+      return {
+        refused: {
+          code: "UNSAFE_CODE",
+          message: `the analysis code requests capabilities the sandbox denies: ${violations.map((v) => `${v.code}:${v.detail}`).join(", ")}`,
+          repairHint: unsafeRepairHint(violations),
+          ...(violations[0] ? { line: violations[0].line } : {}),
+        },
+      };
+    }
+
+    const interrupt = makeInterruptBuffer();
+    if (interrupt && py.setInterruptBuffer) py.setInterruptBuffer(interrupt);
+    const raise = (): void => {
+      if (interrupt) interrupt[0] = 2;
+    };
+    const timer = setTimeout(raise, this.#limits.executionTimeoutMs);
+    const onAbort = (): void => raise();
+    signal?.addEventListener("abort", onAbort);
+
+    try {
+      const payload = JSON.stringify(datasetPayload(dataset));
+      const raw = String(
+        py.runPython(`__sa_step(${JSON.stringify(sessionId)}, ${JSON.stringify(code)}, ${JSON.stringify(payload)}, ${this.#limits.maxResultRows})`),
+      );
+      const parsed = JSON.parse(raw) as Omit<StepObservation, "durationMs">;
+      return { ...parsed, durationMs: Date.now() - started };
+    } catch (err) {
+      // Reaching here means the step harness itself failed rather than the
+      // script — a timeout, a cancellation, or memory. Those are not things
+      // the agent can write its way out of, so they stay refusals.
+      const message = String(err);
+      if (signal?.aborted) return { refused: { code: "CANCELLED", message: "cancelled during execution" } };
+      if (/KeyboardInterrupt/.test(message)) return { refused: { code: "SANDBOX_TIMEOUT", message: `the step exceeded ${this.#limits.executionTimeoutMs} ms` } };
+      if (/MemoryError|out of memory|Cannot enlarge memory/i.test(message)) return { refused: { code: "SANDBOX_MEMORY_LIMIT", message: "the step ran out of memory" } };
+      return { refused: { code: "SANDBOX_RUNTIME_ERROR", message: pythonMessage(message) } };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      if (interrupt) interrupt[0] = 0;
+    }
+  }
+
+  /** §11/§12 — one bounded look at a variable, the table, or what was emitted. */
+  async look(sessionId: string, target: LookTarget, variable: string | null, dataset: SandboxDataset, limit = 10): Promise<LookObservation | { readonly refused: SandboxError }> {
+    let py: PyodideApi;
+    try {
+      py = await this.ready();
+    } catch (err) {
+      return { refused: { code: "SANDBOX_UNAVAILABLE", message: `the analytical runtime did not start: ${String(err)}` } };
+    }
+    try {
+      const payload = JSON.stringify(datasetPayload(dataset));
+      const raw = String(
+        py.runPython(`__sa_look(${JSON.stringify(sessionId)}, ${JSON.stringify(target)}, ${JSON.stringify(variable ?? "")}, ${JSON.stringify(payload)}, ${limit})`),
+      );
+      return JSON.parse(raw) as LookObservation;
+    } catch (err) {
+      return { refused: { code: "SANDBOX_RUNTIME_ERROR", message: pythonMessage(String(err)) } };
+    }
+  }
+
+  /** §13 — look at the table's structure before computing over it. */
+  async inspect(sessionId: string, dataset: SandboxDataset): Promise<TableInspection | { readonly refused: SandboxError }> {
+    let py: PyodideApi;
+    try {
+      py = await this.ready();
+    } catch (err) {
+      return { refused: { code: "SANDBOX_UNAVAILABLE", message: `the analytical runtime did not start: ${String(err)}` } };
+    }
+    try {
+      const payload = JSON.stringify(datasetPayload(dataset));
+      return JSON.parse(String(py.runPython(`__sa_inspect(${JSON.stringify(sessionId)}, ${JSON.stringify(payload)})`))) as TableInspection;
+    } catch (err) {
+      return { refused: { code: "SANDBOX_RUNTIME_ERROR", message: pythonMessage(String(err)) } };
+    }
+  }
+
+  /**
+   * Collect what the session emitted, through the SAME envelope path a
+   * one-shot analysis uses (§26) — the validators, the normalizer and the
+   * numeric verifier see exactly what they saw before.
+   */
+  async finish(sessionId: string, dataset: SandboxDataset): Promise<ExecuteOutcome> {
+    const started = Date.now();
+    const fail = (error: SandboxError): ExecuteOutcome => ({ ok: false, error, durationMs: Date.now() - started });
+    let py: PyodideApi;
+    try {
+      py = await this.ready();
+    } catch (err) {
+      return fail({ code: "SANDBOX_UNAVAILABLE", message: `the analytical runtime did not start: ${String(err)}` });
+    }
+    let raw: string;
+    try {
+      raw = String(py.runPython(`__sa_finish(${JSON.stringify(sessionId)}, ${this.#limits.maxResultRows})`));
+    } catch (err) {
+      return fail({ code: "INVALID_RESULT", message: pythonMessage(String(err)) });
+    }
+    if (raw.length > this.#limits.maxOutputBytes) {
+      return fail({ code: "INVALID_RESULT", message: `the result is ${raw.length} bytes, over the ${this.#limits.maxOutputBytes} limit` });
+    }
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return fail({ code: "INVALID_RESULT", message: "the session returned something that is not a structured result" });
+    }
+    return { ok: true, result: envelopeToResult(parsed, dataset, started), stdout: "", durationMs: Date.now() - started };
+  }
+
+  /**
+   * §15 — end the session. Safe to call twice, and on a session that never
+   * opened. Named to match `WorkerSandboxRuntime.endSession`, and kept
+   * distinct from the worker-level `dispose()` those runtimes also have.
+   */
+  async endSession(sessionId: string): Promise<void> {
+    try {
+      const py = await this.ready();
+      py.runPython(`__sa_dispose(${JSON.stringify(sessionId)})`);
+    } catch {
+      /* a runtime that never started has no session to end */
+    }
+  }
+
   async execute(code: string, dataset: SandboxDataset, signal?: AbortSignal): Promise<ExecuteOutcome> {
     const started = Date.now();
     const fail = (error: SandboxError): ExecuteOutcome => ({ ok: false, error, durationMs: Date.now() - started });
@@ -200,9 +455,9 @@ export class PyodideSandboxRuntime {
         return fail({ code: "SANDBOX_MEMORY_LIMIT", message: "the analysis ran out of memory" });
       }
       if (/ModuleNotFoundError|not available in the analytical sandbox/.test(message)) {
-        return fail({ code: "UNSUPPORTED_LIBRARY", message: pythonMessage(message), repairHint: pythonMessage(message) });
+        return fail({ code: "UNSUPPORTED_LIBRARY", message: pythonMessage(message), repairHint: repairHintFor(pythonMessage(message)) });
       }
-      return fail({ code: "SANDBOX_RUNTIME_ERROR", message: pythonMessage(message), repairHint: pythonMessage(message) });
+      return fail({ code: "SANDBOX_RUNTIME_ERROR", message: pythonMessage(message), repairHint: repairHintFor(pythonMessage(message)) });
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
@@ -220,31 +475,48 @@ export class PyodideSandboxRuntime {
       return fail({ code: "INVALID_RESULT", message: "the analysis returned something that is not a structured result" });
     }
 
-    const lineage: SourceLineage = {
-      datasetIds: [dataset.datasetId],
-      sheet: dataset.sheet,
-      sourceRange: dataset.sourceRange,
-      freshnessToken: dataset.freshnessToken,
-    };
-    const result = {
-      executionId: `exec_${started.toString(36)}`,
-      status: "ok" as const,
-      tables: [],
-      scalars: {},
-      series: [],
-      groups: [],
-      models: [],
-      diagnostics: {},
-      findingsCandidates: [],
-      warnings: [],
-      artifacts: [],
-      ...parsed,
-      sourceLineage: lineage,
-    } as unknown as SandboxResult;
-
+    const result = envelopeToResult(parsed, dataset, started);
     return { ok: true, result, stdout: String(parsed["stdout"] ?? ""), durationMs: Date.now() - started };
   }
 }
+
+/**
+ * The collected envelope as a `SandboxResult`.
+ *
+ * Shared by the one-shot `execute` and the iterative `finish` on purpose: §26
+ * requires an emitted result to go through the same normalization, validation,
+ * lineage and numeric verification as any other, and two constructors would be
+ * two chances for those to diverge.
+ */
+function envelopeToResult(parsed: Record<string, unknown>, dataset: SandboxDataset, started: number): SandboxResult {
+  const lineage: SourceLineage = {
+    datasetIds: [dataset.datasetId],
+    sheet: dataset.sheet,
+    sourceRange: dataset.sourceRange,
+    freshnessToken: dataset.freshnessToken,
+  };
+  return {
+    executionId: `exec_${started.toString(36)}`,
+    status: "ok" as const,
+    tables: [],
+    scalars: {},
+    series: [],
+    groups: [],
+    models: [],
+    diagnostics: {},
+    findingsCandidates: [],
+    warnings: [],
+    artifacts: [],
+    ...parsed,
+    sourceLineage: lineage,
+  } as unknown as SandboxResult;
+}
+
+/** §27 — the names that ALWAYS exist, repeated in every failure observation. */
+const PREPARED_NAMES: readonly string[] = ["data", "numeric_data", "entity_data", "X", "numeric_columns", "entity_columns", "table", "result"];
+
+/** A real newline, from its code point. */
+const NEWLINE = String.fromCharCode(10);
 
 /** §9 — exactly what crosses into Python. No addresses, no handles, no tokens. */
 function datasetPayload(dataset: SandboxDataset): Record<string, unknown> {
@@ -261,6 +533,13 @@ function datasetPayload(dataset: SandboxDataset): Record<string, unknown> {
   };
 }
 
+const DENIED_CAPABILITY_HINTS: readonly { readonly code: DeniedCapability; readonly sentence: string }[] = [
+  { code: "NETWORK", sentence: "The sandbox has no network; do not call out to a host or URL" },
+  { code: "PROCESS", sentence: "The sandbox has no operating system, process or interpreter access" },
+  { code: "FILESYSTEM", sentence: "The sandbox has no filesystem; do not open, read or write a path" },
+  { code: "BRIDGE", sentence: "The sandbox has no host bridge; the page and its APIs are unreachable" },
+];
+
 /** §66 — what the code generator is told, in terms it can act on. */
 function unsafeRepairHint(violations: readonly CodeViolation[]): string {
   const byCode = new Map<string, string[]>();
@@ -276,6 +555,10 @@ function unsafeRepairHint(violations: readonly CodeViolation[]): string {
   if (calls) parts.push(`These functions are not available: ${[...new Set(calls)].join(", ")}.`);
   const io = byCode.get("IO");
   if (io) parts.push(`Do not read or write files or URLs (${[...new Set(io)].join(", ")}); the data is already provided in \`data\`.`);
+  for (const capability of DENIED_CAPABILITY_HINTS) {
+    const denied = byCode.get(capability.code);
+    if (denied) parts.push(`${capability.sentence} (${[...new Set(denied)].join(", ")}). The data is already provided in \`data\`.`);
+  }
   const attrs = [...(byCode.get("ATTR") ?? []), ...(byCode.get("NAME") ?? [])];
   if (attrs.length > 0) parts.push(`Do not use introspection attributes: ${[...new Set(attrs)].join(", ")}.`);
   return parts.join(" ");

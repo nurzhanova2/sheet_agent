@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.8 §19/§43/§44 — one turn, one analytical owner, and the evidence.
-//
-// §44 wants a hard failure when both V2 and a legacy analytical route execute
-// the same user turn. That is only checkable if every analytical route SAYS it
-// ran, so each one calls `recordAnalyticalExecution` on entry — the V2 engine
-// and the five Stage 24/25 routes alike. The ledger then holds the answer to
-// "who analysed this turn?", which is also exactly what §19's debug surface
-// needs to show.
-//
-// Module state, deliberately: it is per-turn diagnostic bookkeeping for one
-// task pane, not application state, and threading it through twelve call sites
-// would be worse than a ring buffer nobody else reads.
-// ---------------------------------------------------------------------------
-
 import type { OwnershipReason, TurnOwner } from "./turn-owner.js";
 
 /** Every route that can produce an analytical answer. §3's audit, as a type. */

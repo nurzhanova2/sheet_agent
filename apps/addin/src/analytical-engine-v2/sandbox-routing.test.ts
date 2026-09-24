@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §4/§5/§13/§32/§34/§67/§83/§84 — routing, and what it refuses.
-//
-// The sandbox is driven by a scripted planner and a fake runtime here, because
-// what is under test is the ROUTE — which decisions are offered, which are
-// executed, and what happens when the analysis cannot be done. Real Pyodide
-// adds nine seconds and answers none of those questions; it is exercised in
-// `sandbox.test.ts`.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it, vi } from "vitest";
 import { runAnalyticalEngine } from "./engine.js";
 import { EMPTY_ANALYTICAL_STATE } from "./state/conversation-state.js";
@@ -293,7 +283,7 @@ describe("Stage 27 §38 — exploration is bounded", () => {
     expect(turn.kind).toBe("failed");
     if (turn.kind !== "failed") return;
     expect(turn.reason).toBe("analysis_unavailable");
-    expect(turn.detail).toMatch(/more than 2 separate analyses/);
+    expect(turn.detail).toMatch(/more than 3 separate analyses/);
   });
 });
 

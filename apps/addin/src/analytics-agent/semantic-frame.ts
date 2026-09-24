@@ -1,20 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 25.1/25.1.1 §10/§11 — a LIGHTWEIGHT request semantic frame.
-//
-// This is NOT another intent catalogue and performs NO numeric calculation.
-// It captures the few invariants the router/audit layer needs: how many
-// analytical clauses a sentence carries (§15–§17, no 2-clause ceiling), an
-// EXPLICIT candidate metric set (§17), a temporal-comparison mode (§6/§7),
-// a canonical operation kind Stage 24.x structurally cannot represent
-// (§4/§5), and whether the request is exploratory (§30).
-//
-// §53/§109 — these are STRUCTURAL detectors (an imperative/interrogative
-// trigger word; an explicit "A, B and C" phrase), never per-sentence
-// handlers: the same regex fires for any phrasing built the same way. §54–57
-// list MULTIPLE paraphrasings per operation kind and every one is covered by
-// the same pattern, not one branch per wording.
-// ---------------------------------------------------------------------------
-
 import { resolveMetricSet } from "../app/schema/analytical/metric-resolver.js";
 import type { MetricIndex } from "../app/schema/analytical/metric-resolver.js";
 

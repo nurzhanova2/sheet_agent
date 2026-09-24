@@ -1,19 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §36/§37/§38 — "Исследуй таблицу", and what must not happen.
-//
-// Three failures are possible here and all three are silent.
-//
-// The exploration does too little: the request is mapped to whichever tool is
-// nearest and the answer is a sum (§36).
-//
-// It does too much: it keeps looking until the turn dies (§38).
-//
-// Or it looks in six places, finds nothing in two of them, mentions the four
-// and leaves the reader unable to tell an examined-and-clean dimension from
-// one that was never run. That last one is the hardest to see and the easiest
-// to ship, so it gets the most tests.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it } from "vitest";
 import {
   dimensionFindingType,
@@ -135,13 +119,20 @@ describe("Stage 27 §38 — exploration is bounded by its plan", () => {
     expect(parsed.decision.exploration).toEqual(["data_quality", "changes", "volatility", "anomalies"]);
   });
 
-  it("refuses a plan over the ceiling", () => {
+  it("trims a plan over the ceiling instead of refusing it", () => {
+    // §38's bound is enforced — but by TRIMMING. Refusing was tried against the
+    // live model: the planner over-specified the other field on its next
+    // attempt, the two rejections together spent the per-turn correction
+    // budget, and both open-ended questions died having produced nothing. The
+    // dimensions listed FIRST are the ones the planner thought mattered most.
     const seven = [...EXPLORATION_DIMENSIONS].slice(0, 7);
     expect(seven).toHaveLength(7);
     const parsed = parsePlannerDecision(decision(seven));
-    expect(parsed.ok).toBe(false);
-    if (parsed.ok) return;
-    expect(parsed.problem.correction).toContain(String(EXPLORATION_BOUNDS.max));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.decision.kind !== "analyze") return;
+    expect(parsed.decision.exploration).toHaveLength(EXPLORATION_BOUNDS.max);
+    expect(parsed.decision.exploration).toEqual(seven.slice(0, EXPLORATION_BOUNDS.max));
+    expect(parsed.decision.explorationDropped).toEqual(seven.slice(EXPLORATION_BOUNDS.max));
   });
 
   it("refuses a dimension that is not one of the named ones", () => {
@@ -217,7 +208,7 @@ describe("Stage 27 §14/§37 — the exploration brief", () => {
   });
 
   it("requires a report even from a dimension that found nothing", () => {
-    expect(brief(["anomalies"])).toContain("A dimension you leave out reads as one you never ran.");
+    expect(brief(["anomalies"])).toContain("A dimension you leave out reads as");
   });
 
   it("prescribes the value names the report is built from", () => {

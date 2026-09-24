@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 25/25.1/25.1.1 §6/§33/§39 — the iterative analytical planner runtime.
-//
-//   text → tool schemas + compact table context → PLANNER (tool_call | clarify
-//   | final, one decision at a time) → deterministic tool → observation → …
-//   → numeric audit → operation/period/clause semantic audit → NARRATOR
-//   (separate pass, gated by the Stage 24.4 evidence check) → answer.
-//
-// Reuses `agent/agent-loop.ts` UNCHANGED — the analytical tool registry
-// (`tool-registry.ts`) never touches `ctx.deps`, so a no-op `AgentToolDeps`
-// satisfies the runtime's type contract without any change to it.
-// ---------------------------------------------------------------------------
-
 import { runAgentLoop } from "../agent/agent-loop.js";
 import type { AgentDecisionContext, AgentLanguage, AgentLoopState, AgentObservation, AgentResume, AgentStep, AgentToolDeps } from "../agent/types.js";
 import type { AnalysisGrids } from "../app/schema/matrix-analysis.js";

@@ -1,15 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.1 — typed conversational session memory.
-//
-// Assistant prose is NOT the canonical representation of a previous analytical
-// result. The structured objects below survive across turns so a follow-up can
-// reference "that table" / "those rows" / "the chart" without the model
-// re-deriving anything from markdown.
-//
-// Everything here is a bounded, serializable value type. No workbook dumps —
-// the row/column caps below mirror the existing selection read caps.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ChartData } from "../visualization/types.js";
 import type { VerifiedFact } from "../analysis/facts.js";

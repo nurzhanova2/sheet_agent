@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------------
-// Goal-relevant VerifiedFact projection (Stage 21.2.7).
-//
-// The deterministic engine internally derives MANY facts per metric (per-group
-// scalars, rankings, extremes, closest/farthest pairs, ratios, shares, "vs all
-// other combined"). The user-visible answer / fallback must show only the facts
-// attributable to a REQUESTED goal, a dependency it needs, or a requested chart —
-// never the full VerifiedFacts collection.
-//
-// This is a pure projection: it never re-reads the workbook, never calls the
-// engine, and NEVER weakens the numeric claim validator (which still runs against
-// the complete fact set). It also never renders a goal `description` — every
-// label is derived from the typed request.
-// ---------------------------------------------------------------------------
-
 import type { AnalysisGoal, CompoundGoalOutcome, RequirementSet } from "./compound.js";
 import {
   factMetricLabel,

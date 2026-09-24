@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 25.1 §24/§25/§29/§30 — the semantic execution audit.
-//
-// Numeric grounding (Stage 25's evidence gate) proves every number came from
-// a tool. It does NOT prove the numbers answer the question the user asked,
-// or that a change row's sign is internally consistent. These are pure,
-// independently-testable checks over already-computed structures — no new
-// calculation engine, no phrase-specific rule.
-// ---------------------------------------------------------------------------
-
 import type { AgentObservation, AgentStep } from "../agent/types.js";
 import type { CanonicalOperationKind, RankingBasisField, TemporalMode } from "./semantic-frame.js";
 

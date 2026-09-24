@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.3.2 — canonical grid for a grouped analytical result.
-//
-// A `group_by` engine outcome carries `groups` (key + metric map), NOT a
-// `columns`/`rows` grid. The conversational runtime persists the USER-VISIBLE
-// table as the canonical `ResultRef`, so a follow-up ("show the top 2 by Fact")
-// transforms THAT table — never the raw worksheet rows. This module rebuilds
-// the exact displayed grid from a `group_by` outcome + its request, using the
-// SAME metric-key rule as the engine (`analysis/engine.ts::groupBy`).
-// ---------------------------------------------------------------------------
-
 import type { AnalysisOutcome, AnalysisRequest, CellPrimitive, Expression, GroupMetric } from "./types.js";
 import { isAnalysisError } from "./types.js";
 

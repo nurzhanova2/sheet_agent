@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4 Increment 4.2 — the PRODUCTION AgentToolDeps.
-//
-// Wires the bounded agent tool registry to the real workbook using the existing
-// infrastructure ONLY: the Stage 23 Workbook Map + Resolver, `readAddressSnapshot`,
-// the analysis engine (`runAnalysisBatch`) and `resultToChartData`. No Office.js
-// import here — the injected `ExcelPort` is the single workbook-access boundary,
-// exactly as the fixture deps use it. Production and fixture tools obey the same
-// contracts.
-// ---------------------------------------------------------------------------
-
 import type { ExcelPort } from "@sheet-agent/application";
 import type {
   AgentLanguage,

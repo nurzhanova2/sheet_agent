@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.7 — AnalyticalIntent + TableSchema → AnalyticalPlan (§14).
-//
-// The plan is a typed DAG. The model may have supplied intent / subject text;
-// every coordinate, period and number below is resolved deterministically. A
-// missing / ambiguous entity clarifies — it never falls through to another
-// planner that could change semantics (§45).
-// ---------------------------------------------------------------------------
-
 import { isPercentNumberFormat } from "../excel-date.js";
 import { classifySemanticMetricClass, isPercentageLike, type MeasureKind } from "../measure-compatibility.js";
 import type { RowAxisMember, TableSchema } from "../schema-induction.js";

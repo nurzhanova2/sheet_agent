@@ -1,20 +1,15 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §12/§13/§34/§36/§37/§38/§44 — the iterative planner loop.
-//
-//   context → planner → tool call → validate → execute → result → planner → …
-//   → explicit completion → validated analysis
-//
-// The loop owns the budget, the per-turn result cache, the identical-failure
-// counter, and the completion validation. It has no fallback into any other
-// engine: the only exits are a validated completion, a clarification, or a
-// clean bounded failure (§36).
-// ---------------------------------------------------------------------------
-
 import type { AnalysisGrids } from "../../app/schema/matrix-analysis.js";
 import type { TableSchema } from "../../app/schema/schema-induction.js";
 import { buildPeriodIndex } from "../../app/schema/analytical/period-index.js";
 import { buildEngineContext } from "../context/build-context.js";
+import { capabilityFactsOf, type RuntimeCapabilities } from "../capability/capability-availability.js";
+import { selectCapabilities } from "../capability/capability-selection.js";
+import { buildToolContext } from "../capability/tool-context.js";
+import { buildToolCatalog } from "../context/build-context.js";
+import { findTool, V2_TOOLS } from "../tools/registry.js";
+import type { CapabilityId } from "../capability/capability-model.js";
 import { ResultStore } from "../results/result-store.js";
+import type { ExecutionProgress, TimingRecorder } from "../production/execution-progress.js";
 import type { AnalyticalConversationState } from "../state/conversation-state.js";
 import { buildToolEnv } from "../tools/registry.js";
 import { executeCall, validateCall } from "../tools/validator.js";
@@ -61,6 +56,8 @@ export interface PlannerRunParams {
   readonly analyze?: AnalysisRunner;
   /** Stage 27 §70 — cancels a running analysis. */
   readonly signal?: AbortSignal;
+  readonly onProgress?: ExecutionProgress;
+  readonly timings?: TimingRecorder;
 }
 
 /** Stage 27 §13 — what the engine does with an `analyze` decision. */
@@ -125,8 +122,29 @@ export function sanitizeRaw(raw: string): string {
   return flat.length > RAW_DECISION_LIMIT ? `${flat.slice(0, RAW_DECISION_LIMIT)}…[+${flat.length - RAW_DECISION_LIMIT} chars]` : flat;
 }
 
-function errorLine(tool: string, e: ToolError): string {
-  const candidates = e.candidates && e.candidates.length > 0 ? ` (valid: ${e.candidates.slice(0, 10).join(", ")})` : "";
+/**
+ * §15 — the error, with its candidates, and honest about the cut.
+ *
+ * The list used to be sliced to ten with no sign that it had been. On a table
+ * of twelve months that hid Ноя and Дек, and the live run showed what the
+ * planner does with a list that looks complete and is not: asked for December
+ * totals, it read the ten periods offered, concluded December was not in the
+ * table, and asked the user which period to use instead. A truncated list that
+ * reads as exhaustive is worse than a long one.
+ *
+ * Twenty-four covers every ordinary period vocabulary outright; past that the
+ * remainder is COUNTED, so "not in the list" and "not in the table" stay
+ * different statements.
+ */
+const CANDIDATE_LIMIT = 24;
+
+export function errorLine(tool: string, e: ToolError): string {
+  let candidates = "";
+  if (e.candidates && e.candidates.length > 0) {
+    const shown = e.candidates.slice(0, CANDIDATE_LIMIT);
+    const rest = e.candidates.length - shown.length;
+    candidates = ` (valid: ${shown.join(", ")}${rest > 0 ? `, and ${rest} more` : ""})`;
+  }
   return `${tool} → ${e.code}: ${e.message}${candidates}`;
 }
 
@@ -215,6 +233,15 @@ function samePlan(a: readonly PlannedOutput[], aPrimary: string | undefined, b: 
   return a.length === b.length && aPrimary === bPrimary;
 }
 
+export function finalCallRefusal(outputs: readonly PlannedOutput[], result: EngineResult): string | null {
+  if (outputs.length > 1) {
+    return `you declared ${outputs.length} outputs, so this turn ends with a complete decision that binds each one — not with a final tool call`;
+  }
+  const structural = completionProblem(result);
+  if (structural) return `${structural}, so it cannot be the principal answer — keep working`;
+  return null;
+}
+
 export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerRun> {
   const bounds = params.bounds ?? ENGINE_BOUNDS;
   const periodIndex = buildPeriodIndex(params.schema, params.grids);
@@ -229,7 +256,21 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
     store.seed(params.resume.results);
   }
   const env = buildToolEnv(params.schema, params.grids, store, params.state);
-  const context = buildEngineContext(params.schema, params.grids, periodIndex, params.state);
+  const reached = new Set<CapabilityId>();
+  const calledTools = new Set<string>();
+  const runtime: Partial<RuntimeCapabilities> = { sandbox: params.analyze !== undefined };
+  const factsNow = () => capabilityFactsOf({ schema: params.schema, periodIndex, state: params.state, runtime, resultCount: store.all().length });
+  const contextNow = () => {
+    const facts = factsNow();
+    return buildToolContext({ facts, selection: selectCapabilities({ facts, reached: [...reached] }) });
+  };
+  let toolContext = contextNow();
+  const firstToolContext = toolContext;
+  const promptCharsByRound: number[] = [];
+  const toolContextCharsByRound: number[] = [];
+  let capabilityUnavailableErrors = 0;
+  let unknownToolErrors = 0;
+  const context = buildEngineContext(params.schema, params.grids, periodIndex, params.state, toolContext.text);
   const trace = new TraceBuilder(params.turnId, params.request, params.schema.sourceRange, params.schema.sourceVersion, params.state);
 
   const errors: string[] = [...(params.notes ?? [])];
@@ -246,6 +287,8 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
     completionRetries: number;
     primaryCorrections: number;
     analyses: number;
+    finalToolCalls: number;
+    finalToolCallsHonoured: number;
   } = {
     plannerRounds: 0,
     toolCalls: 0,
@@ -258,6 +301,8 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
     // Stage 27 §83 — measured so the deterministic route can be shown to stay
     // dominant for the operations it already covers.
     analyses: 0,
+    finalToolCalls: 0,
+    finalToolCallsHonoured: 0,
   };
 
   // Stage 26.4 §10/§11 — the planner's own declaration of what it owes this
@@ -274,7 +319,36 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
   let analyses = 0;
 
   const finish = (outcome: PlannerRunOutcome, kind: AnalyticalTraceV2["outcome"]): PlannerRun => {
-    trace.set({ budget: { ...budget }, serializationClasses: [...serialization] });
+    const finalContext = toolContext;
+    trace.set({
+      budget: { ...budget },
+      serializationClasses: [...serialization],
+      toolContext: {
+        availableCapabilities: [...firstToolContext.availableCapabilities],
+        selectedCapabilities: [...firstToolContext.selectedCapabilities],
+        availableCapabilityCount: firstToolContext.availableCapabilities.length,
+        selectedCapabilityCount: firstToolContext.selectedCapabilities.length,
+        registryToolCount: V2_TOOLS.length,
+        availableToolCount: firstToolContext.exposedTools.length,
+        initiallyExposedToolCount: firstToolContext.exposedTools.length,
+        initiallyLoadedToolCount: firstToolContext.loadedTools.length,
+        finalExposedToolCount: finalContext.exposedTools.length,
+        finalLoadedToolCount: finalContext.loadedTools.length,
+        calledToolCount: calledTools.size,
+        toolDiscoveryRequests: 0,
+        capabilityUnavailableErrors,
+        unknownToolErrors,
+        callToolWithoutInvoker: 0,
+        executeCodeWithoutRuntime: 0,
+        mutationCapabilityOffered: firstToolContext.availableCapabilities.filter((id) => id === "mutation" || id === "visualization").length,
+        toolSchemaLeaks: firstToolContext.leaks.length + finalContext.leaks.length,
+        initialPromptChars: promptCharsByRound[0] ?? 0,
+        initialToolContextChars: firstToolContext.text.length,
+        fullCatalogChars: buildToolCatalog().length,
+        promptCharsByRound: [...promptCharsByRound],
+        toolContextCharsByRound: [...toolContextCharsByRound],
+      },
+    });
     if (outcome.kind === "failed") trace.set({ failureReason: `${outcome.reason}: ${outcome.detail}` });
     return {
       outcome,
@@ -290,9 +364,10 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
 
   for (let round = 1; round <= bounds.maxPlannerRounds; round += 1) {
     budget.plannerRounds = round;
+    toolContext = contextNow();
     const messages = buildPlannerMessages({
       request: params.request,
-      context,
+      context: { ...context, toolCatalog: toolContext.text },
       results: store.all(),
       declaredOutputs,
       ...(declaredPrimaryOutputId !== undefined ? { declaredPrimaryOutputId } : {}),
@@ -303,14 +378,21 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
       round,
       remainingRounds: bounds.maxPlannerRounds - round,
       sandboxAvailable: params.analyze !== undefined,
+      exposedTools: toolContext.exposedTools,
     });
+    promptCharsByRound.push(messages.reduce((n, m) => n + m.content.length, 0));
+    toolContextCharsByRound.push(toolContext.text.length);
 
     let raw: unknown;
+    params.onProgress?.({ kind: "planning" });
+    const decisionStarted = Date.now();
     try {
       raw = await params.decide(messages);
     } catch (error) {
+      params.timings?.addPlanner(Date.now() - decisionStarted);
       return fail("model_error", error instanceof Error ? error.message : String(error));
     }
+    params.timings?.addPlanner(Date.now() - decisionStarted);
 
     const parsed = parsePlannerDecision(raw);
     // §16 — recorded for EVERY round, not only the refused ones: counting only
@@ -447,16 +529,51 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
       }
       analyses += 1;
       if (analyses > bounds.maxAnalyses) {
-        return fail("analysis_unavailable", `the turn asked for more than ${bounds.maxAnalyses} separate analyses`);
+        // §38/§67 — the budget is spent. What happens next depends entirely on
+        // whether anything was COMPUTED.
+        //
+        // With results in hand, killing the turn throws away work that answers
+        // the question. The live run did exactly that on "исследуй таблицу":
+        // three analyses ran, all three succeeded, the planner asked for a
+        // fourth, and the user got nothing. Telling it to stop and complete is
+        // not a §5 substitution — the results are the ones it asked for, for
+        // the objective it stated; only the request for MORE is refused.
+        //
+        // With nothing computed there is nothing to complete on, and the turn
+        // ends saying so, which is what §67 requires.
+        //
+        // Bounded twice, like every other nudge here: a planner that keeps
+        // asking after being told cannot spend the round budget arguing.
+        if (store.ids().length === 0 || analyses > bounds.maxAnalyses + 2) {
+          return fail("analysis_unavailable", `the turn asked for more than ${bounds.maxAnalyses} separate analyses`);
+        }
+        errors.push(
+          `You have used all ${bounds.maxAnalyses} analyses for this turn. No further analyze decision will run. ` +
+            "Complete now with the results you already have, and say in the answer what you did not get to examine.",
+        );
+        continue;
       }
       const run = await params.analyze(decision, store, params.signal);
       budget.analyses = analyses;
       if (!run.ok) {
+        // Stage 27.2A §23/§24 — an analysis that asked a QUESTION did not fail.
+        //
+        // The iterative loop can emit CLARIFY when the request is genuinely
+        // ambiguous, and that has to reach the user as a question. It used to
+        // arrive here as an ordinary analysis failure, so «за какой период?»
+        // was shown as "анализ недоступен" — the one response that guarantees
+        // the user cannot answer it. It exits through the SAME clarification
+        // path a planner question does (§24: one clarification lifecycle, not
+        // two), so the suspended state and the resume both already work.
+        if (run.code === "CLARIFICATION_REQUIRED") {
+          trace.set({ analysisFailure: { code: run.code, message: run.message, attempts: run.attempts } });
+          return finish({ kind: "clarify", question: run.message, options: [] }, "clarify");
+        }
         // §67 — the requested analysis could not be completed. The turn ends
         // saying so. It does NOT continue with the deterministic tools and
         // present their output as the answer to a question they cannot
         // answer, which is precisely the substitution §5 forbids.
-        trace.set({ analysisFailure: { code: run.code, message: run.message, attempts: run.attempts } });
+        trace.set({ analysisFailure: { code: run.code, message: run.message, attempts: run.attempts, objective: decision.objective } });
         return fail("analysis_unavailable", run.message);
       }
       trace.round({ round, decision, toolResultId: run.primary.resultId });
@@ -466,7 +583,19 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
 
     // tool_call
     if (budget.toolCalls >= bounds.maxToolCalls) return fail("tool_calls", `exceeded ${bounds.maxToolCalls} tool calls`);
-    const validated = validateCall(decision, env);
+    const exposure = { exposed: new Set(toolContext.exposedTools), availableCapabilities: toolContext.availableCapabilities };
+    const validated = validateCall(decision, env, exposure);
+    if (!validated.ok && validated.error.ok === false) {
+      if (validated.error.error.code === "CAPABILITY_UNAVAILABLE") capabilityUnavailableErrors += 1;
+      if (validated.error.error.code === "UNKNOWN_TOOL") unknownToolErrors += 1;
+    }
+    {
+      const spec = findTool(decision.tool);
+      if (spec && exposure.exposed.has(decision.tool)) {
+        reached.add(spec.capability);
+        calledTools.add(decision.tool);
+      }
+    }
     if (!validated.ok) {
       const e = validated.error.ok === false ? validated.error.error : null;
       trace.round({ round, decision, ...(e ? { toolError: e } : {}) });
@@ -482,7 +611,10 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
     if (willRead && budget.workbookReads >= bounds.maxWorkbookReads) return fail("workbook_reads", `exceeded ${bounds.maxWorkbookReads} workbook reads`);
 
     budget.toolCalls += 1;
+    params.onProgress?.({ kind: "tool_call", tool: decision.tool });
+    const toolStarted = Date.now();
     const { outcome, cached } = executeCall(validated.call, env, cache);
+    params.timings?.addTool(Date.now() - toolStarted);
     if (cached) budget.cacheHits += 1;
     else if (validated.call.spec.reads) budget.workbookReads += 1;
 
@@ -496,6 +628,20 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
       continue;
     }
     trace.round({ round, decision, toolResultId: outcome.result.resultId, cached });
+
+    if (decision.final === true) {
+      budget.finalToolCalls += 1;
+      const refusal = finalCallRefusal(declaredOutputs, outcome.result);
+      if (refusal === null) {
+        budget.finalToolCallsHonoured += 1;
+        trace.set({
+          completion: { primaryResultRef: outcome.result.resultId, supportingResultRefs: [] },
+          completePrimaryResultRef: outcome.result.resultId,
+        });
+        return finish({ kind: "complete", primary: outcome.result, supporting: [], answerStyle: "concise" }, "complete");
+      }
+      errors.push(`tool_call final → ${refusal}`);
+    }
   }
 
   return fail("planner_rounds", `no completion within ${bounds.maxPlannerRounds} rounds`);

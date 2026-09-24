@@ -1,16 +1,3 @@
-// Stage 25.1.3c — resolved pronoun binding into the compound planner.
-// Integration through useAgent().submit(): real routing (runAnalyticalRoute
-// -> runStage25Planner), real tool composition, real SessionMemory — only
-// decideAgentStep/narrate are scripted, matching the 25.1.1-25.1.3b harnesses.
-//
-// The turn-4 decide function below deliberately does NOT call
-// reference.previous_metric_focus proactively (that would pass even against
-// the pre-fix code, since sessionMemory's lastMetricFocusRef already carried
-// the right value independently of subjectOverride threading). Instead it
-// reads the metric name straight out of the RESOLVED SUBJECT line in
-// workbookContext -- exactly what the new planner-prompt guidance tells a
-// real model to do -- which only exists if runAnalyticalRoute's subjectOverride
-// actually survived the legacy-compiler-decline -> runStage25Planner handoff.
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { CellValue, ExcelMutationPort, ExcelPort } from "@sheet-agent/application";

@@ -124,6 +124,7 @@ export function App({
           onReject={agent.reject}
           language={agent.language}
           onInsertChart={agent.insertChart}
+          turnStartedAt={agent.turnStartedAt}
         />
       )}
 

@@ -1,28 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §39/§40/§58 — turning executed results into stated observations.
-//
-// This is the deterministic half of the Insight Engine. It reads an
-// `EngineResult`'s TYPE and FIELD NAMES — both fixed by the Stage 26 tool
-// contract, never by prose — and emits the observations those rows support,
-// with their units resolved (§52/§53), their materiality measured against the
-// rest of the same result (§39), and their limitations attached (§23/§25).
-//
-// Two rules shape everything here.
-//
-// First, no fabricated thresholds (§39). Nothing in this file knows that 5% is
-// a big move or that three periods make a trend in a particular industry. Every
-// materiality signal is relative to the data in front of it: rank among the
-// peers computed in the same result, share of that result's total movement,
-// how far a value sits from its own set's spread. That keeps the layer honest
-// across a factory table and a bank balance sheet without either one having
-// been anticipated.
-//
-// Second, a finding is entitled ONLY to numbers it actually holds. The
-// narrator's accept-list is built from these values (§56), so anything not
-// extracted here cannot legally appear in the answer — which is what stops a
-// model from helpfully computing a share nobody verified.
-// ---------------------------------------------------------------------------
-
 import { dimensionFindingType, readDimension } from "../sandbox/exploration.js";
 import type { CellValue } from "@sheet-agent/application";
 import type { NumberLocale } from "../../analysis/format-number.js";
@@ -33,6 +8,7 @@ import { metricFieldIndex } from "../results/result-store.js";
 import type { EngineResult } from "../types.js";
 import { humanizeValue } from "./humanize.js";
 import { displayUnit, metricSemanticClass, type DisplayUnit, type UnitContext } from "./measure-semantics.js";
+import { buildFindingSubject, entityAxisOf, type EntityAxis, type FindingSubject, type PeriodRange } from "./finding-subject.js";
 import { statementFor } from "./statement.js";
 import {
   findingValue,
@@ -58,10 +34,28 @@ export interface ExtractContext {
   readonly schema?: TableSchema;
   readonly grids?: AnalysisGrids;
   readonly locale: NumberLocale;
+  readonly axis?: EntityAxis;
 }
 
 function unitContext(ctx: ExtractContext): UnitContext | null {
   return ctx.schema && ctx.grids ? { schema: ctx.schema, grids: ctx.grids } : null;
+}
+
+function axisOf(ctx: ExtractContext): EntityAxis {
+  return ctx.axis ?? entityAxisOf(ctx.schema, ctx.grids);
+}
+
+interface SubjectTiming {
+  readonly period?: string;
+  readonly periodRange?: PeriodRange;
+}
+
+function entitySubject(label: string, axis: EntityAxis, timing: SubjectTiming = {}): FindingSubject | null {
+  return buildFindingSubject({ scope: "entity", label, axis, ...timing });
+}
+
+function withAxis(ctx: ExtractContext): ExtractContext {
+  return ctx.axis ? ctx : { ...ctx, axis: entityAxisOf(ctx.schema, ctx.grids) };
 }
 
 /** How many observations one result may contribute before it is summarised. */
@@ -153,12 +147,21 @@ interface RowFinding {
   /** Magnitude used to decide which rows are worth stating. */
   readonly weight: number;
   readonly detail?: Readonly<Record<string, unknown>>;
+  readonly subjectRef?: FindingSubject | null;
 }
 
 /**
  * A `comparison` / `event` result: start, end, absolute and relative change per
  * metric. The richest and most common shape, and the one §41's example is.
  */
+export function periodLabelOf(result: EngineResult, which: 0 | 1): string {
+  const canonicals = result.periodCanonicals ?? [];
+  if (canonicals.length !== 2) return "";
+  const labelled = result.metadata[which === 0 ? "startLabel" : "endLabel"];
+  if (typeof labelled === "string" && labelled.trim() !== "") return labelled.trim();
+  return canonicals[which] ?? "";
+}
+
 function changeRows(result: EngineResult, ctx: ExtractContext): readonly RowFinding[] {
   const mi = metricFieldIndex(result);
   const iStart = idx(result, "startValue");
@@ -183,6 +186,11 @@ function changeRows(result: EngineResult, ctx: ExtractContext): readonly RowFind
   const order = relatives.map((v, i) => [v, i] as const).sort((a, b) => b[0] - a[0]);
   const rankOf = new Map<number, number>(order.map(([, i], pos) => [i, pos + 1]));
 
+  const axis = axisOf(ctx);
+
+  const spanStart = periodLabelOf(result, 0);
+  const spanEnd = periodLabelOf(result, 1);
+
   return result.rows.map((row, rowIndex) => {
     const subject = textAt(row, mi);
     const start = numberAt(row, iStart);
@@ -193,8 +201,8 @@ function changeRows(result: EngineResult, ctx: ExtractContext): readonly RowFind
     const deltaUnit = displayUnit(unitContext(ctx), "absoluteChange", subject);
 
     const values: FindingValue[] = [];
-    if (start !== null) values.push(findingValue("startValue", start, levelUnit, ctx.locale, { at: textAt(row, iStartLabel) }));
-    if (end !== null) values.push(findingValue("endValue", end, levelUnit, ctx.locale, { at: textAt(row, iEndLabel) }));
+    if (start !== null) values.push(findingValue("startValue", start, levelUnit, ctx.locale, { at: textAt(row, iStartLabel) || spanStart }));
+    if (end !== null) values.push(findingValue("endValue", end, levelUnit, ctx.locale, { at: textAt(row, iEndLabel) || spanEnd }));
     if (abs !== null) values.push(findingValue("absoluteChange", abs, deltaUnit, ctx.locale, { signed: true }));
     if (pct !== null) values.push(findingValue("percentageChange", pct, { kind: "percent_fraction" }, ctx.locale, { signed: true }));
 
@@ -221,6 +229,7 @@ function changeRows(result: EngineResult, ctx: ExtractContext): readonly RowFind
 
     return {
       subject,
+      subjectRef: entitySubject(subject, axis, { periodRange: { start: textAt(row, iStartLabel), end: textAt(row, iEndLabel) } }),
       values,
       direction: directionOf(abs),
       materiality,
@@ -238,6 +247,7 @@ function seriesFindings(result: EngineResult, ctx: ExtractContext): readonly Row
   const iLabel = idx(result, "periodLabel");
   if (iValue < 0 || result.rows.length === 0) return [];
   const subject = textAt(result.rows[0] ?? [], mi);
+  const axis = axisOf(ctx);
   const unit = displayUnit(unitContext(ctx), "value", subject);
   const points = result.rows
     .map((r) => ({ label: textAt(r, iLabel), value: numberAt(r, iValue) }))
@@ -254,6 +264,12 @@ function seriesFindings(result: EngineResult, ctx: ExtractContext): readonly Row
   const values: FindingValue[] = [
     findingValue("startValue", first.value, unit, ctx.locale, { at: first.label }),
     findingValue("endValue", last.value, unit, ctx.locale, { at: last.label }),
+    // §31/§56 — the SIZE of the move, stated by the engine rather than left for
+    // the narrator to derive. Without it the narrator can see 100 and 131 and
+    // cannot say "+31" without subtracting, which the fact gate correctly
+    // refuses; the live run lost two otherwise-good answers to exactly that,
+    // and the fix is to supply the figure, not to loosen the gate.
+    findingValue("absoluteChange", delta, unit, ctx.locale, { signed: true }),
     findingValue("min", lo.value, unit, ctx.locale, { at: lo.label }),
     findingValue("max", hi.value, unit, ctx.locale, { at: hi.label }),
   ];
@@ -261,10 +277,39 @@ function seriesFindings(result: EngineResult, ctx: ExtractContext): readonly Row
 
   const caveats: Caveat[] = [];
   if (points.length < 3) caveats.push({ code: "few_observations", detail: String(points.length) });
+  // §39 — the same low-base test `changeRows` applies, measured here against
+  // the series' own typical level: a rise from 2 to 40 is a different claim
+  // from a rise of the same percentage from 2000 to 40000.
+  const lowBase = lowBaseCaveat(first.value, median(points.map((p) => Math.abs(p.value))), relative);
+  if (lowBase) caveats.push({ code: "low_base_percentage", detail: humanizeValue(first.value, unit, ctx.locale) });
+
+  // §23/§25 — the distinction the whole pipeline preserves, finally said out
+  // loud. `zero_not_absence` and `missing_excluded` were in the caveat
+  // vocabulary from the start and nothing emitted either of them, so a series
+  // holding a recorded 0 and a series holding an empty cell narrated
+  // identically — which is the one outcome §25 exists to prevent. A reader
+  // asking "были месяцы без продаж?" is asking precisely which of the two it
+  // is, and now the answer carries it.
+  //
+  // Tied to whether the zero is part of what the sentence SAYS, not merely to
+  // whether the series contains one. A zero that is the low point or an
+  // endpoint gets quoted — «Минимум — 0 (Фев)» — and that figure is the one a
+  // reader will take as "не продавали"; a zero sitting unremarked in the
+  // middle of a signed series is not worth a caveat, and attaching one to
+  // every series that happens to contain a zero would make the qualification
+  // ordinary, which is the same as making it invisible.
+  const recordedZeros = points.filter((p) => p.value === 0);
+  const zeroIsQuoted = lo.value === 0 || first.value === 0 || last.value === 0;
+  if (recordedZeros.length > 0 && zeroIsQuoted) {
+    caveats.push({ code: "zero_not_absence", detail: recordedZeros.map((p) => p.label).filter((l) => l !== "").join(", ") || String(recordedZeros.length) });
+  }
+  const skipped = result.rows.length - points.length;
+  if (skipped > 0) caveats.push({ code: "missing_excluded", detail: String(skipped) });
 
   return [
     {
       subject,
+      subjectRef: entitySubject(subject, axis, { periodRange: { start: first.label, end: last.label } }),
       values,
       direction: directionOf(delta),
       materiality: [{ kind: "persistence", periods: points.length, outOf: points.length }],
@@ -286,6 +331,9 @@ function scoreRows(result: EngineResult, ctx: ExtractContext, scoreField: string
   const order = scores.map((v, i) => [v, i] as const).sort((a, b) => b[0] - a[0]);
   const rankOf = new Map<number, number>(order.map(([, i], pos) => [i, pos + 1]));
 
+  const axis = axisOf(ctx);
+  const volatilityDetails = result.metadata["volatilityDetails"] as Readonly<Record<string, unknown>> | undefined;
+
   return result.rows.map((row, rowIndex) => {
     const subject = textAt(row, mi);
     const score = numberAt(row, iScore);
@@ -296,6 +344,7 @@ function scoreRows(result: EngineResult, ctx: ExtractContext, scoreField: string
     }
     return {
       subject,
+      subjectRef: entitySubject(subject, axis),
       values: score === null ? [] : [findingValue(scoreField, score, { kind: "score" }, ctx.locale)],
       direction: "none",
       materiality,
@@ -303,6 +352,7 @@ function scoreRows(result: EngineResult, ctx: ExtractContext, scoreField: string
       caveats: [],
       // §51 — a score is only worth stating when it stands out from its peers.
       weight: score === null || med <= 0 ? 0 : Math.abs(score) / med,
+      ...(volatilityDetails?.[subject] && typeof volatilityDetails[subject] === "object" ? { detail: volatilityDetails[subject] as Readonly<Record<string, unknown>> } : {}),
     };
   });
 }
@@ -316,6 +366,8 @@ function trendRows(result: EngineResult, ctx: ExtractContext): readonly RowFindi
   const iR2 = idx(result, "r2");
   const iPeriods = idx(result, "periods");
   if (iDir < 0) return [];
+
+  const axis = axisOf(ctx);
 
   return result.rows.map((row) => {
     const subject = textAt(row, mi);
@@ -334,6 +386,7 @@ function trendRows(result: EngineResult, ctx: ExtractContext): readonly RowFindi
 
     return {
       subject,
+      subjectRef: entitySubject(subject, axis),
       values,
       direction: dirText === "increasing" ? "up" : dirText === "decreasing" ? "down" : "flat",
       materiality: r2 === null ? [] : [{ kind: "dispersion", score: r2, basis: "r2" }],
@@ -353,6 +406,8 @@ function monotonicityRows(result: EngineResult, ctx: ExtractContext): readonly R
   const iPeriods = idx(result, "periods");
   if (iUp < 0 && iDown < 0) return [];
 
+  const axis = axisOf(ctx);
+
   return result.rows.map((row) => {
     const subject = textAt(row, mi);
     const up = numberAt(row, iUp) ?? 0;
@@ -361,6 +416,7 @@ function monotonicityRows(result: EngineResult, ctx: ExtractContext): readonly R
     const run = Math.max(up, down);
     return {
       subject,
+      subjectRef: entitySubject(subject, axis),
       values: [
         findingValue("runLength", run, { kind: "count" }, ctx.locale),
         ...(periods > 0 ? [findingValue("periods", periods, { kind: "count" }, ctx.locale)] : []),
@@ -379,11 +435,13 @@ function reversalRows(result: EngineResult, ctx: ExtractContext): readonly RowFi
   const mi = metricFieldIndex(result);
   const iCount = idx(result, "directionChangeCount");
   if (iCount < 0) return [];
+  const axis = axisOf(ctx);
   return result.rows.map((row) => {
     const subject = textAt(row, mi);
     const count = numberAt(row, iCount) ?? 0;
     return {
       subject,
+      subjectRef: entitySubject(subject, axis),
       values: [findingValue("directionChangeCount", count, { kind: "count" }, ctx.locale)],
       direction: count > 0 ? "mixed" : "flat",
       materiality: [{ kind: "dispersion", score: count, basis: "direction_changes" }],
@@ -417,6 +475,7 @@ function overviewRows(result: EngineResult, ctx: ExtractContext): readonly RowFi
   return [
     {
       subject: read("sheet"),
+      subjectRef: { scope: "table" as const },
       values,
       direction: "none",
       materiality: [],
@@ -443,6 +502,7 @@ function overviewRows(result: EngineResult, ctx: ExtractContext): readonly RowFi
 function sandboxRows(result: EngineResult, ctx: ExtractContext): readonly RowFinding[] {
   const mi = metricFieldIndex(result);
   const iGroup = idx(result, "group");
+  const axis = axisOf(ctx);
 
   if (iGroup >= 0) {
     // One finding per GROUP, not per member: "there are two segments" is the
@@ -478,6 +538,7 @@ function sandboxRows(result: EngineResult, ctx: ExtractContext): readonly RowFin
       ];
       return {
         subject: label,
+        subjectRef: buildFindingSubject({ scope: "group", label, members, axis }),
         values,
         direction: "none" as const,
         materiality: [{ kind: "share_of_movement", fraction: total > 0 ? members.length / total : 0, of: "the analysed set" }],
@@ -502,8 +563,10 @@ function sandboxRows(result: EngineResult, ctx: ExtractContext): readonly RowFin
 
   return result.rows.map((row, rowIndex) => {
     const value = numberAt(row, iValue);
+    const subject = textAt(row, mi);
     return {
-      subject: textAt(row, mi),
+      subject,
+      subjectRef: entitySubject(subject, axis),
       values: value === null ? [] : [findingValue(field, value, { kind: "score" }, ctx.locale)],
       direction: "none" as const,
       materiality:
@@ -526,13 +589,16 @@ function valueRows(result: EngineResult, ctx: ExtractContext): readonly RowFindi
   const iValue = idx(result, "value");
   const iLabel = idx(result, "periodLabel");
   if (iValue < 0) return [];
+  const axis = axisOf(ctx);
   return result.rows.map((row) => {
     const subject = textAt(row, mi);
     const value = numberAt(row, iValue);
-    if (value === null) return { subject, values: [], direction: "none" as const, materiality: [], confidence: [], caveats: [], weight: 0 };
+    const subjectRef = entitySubject(subject, axis, { period: textAt(row, iLabel) });
+    if (value === null) return { subject, subjectRef, values: [], direction: "none" as const, materiality: [], confidence: [], caveats: [], weight: 0 };
     const unit = displayUnit(unitContext(ctx), "value", subject);
     return {
       subject,
+      subjectRef,
       values: [findingValue("value", value, unit, ctx.locale, { at: textAt(row, iLabel) })],
       direction: "none" as const,
       materiality: [{ kind: "magnitude", value, unit }],
@@ -556,6 +622,12 @@ function findingTypeOf(result: EngineResult): FindingType {
     if (dimension) return dimensionFindingType(dimension);
     if (result.metadata["outputName"] === "groups") return "cluster";
     if (result.type === "series") return "trend";
+    // A distribution needs something to be distributed. One row is a single
+    // measurement, and the live run narrated one as «Значения «…» распределены
+    // довольно ровно» — a sentence about the shape of a set of size one. The
+    // sandbox's generic fallback stays `distribution`, but only once there is
+    // a spread to describe.
+    if (result.rows.length < 3) return "value";
     return "distribution";
   }
   switch (result.type) {
@@ -615,7 +687,16 @@ function rowsFor(result: EngineResult, ctx: ExtractContext): readonly RowFinding
   if (has("directionChangeCount")) return reversalRows(result, ctx);
   if (has("score")) return scoreRows(result, ctx, "score");
   if (has("value")) return valueRows(result, ctx);
-  return [];
+  // The LAST RESORT, and it must not be silence.
+  //
+  // Returning [] here means the narrator is handed a result and nothing to say
+  // about it, which the live run turned into a confident falsehood: `set.top`
+  // over a sandbox correlation table has columns nothing above recognises, so
+  // no finding was drawn, and the answer declared the table empty. A result
+  // with a subject column and a number in it always supports the plainest
+  // observation there is — this subject, this measurement — and `sandboxRows`
+  // already knows how to state exactly that.
+  return sandboxRows(result, ctx);
 }
 
 export interface ExtractOptions {
@@ -639,7 +720,9 @@ export function resetFindingIds(): void {
  * becomes a ranking, because twenty change findings is twenty raw rows wearing
  * a different coat (§43).
  */
-export function extractFindings(result: EngineResult, ctx: ExtractContext, opts: ExtractOptions = {}): readonly VerifiedFinding[] {
+export function extractFindings(result: EngineResult, rawContext: ExtractContext, opts: ExtractOptions = {}): readonly VerifiedFinding[] {
+  const ctx = withAxis(rawContext);
+  const axis = axisOf(ctx);
   const type = findingTypeOf(result);
   const provenance = {
     resultRef: result.resultId,
@@ -655,6 +738,7 @@ export function extractFindings(result: EngineResult, ctx: ExtractContext, opts:
       finalize({
         findingType: "empty_set",
         subject: "",
+        subjectRef: { scope: "table" },
         direction: "none",
         values: [],
         materiality: [],
@@ -680,6 +764,7 @@ export function extractFindings(result: EngineResult, ctx: ExtractContext, opts:
       {
         findingType: type,
         subject: row.subject,
+        ...(row.subjectRef ? { subjectRef: row.subjectRef } : {}),
         direction: row.direction,
         values: row.values,
         materiality: row.materiality,
@@ -707,6 +792,10 @@ export function extractFindings(result: EngineResult, ctx: ExtractContext, opts:
         {
           findingType: "ranking",
           subject: "",
+          ...(() => {
+            const set = buildFindingSubject({ scope: "group", members: rows.map((r) => r.subject), axis });
+            return set ? { subjectRef: set } : {};
+          })(),
           counterparts: rows.map((r) => r.subject),
           direction: "mixed",
           values: [],
@@ -741,9 +830,10 @@ function finalize(
 export function buildFindings(
   primary: EngineResult,
   supporting: readonly EngineResult[],
-  ctx: ExtractContext,
+  rawContext: ExtractContext,
   maxTotal = 8,
 ): readonly VerifiedFinding[] {
+  const ctx = withAxis(rawContext);
   const out: VerifiedFinding[] = [...extractFindings(primary, ctx, { role: "primary" })];
   const seen = new Set(out.map((f) => `${f.findingType}:${f.subject}`));
   for (const result of supporting) {

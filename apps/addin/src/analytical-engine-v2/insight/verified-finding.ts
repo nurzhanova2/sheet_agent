@@ -1,40 +1,8 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §40/§41 — the Insight layer: what was OBSERVED, as a value.
-//
-// §41 states the gap precisely. The engine can already produce
-//
-//     Активы | 17941.741778 | 19871.544896 | 1929.803119 | 10.76%
-//
-// which is correct and unreadable, and the thing a person wants is
-//
-//     "Активы с начала года выросли на 10,8% — с 17 941,7 до 19 871,5.
-//      Темп роста ниже прошлогоднего: тогда прирост был 16,4%."
-//
-// The distance between those two is not a prompt-engineering problem. A result
-// table says WHAT WAS COMPUTED; a sentence says WHAT WAS OBSERVED, how much it
-// matters, and what it cannot support. Asking a model to make that leap from
-// raw rows is asking it to decide materiality and to invent the words for
-// units it was never told — which is where fabricated percentages and invented
-// causes come from.
-//
-// A VerifiedFinding carries the leap in data:
-//
-//   - every number it quotes is already extracted, unit-resolved and
-//     formatted (§52/§53), so the narrator SELECTS text rather than computing;
-//   - materiality is recorded as SIGNALS relative to the data at hand (§39),
-//     never as a fabricated domain threshold;
-//   - the things the evidence cannot support are attached as caveats, so the
-//     narrator has to write around them rather than discover them;
-//   - provenance points back at the result that proved it (§32).
-//
-// The narrator may then reason from findings (§48) and the verifier can check
-// each sentence against them (§56).
-// ---------------------------------------------------------------------------
-
 import type { NumberLocale } from "../../analysis/format-number.js";
 import type { ResultId } from "../types.js";
 import { humanizeValue, type HumanizeOptions } from "./humanize.js";
 import type { DisplayUnit } from "./measure-semantics.js";
+import type { FindingSubject } from "./finding-subject.js";
 
 /**
  * §40 — the KIND of observation, not the tool that produced it.
@@ -164,10 +132,46 @@ export type CaveatCode =
   /** The workbook changed after the analysis was computed (§69). */
   | "stale_source";
 
+export type CaveatProvenance = "engine_verified";
+
+export type CaveatKind =
+  | "ZERO_BASE_EFFECT"
+  | "LOW_BASE_EFFECT"
+  | "SAMPLE_SIZE"
+  | "MISSING_DATA"
+  | "ZERO_IS_A_VALUE"
+  | "TOTAL_OVERLAP"
+  | "SPARSE_PERIODS"
+  | "MIXED_UNITS"
+  | "ASSUMED_BASIS"
+  | "STALE_SOURCE";
+
 export interface Caveat {
   readonly code: CaveatCode;
   /** Numbers the wording needs, already formatted. */
   readonly detail?: string;
+  readonly provenance?: CaveatProvenance;
+}
+
+const CAVEAT_KIND: Record<CaveatCode, CaveatKind> = {
+  relative_undefined_zero_base: "ZERO_BASE_EFFECT",
+  low_base_percentage: "LOW_BASE_EFFECT",
+  few_observations: "SAMPLE_SIZE",
+  missing_excluded: "MISSING_DATA",
+  zero_not_absence: "ZERO_IS_A_VALUE",
+  total_row_overlap: "TOTAL_OVERLAP",
+  sparse_periods: "SPARSE_PERIODS",
+  mixed_units: "MIXED_UNITS",
+  basis_assumed: "ASSUMED_BASIS",
+  stale_source: "STALE_SOURCE",
+};
+
+export function caveatKind(code: CaveatCode): CaveatKind {
+  return CAVEAT_KIND[code];
+}
+
+export function caveatProvenance(caveat: Caveat): CaveatProvenance {
+  return caveat.provenance ?? "engine_verified";
 }
 
 /** §40/§32 — where the finding came from, so every claim is traceable. */
@@ -192,6 +196,7 @@ export interface VerifiedFinding {
   readonly findingType: FindingType;
   /** What the observation is ABOUT — a metric, an entity, a cluster, the table. */
   readonly subject: string;
+  readonly subjectRef?: FindingSubject;
   /** Additional subjects for a comparison or a relationship. */
   readonly counterparts?: readonly string[];
   readonly direction: FindingDirection;

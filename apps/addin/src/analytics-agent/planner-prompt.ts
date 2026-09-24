@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 25 §31 — the analytical planner decision prompt.
-//
-// Reuses the EXACT decision protocol already validated by
-// `agent/decision-schema.ts` (tool_call | clarify | final) — only the system
-// instructions and tool catalogue differ from the flat-table agent prompt
-// (`app/agent-prompt.ts`). Kept as a SEPARATE prompt (not a shared constant)
-// because the planner's authority (schema-aware tools only, never prose) is
-// a different contract from the flat-table agent's.
-// ---------------------------------------------------------------------------
-
 import type { AgentDecisionRequest, AgentObservation } from "../agent/types.js";
 
 export interface AnalyticalPromptMessage {

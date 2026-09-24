@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.6 — deterministic Excel serial-date handling.
-//
-// A confidently date-formatted cell must never reach the user as a bare integer
-// (45962). Conversion is deterministic and preserves the raw serial + source
-// cell for evidence. Arbitrary integers are NOT classified as dates — a caller
-// must supply positive `formatEvidence` (a date number-format) or the value is
-// left as a plain number.
-//
-// The 1900 date system is assumed (Excel's default). The port does not expose
-// the workbook's date-system flag, so the 1904 system is a documented gap; if a
-// future port surfaces it, pass `system: "1904"`.
-// ---------------------------------------------------------------------------
-
 export type DateSystem = "1900" | "1904";
 
 /** Lower/upper serials we will even consider as a date (≈ 1900-01-01 … 2149-12-31). */

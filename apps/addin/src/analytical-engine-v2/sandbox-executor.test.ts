@@ -123,7 +123,29 @@ describe("Stage 27 §66 — bounded repair, driven by the generator", () => {
     const outcome = await executeAnalysis({ runtime, plan: plan("groups"), dataset: dataset(), generate, currentSourceVersion: () => "v1" });
 
     expect(outcome.ok).toBe(true);
+    // Stage 27.x.1 §12 — the first attempt RETURNED a table, so something was
+    // computed and only the filing was wrong. The repair says so, quotes the
+    // contract, and tells the generator not to touch the method: a model told
+    // "the analysis did not produce what was asked for" rewrites an analysis
+    // that was working, and turns a shape mismatch into a second failure.
+    const hint = generate.mock.calls[1]?.[0]?.failure?.repairHint ?? "";
+    expect(hint).toMatch(/computation completed/);
+    expect(hint).toMatch(/Do not change the analytical method/);
+    expect(hint).toContain('RESULT["groups"]');
+    expect(generate.mock.calls[1]?.[0]?.failure?.subtype).toBe("OUTPUT_SHAPE_MISMATCH");
+  });
+
+  it("does NOT claim the computation completed when the script returned nothing", async () => {
+    // §12's cheap repair is only safe because it is gated on evidence that a
+    // number was produced. An empty envelope did not get that far, and telling
+    // it to keep a method that never ran would be advice about nothing.
+    const runtime = fakeRuntime([ok(emptyResult({})), ok(emptyResult({ groups: [{ label: "A", members: ["a"] }] }))]);
+    const generate = vi.fn(async (req: CodeRequest) => `code_v${req.attempt}`);
+    const outcome = await executeAnalysis({ runtime, plan: plan("groups"), dataset: dataset(), generate, currentSourceVersion: () => "v1" });
+
+    expect(outcome.ok).toBe(true);
     expect(generate.mock.calls[1]?.[0]?.failure?.repairHint).toMatch(/did not produce what was asked for/);
+    expect(generate.mock.calls[1]?.[0]?.failure?.subtype).toBeUndefined();
   });
 
   it("never retries unsafe code", async () => {

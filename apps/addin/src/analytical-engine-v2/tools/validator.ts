@@ -1,23 +1,6 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §6/§8/§14/§15/§38/§39 — tool-call validation and execution.
-//
-// Validation is layered, and every layer fails CLOSED with a typed, recoverable
-// error rather than a reinterpretation:
-//
-//   1. the tool exists;
-//   2. the argument bag is an object with no unknown keys;
-//   3. every required argument is present and every supplied one has the
-//      declared type (§6 — the planner cannot push an arbitrary blob through);
-//   4. an `inputRef` points at a result whose TYPE this tool accepts (§8);
-//   5. the tool's own semantic checks (metric/period/field resolution).
-//
-// Execution adds a per-turn cache (§38/§39): the same deterministic call with
-// the same arguments returns the same ResultRef instead of recomputing, which
-// also stops a looping planner from burning its read budget.
-// ---------------------------------------------------------------------------
-
 import { findTool, toolNames, type ToolEnv, type ToolSpec } from "./registry.js";
-import type { ArgSpec } from "./contracts.js";
+import { CAPABILITY_PURPOSE, type CapabilityId } from "../capability/capability-model.js";
+import { unknownReference, type ArgSpec } from "./contracts.js";
 import { RESULT_ID_RE, refNameFor } from "./semantic-refs.js";
 import { toolError, type ToolCallDecision, type ToolOutcome } from "../types.js";
 
@@ -62,8 +45,28 @@ export function callSignature(tool: string, args: Readonly<Record<string, unknow
   return `${tool}(${keys.map((k) => `${k}=${JSON.stringify(args[k])}`).join(",")})`;
 }
 
-export function validateCall(decision: ToolCallDecision, env: ToolEnv): ValidationOutcome {
+export interface ToolExposure {
+  readonly exposed: ReadonlySet<string>;
+  readonly availableCapabilities: readonly CapabilityId[];
+}
+
+export function exposureError(tool: string, spec: ToolSpec | undefined, exposure: ToolExposure): ToolOutcome {
+  const names = [...exposure.exposed];
+  if (!spec) return toolError("UNKNOWN_TOOL", `there is no tool "${tool}"`, names);
+  const capability = spec.capability;
+  const summary = exposure.availableCapabilities.map((id) => `${id} (${CAPABILITY_PURPOSE[id]})`);
+  return toolError(
+    "CAPABILITY_UNAVAILABLE",
+    `"${tool}" belongs to the "${capability}" capability, which this turn does not have. Available capabilities: ${summary.join("; ") || "none"}`,
+    names,
+  );
+}
+
+export function validateCall(decision: ToolCallDecision, env: ToolEnv, exposure?: ToolExposure): ValidationOutcome {
   const spec = findTool(decision.tool);
+  if (exposure && !exposure.exposed.has(decision.tool)) {
+    return { ok: false, error: exposureError(decision.tool, spec, exposure) };
+  }
   if (!spec) return { ok: false, error: toolError("UNKNOWN_TOOL", `there is no tool "${decision.tool}"`, toolNames()) };
 
   const args = decision.arguments;
@@ -122,7 +125,7 @@ export function validateCall(decision: ToolCallDecision, env: ToolEnv): Validati
     const value = args[name];
     if (typeof value !== "string") continue;
     if (!env.store.get(value)) {
-      return { ok: false, error: toolError("UNKNOWN_REFERENCE", `no result "${value}" in this analysis`, env.store.ids()) };
+      return { ok: false, error: unknownReference(value, env) };
     }
   }
 
@@ -132,7 +135,7 @@ export function validateCall(decision: ToolCallDecision, env: ToolEnv): Validati
   const ref = args["inputRef"] ?? args["leftRef"];
   if (typeof ref === "string" && spec.accepts) {
     const source = env.store.get(ref);
-    if (!source) return { ok: false, error: toolError("UNKNOWN_REFERENCE", `no result "${ref}" in this analysis`, env.store.ids()) };
+    if (!source) return { ok: false, error: unknownReference(ref, env) };
     if (!spec.accepts.includes(source.type)) {
       return {
         ok: false,

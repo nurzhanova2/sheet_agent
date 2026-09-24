@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.7 §37/§38/§57/§65 — running and JUDGING a multi-turn conversation.
-//
-// It asserts nothing. It runs each conversation against the real engine and
-// reports what happened, turn by turn, with the reference measurements §37
-// defines. The point of §38 is that a raw "reuse percentage" is the wrong
-// number: most turns need no reference at all, so what is measured here is
-// whether the turns that DO need one get the RIGHT one.
-// ---------------------------------------------------------------------------
-
 import type { ChatClient } from "../../app/chat-client.js";
 import { runAnalyticalEngine, type EngineTurn } from "../engine.js";
 import { EMPTY_ANALYTICAL_STATE, type AnalyticalConversationState } from "../state/conversation-state.js";

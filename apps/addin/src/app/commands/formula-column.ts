@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 22.3 — deterministic `/formula` calculated-column builder.
-//
-// `/formula` no longer lets the model author action ranges. SheetAgent resolves
-// EVERYTHING from the current selection snapshot:
-//   • source table  = the selected sheet + range (never another worksheet);
-//   • column refs    = validated against the actual headers (no assumed F/G);
-//   • destination    = existing column if the name already exists, else the
-//                      column immediately right of the selection;
-//   • header + formulas = ONE proposal (set_values <Col>1 + fill_formula
-//                         <Col>2:<Col><lastRow>), applied/undone atomically.
-// If anything can't be resolved deterministically it returns user guidance and
-// proposes NOTHING.
-// ---------------------------------------------------------------------------
-
 import type { SelectionSnapshot } from "../workbook-context.js";
 import type { ResponseLanguage } from "../language.js";
 import { columnIndexToLetters, parseLocalRange, splitSheetAddress } from "../a1.js";

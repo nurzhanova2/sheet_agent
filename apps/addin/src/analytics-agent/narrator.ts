@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 25 §36–§39 — the analytical narrator.
-//
-// A SEPARATE model pass from the planner (§32): it never chooses a tool, it
-// only turns the planner's VERIFIED tool observations into prose. Its output
-// is gated by the SAME evidence check already proven for the Stage 24.4
-// bounded agent (`agent/evidence.ts` — reused verbatim, not re-implemented)
-// — an unsupported number fails the answer closed to a deterministic
-// rendered table (§39).
-// ---------------------------------------------------------------------------
-
 import { agentEvidenceFacts, validateAgentAnswer } from "../agent/evidence.js";
 import type { AgentObservation } from "../agent/types.js";
 import type { CellValue } from "@sheet-agent/application";

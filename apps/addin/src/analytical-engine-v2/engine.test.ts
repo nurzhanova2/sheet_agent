@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.1 §71/§72/§73 — the V2 engine end to end.
-//
-// The planner is SCRIPTED here (these are ENGINE tests, §64) — but every
-// number, every winner and every piece of conversation state comes from the
-// real deterministic tools and the real commit path. The scripts only choose
-// tools; they never contain an answer.
-//
-// The headline test is §72: the five-turn chain, over a synthetic table whose
-// labels appear nowhere in engine code, with no Stage 24 compiler, no legacy
-// analyzer, no markdown parsing and no phrase-specific handler anywhere in the
-// path.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it, vi } from "vitest";
 import { runAnalyticalEngine, type EngineTurn } from "./engine.js";
 import { EMPTY_ANALYTICAL_STATE, type AnalyticalConversationState } from "./state/conversation-state.js";
@@ -179,14 +165,14 @@ describe("Stage 26.1 §9/§58 — a failed narration cannot cost the next turn i
     const t1 = await runTurn(table, "Сравни последнюю доступную дату с предыдущей.", EMPTY_ANALYTICAL_STATE, compareLatestVsPrevious, badNarrator);
     expect(t1.kind).toBe("answered");
     if (t1.kind !== "answered") return;
-    expect(t1.usedFallback).toBe(true);
+    expect(t1.trace.narratorStatus).toBe("deterministic");
     expect(t1.body).not.toContain("12345.6789");
     // Stage 27 §57 — the fallback is now verified PROSE, not an apology over a
     // table. It still says only what the named results prove, and it still
     // covers the whole set rather than the one row the narrator liked.
     expect(t1.body).not.toMatch(/Не удалось подтвердить все числа/);
     expect(t1.body).toMatch(/«Defect ratio»/);
-    expect(t1.body).toMatch(/снижение|рост/);
+    expect(t1.body).toMatch(/снижение|рост/iu);
     // §9 — committed anyway
     expect(t1.state.lastResult?.rows).toHaveLength(4);
 
@@ -289,7 +275,7 @@ describe("Stage 26.1 §42 — one trace explains the whole turn", () => {
     expect(tr.completion?.primaryResultRef).toBe(t1.analysis.primary.resultId);
     expect(tr.stateBefore.lastResult).toBeUndefined();
     expect(tr.stateAfter?.lastResult?.tool).toBe("change.compare_periods");
-    expect(tr.narratorStatus).toBe("fallback"); // narrate returns "" in these tests
+    expect(tr.narratorStatus).toBe("deterministic"); // the narrator was never asked in these tests
     // §19 — lineage is visible in the trace
     const filterRun = await runTurn(table, "Теперь только снизившиеся.", t1.state, filterDecliners);
     if (filterRun.kind !== "answered") return;

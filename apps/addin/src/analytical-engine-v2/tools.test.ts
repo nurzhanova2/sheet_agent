@@ -53,6 +53,9 @@ describe("Stage 26.2 §3 — the registry is structurally complete", () => {
       "change.compute", "change.compare_periods",
       "aggregate.sum", "aggregate.avg", "aggregate.min", "aggregate.max", "aggregate.std",
       "set.filter", "set.sort", "set.top", "set.bottom", "set.argmax", "set.argmin", "set.union", "set.intersection",
+      // Stage 27 §3/§83 — the total ACROSS metrics, which `aggregate.sum`
+      // (total across PERIODS) does not do and the live run needed.
+      "set.total",
       "analysis.trend", "analysis.volatility", "analysis.stability", "analysis.monotonicity", "analysis.direction_changes", "analysis.temporal_pattern",
       "event.adjacent_changes", "event.max_adjacent_change", "event.min_adjacent_change",
       "derive.compute",

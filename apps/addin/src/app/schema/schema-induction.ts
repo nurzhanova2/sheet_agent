@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.6 — universal table schema induction.
-//
-// RAW RANGE → structural profile → header bands + axes + orientation → a
-// CANONICAL TableSchema with confidence + explicit ambiguities. No table
-// layout is hard-coded: everything is derived from density / uniqueness /
-// number-format evidence. Bounded by SCHEMA_LIMITS.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import { classifyCell } from "./cell-typing.js";
 import { coerceHeaderDate, formatDateLabel, isDateNumberFormat } from "./excel-date.js";

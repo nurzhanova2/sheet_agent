@@ -1,24 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §33/§34 — an analysis is still there on the next turn.
-//
-// §33's example is three turns long and the third one is the demanding one:
-//
-//   "Кластеризуй продукты."              → the sandbox runs
-//   "Какой кластер самый нестабильный?"  → a follow-up over the analysis
-//   "Покажи динамику самого необычного." → a DETERMINISTIC tool, over an
-//                                          entity the sandbox named
-//
-// The third turn is where a sandbox result stops being a special case. If the
-// engine has to know that a set of entity names came from Python in order to
-// use it, then every tool needs a sandbox branch and §34's hybrid is two
-// systems pretending to be one.
-//
-// These tests exist to prove the opposite: the analysis leaves behind exactly
-// the same conversation state a tool would have left, and nothing downstream
-// can tell the difference. They are written against the state commit rather
-// than a mocked follow-up, because that is the thing the next turn reads.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it } from "vitest";
 import { EMPTY_ANALYTICAL_STATE } from "./state/conversation-state.js";
 import { commitState } from "./state/state-commit.js";

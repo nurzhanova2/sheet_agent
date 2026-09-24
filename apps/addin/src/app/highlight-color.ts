@@ -1,15 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.5 §11 — natural-language highlight colour intent.
-//
-// A follow-up like "выдели их красным" / "highlight them green" names a colour.
-// The LLM never produces a fill value: colour words map to a small, fixed,
-// application-approved palette of hex fills. An unrecognised colour word yields
-// `null` and the caller keeps the existing default highlight colour.
-//
-// `\b` is ASCII-only in JS regex — every Russian stem uses an explicit
-// `[а-яё]*` continuation.
-// ---------------------------------------------------------------------------
-
 /** The three approved fills. Values satisfy `HEX_COLOR` in workbook-actions.ts. */
 export const HIGHLIGHT_PALETTE = {
   red: "#FFC7CE",

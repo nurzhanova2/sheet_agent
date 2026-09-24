@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §4/§30 — the restricted derived-expression AST.
-//
-// Extracted verbatim from the Stage 25 tool registry so both engines evaluate
-// a model-supplied expression through ONE implementation (§4). The contract is
-// the point: a closed set of typed nodes, no code strings, no `eval`, no
-// property access, and a division guard — the model can describe arithmetic
-// over a result's own numeric fields and nothing else.
-// ---------------------------------------------------------------------------
-
 export type ExprNode =
   | { readonly field: string }
   | { readonly const: number }

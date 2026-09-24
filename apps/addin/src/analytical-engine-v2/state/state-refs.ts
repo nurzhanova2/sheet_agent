@@ -1,19 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.7 §13/§14/§17 — resolving a CONVERSATION reference, by type.
-//
-// Three rules, and the audit found all three missing:
-//
-//   §13 a reference of the wrong kind is refused with its own code, never
-//       coerced into the slot that was asked for;
-//   §14 the conversions that ARE allowed are DECLARED here, one table, each
-//       one tested — there is no resolveAny;
-//   §17 a reference belongs to a table at a version, and a reference whose
-//       table has moved on is stale, not merely old.
-//
-// Nothing in this module reads prose, and nothing guesses: it answers "is this
-// the kind of thing that was asked for, and is it still true?".
-// ---------------------------------------------------------------------------
-
 import type { TableSchema } from "../../app/schema/schema-induction.js";
 import { toolError, type ToolOutcome } from "../types.js";
 import type { AnalyticalConversationState, ReferenceKind, RefLineage } from "./conversation-state.js";

@@ -1,21 +1,4 @@
 // @vitest-environment node
-// ---------------------------------------------------------------------------
-// Stage 26.8 §28/§29/§63 — deterministic ground truth for the smoke tables.
-//
-// The production smoke goes through `submit()`, so what comes back is an ANSWER
-// in prose plus a trace — not the structured analysis the Stage 26.7 harness
-// could judge directly. Numeric and reference correctness still have to be
-// checked against something, and that something must not be the engine's own
-// output.
-//
-// So: the same deterministic primitives the tools are built on, run over the
-// same fixtures, printed as the facts each smoke question has an answer in.
-// Nothing here calls a V2 tool or the planner.
-//
-//   SHEET_AGENT_GROUND_TRUTH_OUT=<file.json> npx vitest run \
-//     src/analytical-engine-v2/harness/ground-truth.test.ts
-// ---------------------------------------------------------------------------
-
 import { writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { induceTableSchema, type TableSchema } from "../../app/schema/schema-induction.js";

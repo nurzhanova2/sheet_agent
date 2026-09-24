@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.7 — deterministic ResultRef → ChartData.
-//
-// "Chart that" after an analysis must render from the STRUCTURED rows of the
-// remembered result — never by re-parsing assistant markdown, never by asking
-// the model to reproduce numbers. The provenance string is owned by the app.
-//
-// Chart inference is intentionally narrow:
-//   label col + 1 numeric col            → bar (single category series)
-//   label col + 2 numeric cols           → grouped bar (multi-category series)
-//   date/time label col + 1 numeric col  → line (xy series)
-//   3+ numeric cols                      → clarify (which columns?)
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ResultRef } from "./session-memory.js";
 import type { ChartData } from "../visualization/types.js";

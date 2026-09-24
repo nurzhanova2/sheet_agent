@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.3 §21–§26 — TOOL INTEROPERABILITY contract tests.
-//
-// 26.2L's dominant failure was a reference the planner could not hand to the
-// next tool. These tests pin the fixed contract from both directions: every
-// semantically compatible edge must COMPOSE (§22), and every incompatible one
-// must still fail closed (§23), with lineage recorded (§24) and an empty set
-// treated as a result rather than a fault (§25).
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it } from "vitest";
 import { buildToolEnv } from "./tools/contracts.js";
 import { V2_TOOLS, findTool } from "./tools/registry.js";

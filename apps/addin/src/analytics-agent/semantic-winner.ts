@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 25.1.3 §2–§9 — the semantic winner concept.
-//
-// A run's SINGLE most relevant metric is NOT always "the tool returned
-// exactly one row" (a sorted 11-row decline table still has ONE winner in
-// row 1). This module is the ONE place that decides "what is the winner of
-// this run so far" — reused for (a) mid-turn dependent-clause resolution
-// (`tool-registry.ts`'s `reference.previous_metric_focus`, so a clause never
-// falls back to STALE pre-turn focus when this SAME turn already established
-// one) and (b) the end-of-turn MetricFocusRef commit (`canonical-refs.ts`).
-// Reads ONLY structured observation data — never narrated markdown, never
-// row-count alone.
-// ---------------------------------------------------------------------------
-
 import type { AgentObservation } from "../agent/types.js";
 
 // §4 — operations that can produce a singular semantic winner when they

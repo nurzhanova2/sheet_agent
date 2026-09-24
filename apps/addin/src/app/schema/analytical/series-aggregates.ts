@@ -1,15 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §4 — series aggregates, extracted so ONE implementation serves
-// both engines.
-//
-// These three computations previously lived inline inside the Stage 25 tool
-// registry (`aggregate.avg`'s mean, `analysis.stability`'s reciprocal of the
-// volatility score, and `analysis.temporal_pattern`'s pivot scan). Stage 26's
-// registry needs exactly the same numbers, and §4 forbids reimplementing a
-// formula for V2 — so they moved here and BOTH registries call them. Nothing
-// about the arithmetic changed.
-// ---------------------------------------------------------------------------
-
 import type { AnalysisEvent, TemporalSeries } from "./types.js";
 
 const EPS = 1e-9;

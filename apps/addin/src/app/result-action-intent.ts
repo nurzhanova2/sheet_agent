@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.12 — natural-language routing for actions ON a remembered result /
-// row set. Deterministic phrase detection only; the actual compilation goes
-// through the Stage 24.7–24.11 compilers and the existing validation /
-// Preview / Approve / Undo path. Slash commands are untouched.
-//
-// Every phrase MUST carry a demonstrative ("that / those / this / it" or the
-// RU equivalents) so an ordinary analytical request ("put the average in a
-// column") is never mistaken for a result action.
-//
-// `\w` / `\b` are ASCII-only in JS regex — every Russian stem below uses an
-// explicit `[а-яё]*` continuation, never `\w*`.
-// ---------------------------------------------------------------------------
-
 export type ResultActionKind = "chart" | "insert_chart" | "highlight" | "copy" | "write";
 
 export interface ResultActionIntent {

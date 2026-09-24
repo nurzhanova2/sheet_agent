@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4 — deterministic "Financial Stability" test workbook.
-//
-// Four schema-compatible sheets forming two year-over-year dataset families:
-//   Portfolio 2024 / Portfolio 2025   (credit portfolio — deteriorates in 2025)
-//   Deposits 2024  / Deposits 2025    (deposit base — broadly stable)
-//
-// Columns: Bank, Sector, Region, Exposure, NPL, NPL Rate, PD, Stage, Provision.
-// All values are synthetic and deterministic — NO production / NBK data.
-//
-// Designed so the tests have an unambiguous truth:
-//   • Corporate deteriorates MOST from 2024 → 2025 (NPL Rate and PD).
-//   • `Portfolio 2025` NPL Rate ≈ 6.1%, `Portfolio 2024` ≈ 4.0%.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import { runAnalysisBatch } from "../../analysis/index.js";
 import type { AnalysisRequest } from "../../analysis/types.js";

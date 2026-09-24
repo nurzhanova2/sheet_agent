@@ -130,39 +130,56 @@ export function describeSchema(schema: TableSchema, language: ResponseLanguage):
     mixed: "a mixed structure",
     unknown: "an unrecognised structure",
   };
-  lines.push(ru ? `Это ${kindRu[schema.layoutKind]}.` : `This is ${kindEn[schema.layoutKind]}.`);
+  const periodsAcross = schema.orientation !== "column_metrics";
+  const subjects = periodsAcross ? schema.rowAxis.map((m) => m.display) : schema.columnPaths.map((p) => p.displayLabel);
+  const periodCount = periodsAcross ? schema.columnPaths.length : schema.rowAxis.length;
+  const named = subjects.slice(0, 6).map((s) => (ru ? `«${s}»` : `"${s}"`));
 
-  if (schema.headerDepth > 1) {
-    lines.push(ru ? `Заголовок занимает ${schema.headerDepth} строки.` : `The header spans ${schema.headerDepth} rows.`);
-  }
-  const rowLabels = schema.rowAxis.slice(0, 8).map((m) => m.display);
-  if (rowLabels.length > 0) {
+  if (named.length > 0) {
+    const rest = subjects.length - named.length;
+    const tail = rest > 0 ? (ru ? ` и ещё ${rest}` : ` and ${rest} more`) : "";
+    const over = periodCount > 0 ? (ru ? ` за ${periodCount} периодов` : ` across ${periodCount} periods`) : "";
     lines.push(
       ru
-        ? `Строки: ${schema.rowAxis.length} ${schema.orientation === "column_metrics" ? "периодов/дат" : "показателей"} — ${rowLabels.join(", ")}${schema.rowAxis.length > 8 ? ", …" : ""}.`
-        : `Rows: ${schema.rowAxis.length} ${schema.orientation === "column_metrics" ? "periods/dates" : "indicators"} — ${rowLabels.join(", ")}${schema.rowAxis.length > 8 ? ", …" : ""}.`,
+        ? `В таблице ${subjects.length} показателей${over}: ${named.join(", ")}${tail}.`
+        : `The table holds ${subjects.length} indicators${over}: ${named.join(", ")}${tail}.`,
+    );
+  } else {
+    lines.push(ru ? `Это ${kindRu[schema.layoutKind]}.` : `This is ${kindEn[schema.layoutKind]}.`);
+  }
+
+  const dateLevels = schema.columnPaths.flatMap((p) => p.levels.filter((l) => l.iso).map((l) => l.iso!));
+  if (dateLevels.length > 0) {
+    const sortedDates = [...new Set(dateLevels)].sort();
+    lines.push(
+      ru
+        ? `Данные охватывают период с ${sortedDates[0]} по ${sortedDates[sortedDates.length - 1]}.`
+        : `The data runs from ${sortedDates[0]} to ${sortedDates[sortedDates.length - 1]}.`,
     );
   }
-  const colLabels = schema.columnPaths.slice(0, 10).map((p) => p.displayLabel);
-  if (colLabels.length > 0) {
+  if (periodCount > 1) {
     lines.push(
       ru
-        ? `Столбцы: ${schema.columnPaths.length} — ${colLabels.join(", ")}${schema.columnPaths.length > 10 ? ", …" : ""}.`
-        : `Columns: ${schema.columnPaths.length} — ${colLabels.join(", ")}${schema.columnPaths.length > 10 ? ", …" : ""}.`,
+        ? "Можно сравнить любые два периода, посмотреть динамику по отдельному показателю или найти те, что изменились сильнее всего."
+        : "You can compare any two periods, follow one indicator over time, or find the ones that moved most.",
     );
   }
   if (schema.measures.length > 1) {
     lines.push(
       ru
-        ? `Единицы измерения различаются: ${schema.measures.map((m) => m.label).join(", ")} — их нельзя сравнивать между собой напрямую.`
-        : `Measures use different units: ${schema.measures.map((m) => m.label).join(", ")} — they can't be compared directly.`,
+        ? "Часть показателей измеряется в разных единицах — сравнивать их между собой напрямую нельзя."
+        : "Some indicators are measured in different units, so they cannot be compared with each other directly.",
     );
   }
-  const dates = schema.columnPaths.flatMap((p) => p.levels.filter((l) => l.iso).map((l) => l.iso!));
-  if (dates.length > 0) {
-    const sorted = [...new Set(dates)].sort();
-    lines.push(ru ? `Временной диапазон: ${sorted[0]} … ${sorted[sorted.length - 1]}.` : `Date range: ${sorted[0]} … ${sorted[sorted.length - 1]}.`);
-  }
+  const structure =
+    schema.headerDepth > 1
+      ? ru
+        ? `Формат — ${kindRu[schema.layoutKind]}, заголовок занимает ${schema.headerDepth} строки.`
+        : `Its layout is ${kindEn[schema.layoutKind]}; the header spans ${schema.headerDepth} rows.`
+      : ru
+        ? `Формат — ${kindRu[schema.layoutKind]}.`
+        : `Its layout is ${kindEn[schema.layoutKind]}.`;
+  if (named.length > 0) lines.push(structure);
   if (schema.totals.length > 0) {
     lines.push(
       ru

@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.8 §20/§21/§40–§43 — EventRef conversational follow-ups.
-//
-// "Когда именно это произошло?" / "Насколько он изменился?" / "Покажи его
-// динамику." / "Какой это показатель?" / "Что было до/после этого?" resolve
-// DIRECTLY from the stored EventRef — never by re-analysing the workbook, and
-// never by converting a raw Excel serial date in the model.
-// ---------------------------------------------------------------------------
-
 export type EventFollowupIntent =
   | { readonly kind: "when" }
   | { readonly kind: "magnitude" }

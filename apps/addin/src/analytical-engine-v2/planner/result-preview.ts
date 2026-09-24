@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §10/§11/§45 — what the PLANNER sees of a result.
-//
-// The full result always stays in the ResultStore. The planner gets its
-// identity, its type, its shape and a bounded sample — enough to choose the
-// next tool, deliberately not enough to pick a winner by eye (§23). Past the
-// preview threshold it is shown the extremes of the ranking-relevant column
-// too, so it can tell that a set is worth narrowing without being handed the
-// answer.
-//
-// This also satisfies §45: a large worksheet never lands in a prompt or a log.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import { PLANNER_PREVIEW_ROWS, type EngineResult } from "../types.js";
 

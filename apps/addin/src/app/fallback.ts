@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------------
-// Safe deterministic fallback (Stage 21.2 §21; localization 21.2.5; UX cleanup
-// 21.2.7).
-//
-// Used when the model's final answer fails numeric-claim validation on every
-// attempt, or the batch fully failed. It is a FIRST-CLASS PRODUCT RESPONSE, not a
-// debug dump:
-//   - only facts attributable to a REQUESTED goal / its dependency / a requested
-//     chart (via analysis/fact-projection.ts) — never the whole VerifiedFacts set;
-//   - no implementation identifiers (op#N, G1, schema names, validator text);
-//   - no internal / repair / model instruction text (structurally stripped);
-//   - complete relative to the request (every failed / blocked goal is stated);
-//   - fully localized (RU request → RU answer).
-// ---------------------------------------------------------------------------
-
 import type { ResponseLanguage } from "./language.js";
 import { t } from "./i18n.js";
 import { formatCount, formatNumber, MISSING_DISPLAY, type NumberLocale } from "../analysis/format-number.js";

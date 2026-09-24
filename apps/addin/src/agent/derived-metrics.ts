@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4 Increment 4.3 — safe derived metrics over a ResultRef grid.
-//
-// A deterministic, enum-only arithmetic primitive: it computes ONE new column
-// from one or two existing columns of a result the agent already produced. It
-// NEVER evaluates an expression string, never re-reads the workbook, never
-// mutates its input. Column names and cell values are untrusted data — the
-// operator is a fixed enum, never a string taken from a cell.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 
 export type DerivedMetricOperator =

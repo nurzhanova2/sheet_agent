@@ -1,20 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 25.1.3d §3–§8/§15/§26 — the PRIMARY ANSWER of a completed run.
-//
-// A completed run's observations are NOT interchangeable: an upstream
-// compare-periods table, the filter that ran over it, and a possible
-// winner-rank on top of THAT are three different refinements of the SAME
-// answer — only the LAST one is what the user actually asked for. The
-// supporting-evidence pipeline (every intermediate observation) must never
-// be allowed to decide what the primary answer is merely by being the
-// biggest table, or the last table full stop — this module is the ONE place
-// that decides "which single observation IS the answer", reused identically
-// by `runtime.ts` (`outcome.primary`, session-memory commit) and by
-// `narrator.ts` (the deterministic fallback render AND the FACTS a
-// single-clause request's narrator is even shown) so the two can never
-// disagree (§15).
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { AgentObservation } from "../agent/types.js";
 import { ANSWER_SHAPED_TOOLS } from "./semantic-audit.js";

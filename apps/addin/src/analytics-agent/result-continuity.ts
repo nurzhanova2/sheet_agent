@@ -1,26 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 25.1.3f §3/§5/§6 — ANALYTICAL CONTINUATION STATE.
-//
-// A successful analytical turn owns two DIFFERENT things:
-//
-//   • the VISIBLE answer      — `primary-answer.ts` (`determinePrimaryAnswer`),
-//     narrowed to exactly what the user asked to see (one winner row for a
-//     superlative ask);
-//   • the CONTINUATION UNIVERSE — this module: the FULL structured result the
-//     run actually computed, which the NEXT compatible follow-up filters,
-//     slices or ranks.
-//
-// They are deliberately separate (§6). Narrowing what is displayed must never
-// shrink or discard the universe a later "теперь покажи только те, что
-// снизились" / "из них какой…" has to operate on, and a narrator that fell
-// back to a deterministic table is a PRESENTATION outcome, never an
-// analytical-execution failure (§5) — the universe is committed either way.
-//
-// Nothing here consults `determinePrimaryAnswer`, `hasSuperlativeAsk`, or any
-// winner reduction: it is a pure function of the run's own observations, so
-// Stage 25.1.3d/e's visible-answer work cannot influence it.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { AgentObservation } from "../agent/types.js";
 

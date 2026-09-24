@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.7 — the pure analytical-route orchestrator.
-//
-//   text → detectAnalyticalIntent → compileAnalyticalPlan → validatePlan →
-//   executePlan → rendered body + trace + follow-up hints.
-//
-// No React / no Office.js here. use-agent.ts only routes to this and renders
-// the outcome. The rendered explanation is generated from the executed plan
-// (§46), never from the original user text alone.
-// ---------------------------------------------------------------------------
-
 import type { AnalysisGrids } from "../matrix-analysis.js";
 import type { TableSchema } from "../schema-induction.js";
 import { detectAnalyticalIntent } from "./analytical-intent.js";

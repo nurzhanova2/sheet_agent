@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Deterministic turn classification. This is the application-side guard that
-// Stage 21.1 adds on top of prompt instructions: if a turn asks for an exact
-// spreadsheet computation, the model is NOT allowed to answer directly — it must
-// go through the plan → engine → answer path (see chat-client.ts).
-//
-// The lexicon is a signal, not the whole enforcement: the planner still returns
-// a typed plan and that plan is validated. But a lexicon hit means "direct_answer
-// is forbidden for this turn".
-// ---------------------------------------------------------------------------
-
 export interface TurnIntent {
   /** The turn needs at least one deterministic analysis operation. */
   readonly analytical: boolean;

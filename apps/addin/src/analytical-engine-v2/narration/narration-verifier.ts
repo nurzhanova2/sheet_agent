@@ -1,21 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §56 — what findings make checkable that result tables did not.
-//
-// The Stage 26 gate (`validateAgentAnswer`) still runs and is not weakened: it
-// rejects a number that no named result supports, and it rejects a bare causal
-// claim. This module adds the checks that only exist once observations are
-// typed — and one of them closes a hole the old gate cannot see.
-//
-// The hole is §53. `acceptableNumbers` deliberately accepts a fact's value in
-// EITHER scaling, so a fact of 0.0081 legitimises both "0.81" and "0.0081" in
-// the prose. That is right for quoting a fraction as a percentage, and it is
-// exactly wrong for percentage points: it means an answer may silently call a
-// +0.80 п.п. move "+0.80%" and pass. Both readings of the same fact are
-// numerically present; only one of them is true. So the percentage-point check
-// here is not about the digits at all — it is about the UNIT WORD next to
-// them, which is the only thing that distinguishes the two statements.
-// ---------------------------------------------------------------------------
-
 import type { NumberLocale } from "../../analysis/format-number.js";
 import type { VerifiedFinding } from "../insight/verified-finding.js";
 
@@ -206,7 +188,7 @@ function checkSuperlatives(text: string, findings: readonly VerifiedFinding[], l
 }
 
 /** §49/§94 — an unhedged causal claim. A labelled hypothesis is allowed. */
-function checkCausalLanguage(text: string, locale: NumberLocale): readonly string[] {
+export function checkCausalLanguage(text: string, locale: NumberLocale): readonly string[] {
   const causal = locale === "ru" ? CAUSAL_RU : CAUSAL_EN;
   const hedged = locale === "ru" ? HEDGED_RU : HEDGED_EN;
   if (!causal.test(text)) return [];

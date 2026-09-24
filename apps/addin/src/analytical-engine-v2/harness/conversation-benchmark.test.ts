@@ -1,23 +1,4 @@
 // @vitest-environment node
-// ---------------------------------------------------------------------------
-// Stage 26.7 §39/§62 — the LIVE multi-turn conversation benchmark.
-//
-// NOTE: node environment, not the project-wide jsdom one — jsdom installs its
-// own AbortController and undici rejects a foreign signal, so every turn would
-// fail in ~1ms without reaching the model.
-//
-// SKIPPED BY DEFAULT. It talks to the real configured model:
-//
-//   SHEET_AGENT_LIVE_ENDPOINT=https://localhost:47831/v1/chat \
-//   SHEET_AGENT_LIVE_MODEL="<model id>" \
-//   npx vitest run src/analytical-engine-v2/harness/conversation-benchmark.test.ts
-//
-//   optional: SHEET_AGENT_LIVE_SUITE=main|paraphrase|all   (default main)
-//             SHEET_AGENT_LIVE_JSON=<file>  machine-readable report
-//
-// It asserts NOTHING about model quality — it reports.
-// ---------------------------------------------------------------------------
-
 import { describe, it } from "vitest";
 import { writeFileSync } from "node:fs";
 import { HttpChatClient } from "../../app/chat-client.js";

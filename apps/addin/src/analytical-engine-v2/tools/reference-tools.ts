@@ -1,21 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §19/§20/§21, Stage 26.7 §10/§13/§17/§19 — REFERENCE tools.
-//
-// These are how a follow-up reaches an earlier turn. They restore the stored
-// STRUCTURED reference (§20 — never a markdown rendering), so a partitive
-// follow-up points at the exact candidate set the last turn produced and a
-// later ranking stays confined to it (§21).
-//
-// Stage 26.7 put every one of them behind ONE gate. Each used to ask only
-// "is there one?"; `reference.last_result` alone checked freshness, and none
-// checked that the remembered reference was about the table now selected. All
-// three questions are now asked in the same place, in the same order, for
-// every reference: is there one, is it about THIS table, is it still true.
-//
-// None of them interprets language. Which reference a pronoun means is the
-// planner's decision (§12); these only hand over typed candidates.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ToolOutcome } from "../types.js";
 import { METRIC_FIELD, cell, num, period, text, type ToolEnv, type ToolSpec } from "./contracts.js";
@@ -31,6 +13,8 @@ function gate<T>(value: T | undefined, kind: ReferenceKind, lineage: RefLineage 
 
 const referenceLastResult: ToolSpec = {
   name: "reference.last_result",
+  capability: "references",
+  usable: (facts) => facts.references.result,
   description:
     "The full structured result the PREVIOUS turn produced, restored with all of its rows and fields. Returns it under a new resultId you can filter, rank or extend. Use it whenever the request continues the last answer rather than starting a new analysis — it is both faster and more faithful than rebuilding the previous work from scratch.",
   args: {},
@@ -64,6 +48,8 @@ const referenceLastResult: ToolSpec = {
  */
 const referenceRecent: ToolSpec = {
   name: "reference.recent",
+  capability: "references",
+  usable: (facts) => facts.references.recent,
   description:
     'The recent results of this conversation in order, most recent first, each labelled as the answer it was ("primary") or the evidence behind it ("supporting"). Use it when a request points at something other than the immediately previous answer — an earlier step, or a supporting table the last answer rested on. Returns the chosen result restored under a new resultId. Pass n to choose which one; n=1 is the most recent. When you also pass role, n counts only within the results of that role.',
   args: {
@@ -120,6 +106,8 @@ const referenceRecent: ToolSpec = {
 
 const referenceLastMetric: ToolSpec = {
   name: "reference.last_metric",
+  capability: "references",
+  usable: (facts) => facts.references.metric,
   description:
     'The single metric currently under discussion — what a pronoun or a phrase like "that metric" refers to. Returns a one-row metric_set; pass its label straight into series.get, event.* or change.*. Use it instead of trying to work out the reference yourself.',
   args: {},
@@ -135,6 +123,8 @@ const referenceLastMetric: ToolSpec = {
 
 const referenceLastMetricSet: ToolSpec = {
   name: "reference.last_metric_set",
+  capability: "references",
+  usable: (facts) => facts.references.metricSet,
   description:
     'The set of metrics under discussion — what a partitive reference such as "among them" or "of those" refers to. Returns a metric_set you can pass as inputRef so a new analysis stays confined to exactly those metrics and never widens back to the whole table.',
   args: {},
@@ -154,6 +144,8 @@ const referenceLastMetricSet: ToolSpec = {
 
 const referenceLastPeriod: ToolSpec = {
   name: "reference.last_period",
+  capability: "references",
+  usable: (facts) => facts.references.period,
   description:
     'The period or interval the previous turn used — what a phrase like "the same period" refers to. Returns a period result whose canonical strings you pass to a change or value tool, so a follow-up is measured over the same window as the answer it follows.',
   args: {},
@@ -181,6 +173,8 @@ const referenceLastPeriod: ToolSpec = {
 /** Stage 26.7 §6/§21 — a SPAN, kept apart from a point. */
 const referenceLastPeriodRange: ToolSpec = {
   name: "reference.last_period_range",
+  capability: "references",
+  usable: (facts) => facts.references.periodRange,
   description:
     'The two-ended interval the previous turn measured over — what "over the same interval" refers to, as opposed to a single date. Returns a period_range you can pass to a change or aggregate tool.',
   args: {},
@@ -207,6 +201,8 @@ const referenceLastPeriodRange: ToolSpec = {
 /** Stage 26.7 §6/§25 — the history a previous turn already produced. */
 const referenceLastSeries: ToolSpec = {
   name: "reference.last_series",
+  capability: "references",
+  usable: (facts) => facts.references.series,
   description:
     "The per-period history the previous turn showed — what a follow-up about \"that chart\" or \"those values\" refers to. Returns the metric and the periods it covered; it names one metric, so it can also stand in wherever a single metric is required.",
   args: {},
@@ -232,6 +228,8 @@ const referenceLastSeries: ToolSpec = {
 
 const referenceLastEvent: ToolSpec = {
   name: "reference.last_event",
+  capability: "references",
+  usable: (facts) => facts.references.event,
   description:
     'The specific period-to-period move the previous turn identified — what a phrase like "that jump" or "when exactly" refers to. Returns a one-row event result with its metric, both periods, both values and the size of the move. It names one metric and two periods, so it can also stand in wherever a single metric or that interval is required.',
   args: {},
@@ -261,6 +259,8 @@ const referenceLastEvent: ToolSpec = {
  */
 const referenceLastAnalysis: ToolSpec = {
   name: "reference.last_analysis",
+  capability: "references",
+  usable: (facts) => facts.references.analysis,
   description:
     "What the previous analysis actually DID: which operation, over which metrics, on which ranking field or basis. Returns a one-row table naming that operation, its result type, its ranking field and its basis. Use it when a follow-up should continue on the same footing — the same ranking basis, the same kind of comparison — instead of choosing one again.",
   args: {},

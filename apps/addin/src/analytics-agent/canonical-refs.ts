@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 25.1 §5/§6/§50–§54 — canonical reference normalization.
-//
-// The Stage 25 planner's tool observations are NOT second-class results: a
-// set.argmax / set.top(1) winner, an explicit metric.resolve_set, an ordered
-// analysis.volatility ranking, or a two-period comparison must feed the SAME
-// SessionMemory fields ("lastMetricFocusRef" etc.) the Stage 24.x fast path
-// already writes — one authoritative owner (§4), not a parallel memory. This
-// module infers WHICH shape a planner run produced from its observations and
-// commits it through the EXISTING `conversation-memory.ts` functions —
-// nothing here stores state itself.
-// ---------------------------------------------------------------------------
-
 import { rememberAnalyticalResultSet, rememberEvent, rememberMetricFocus, rememberMetricSet, rememberPeriod, rememberResultSet } from "../app/conversation-memory.js";
 import type { EventRef } from "../app/session-memory.js";
 import type { SessionMemory } from "../app/session-memory.js";

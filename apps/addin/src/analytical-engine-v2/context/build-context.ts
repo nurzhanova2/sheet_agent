@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §6/§45 — the planner's structured context.
-//
-// Two hard rules:
-//
-//   §6  compact STRUCTURED metadata only — schema, periods, conversation
-//       state, tool catalogue. Never a raw cell grid; data reaches the model
-//       only as a bounded tool result it explicitly asked for.
-//   §45 workbook text is UNTRUSTED DATA. Metric labels are fenced into their
-//       own clearly-marked section so a label reading "IGNORE ALL RULES" is
-//       visibly a label, not an instruction.
-// ---------------------------------------------------------------------------
-
 import { isPercentNumberFormat } from "../../app/schema/excel-date.js";
 import { classifySemanticMetricClass } from "../../app/schema/measure-compatibility.js";
 import type { AnalysisGrids } from "../../app/schema/matrix-analysis.js";
@@ -18,6 +5,9 @@ import type { TableSchema } from "../../app/schema/schema-induction.js";
 import type { PeriodIndex } from "../../app/schema/analytical/period-index.js";
 import type { AnalyticalConversationState } from "../state/conversation-state.js";
 import { V2_TOOLS } from "../tools/registry.js";
+import { capabilityFactsOf } from "../capability/capability-availability.js";
+import { selectCapabilities } from "../capability/capability-selection.js";
+import { buildToolContext } from "../capability/tool-context.js";
 
 const MAX_METRICS_SHOWN = 60;
 const MAX_PERIODS_SHOWN = 30;
@@ -40,6 +30,7 @@ function buildTableBlock(schema: TableSchema, periodIndex: PeriodIndex): string 
     `metrics: ${schema.rowAxis.length}`,
     `schemaConfidence: ${schema.confidence.toFixed(2)}`,
     `periods (${points.length} total, showing ${shown.length}, oldest first — use these canonical strings verbatim):`,
+    `default comparison: ${points[points.length - 2]?.canonical ?? "(none)"} -> ${points[points.length - 1]?.canonical ?? "(none)"} (latest available period versus immediately previous comparable period)`,
     ...shown.map((p) => `  - ${p.canonical} (${p.headerPath})`),
   ];
   return lines.join("\n");
@@ -199,11 +190,22 @@ export function toolCatalogModel(): CatalogModel {
   return catalogModel();
 }
 
-export function buildEngineContext(schema: TableSchema, grids: AnalysisGrids, periodIndex: PeriodIndex, state: AnalyticalConversationState): EngineContext {
+export function defaultToolCatalog(schema: TableSchema, periodIndex: PeriodIndex, state: AnalyticalConversationState): string {
+  const facts = capabilityFactsOf({ schema, periodIndex, state });
+  return buildToolContext({ facts, selection: selectCapabilities({ facts }) }).text;
+}
+
+export function buildEngineContext(
+  schema: TableSchema,
+  grids: AnalysisGrids,
+  periodIndex: PeriodIndex,
+  state: AnalyticalConversationState,
+  toolCatalog?: string,
+): EngineContext {
   return {
     tableBlock: buildTableBlock(schema, periodIndex),
     metricsBlock: buildMetricsBlock(schema, grids, periodIndex),
     stateBlock: buildStateBlock(state),
-    toolCatalog: buildToolCatalog(),
+    toolCatalog: toolCatalog ?? defaultToolCatalog(schema, periodIndex, state),
   };
 }

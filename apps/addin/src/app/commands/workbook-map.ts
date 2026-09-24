@@ -1,19 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 23 — the deterministic Workbook Map.
-//
-// A bounded structural picture of the WHOLE workbook — worksheets, used-range
-// dimensions, column headers, Excel tables, the active sheet and the current
-// selection. It is built ONLY from Office.js/workbook state:
-//   • one `getWorkbookOverview()` call (sheets, used ranges, tables, …);
-//   • one `getSelection()` call (active sheet + selection);
-//   • at most `MAX_HEADER_SHEETS` bounded header-row reads (first row of each
-//     visible sheet's used range, capped at `MAX_HEADER_COLUMNS` columns).
-//
-// Nothing here reads a full sheet or mutates anything. Later stages resolve
-// sheet / table / column references against this map and only ever act on
-// resolved objects — the model never invents a worksheet, address or header.
-// ---------------------------------------------------------------------------
-
 import type { ExcelPort, SelectionInfo, WorkbookOverview } from "@sheet-agent/application";
 import { columnIndexToLetters, parseLocalRange, splitSheetAddress } from "../a1.js";
 

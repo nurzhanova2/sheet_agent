@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Analysis planning protocol (Stage 21.1).
-//
-// For turns the application has classified as analytical or visualization
-// (see app/intent.ts), the model is asked for a PLAN before it may write a
-// final answer. The plan is a typed, validated structure — the model cannot
-// "direct answer" its way past a deterministic computation.
-// ---------------------------------------------------------------------------
-
 import type { TurnIntent } from "../app/intent.js";
 import { validateAnalysisRequest } from "./validate.js";
 import { stableStringify } from "./canonical.js";

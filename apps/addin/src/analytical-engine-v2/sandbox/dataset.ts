@@ -1,25 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §9/§10/§23/§25/§73 — preparing what the sandbox is allowed to see.
-//
-// The engine hands Python DATA, never handles (§9). No Excel object, no range
-// it could re-read, no workbook reference, no credential — just the rows the
-// user is already looking at, each column labelled with how it should be READ.
-//
-// Two of those labels do most of the work.
-//
-// `semanticType` is the §73 contract: a column is a percentage stored as a
-// fraction, or an identifier that merely looks numeric. Without it, generated
-// code averages a customer ID and multiplies a share by 100 twice, and both
-// mistakes produce confident numbers.
-//
-// `missingCount` and `zeroCount` are counted SEPARATELY and both are reported.
-// §23 forbids the silent missing→zero conversion and §25 explains why it
-// matters: a zero in a sales column is a recorded fact, an empty cell is the
-// absence of one, and only the first supports "нет продаж". The conversion is
-// prevented at the only place it can be — here, on the way in. Once a gap has
-// become 0, no policy declared downstream can tell the two apart again.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import { isPercentNumberFormat } from "../../app/schema/excel-date.js";
 import type { AnalysisGrids } from "../../app/schema/matrix-analysis.js";

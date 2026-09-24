@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.7 — natural language → typed AnalyticalIntent (§5, §39, §77).
-//
-// Lexical / regex hints detect CANDIDATE semantics only. Divergent utterances
-// ("когда максимум", "в каком периоде максимум", "когда было самое большое")
-// all converge on ONE operation. Exact resolution and every number are done
-// downstream by the compiler / executor, never here.
-// ---------------------------------------------------------------------------
-
 import type { SemanticMetricClass } from "../measure-compatibility.js";
 import type { AnalyticalIntent, AnalyticalOperation, OutputProjection, ThresholdMode } from "./types.js";
 
@@ -459,7 +450,6 @@ export function detectAnalyticalIntent(rawText: string): AnalyticalIntent {
     push("change");
   }
 
-  // output projection
   let output: OutputProjection;
   if (operation === "argmax" || operation === "argmin") {
     output = OUTPUT_BOTH_HINT.test(text)

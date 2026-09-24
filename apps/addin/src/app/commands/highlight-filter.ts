@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 22 — deterministic resolution of the two condition-driven slash
-// commands:
-//   /highlight  → a real highlight_range mutation PROPOSAL (Preview → Approve →
-//                 applyAction → snapshot undo). No model. The displayed count
-//                 and the highlighted cells come from ONE matched row set.
-//   /filter     → a read-only count + sample of the matching rows. No mutation.
-// Both reuse the existing engine (selectMatchingRows) and, for /highlight, the
-// existing mutation-safety pipeline — there is NO separate execution path.
-// ---------------------------------------------------------------------------
-
 import type { SelectionSnapshot } from "../workbook-context.js";
 import type { ResponseLanguage } from "../language.js";
 import { columnIndexToLetters, parseLocalRange, splitSheetAddress } from "../a1.js";

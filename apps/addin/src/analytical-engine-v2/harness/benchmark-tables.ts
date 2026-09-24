@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §52/§53/§58 — the benchmark's tables.
-//
-// Invented labels, three different layouts, and one deliberately
-// instruction-shaped label. Nothing here resembles a real workbook the engine
-// might have been tuned against, and none of these strings appears in engine
-// code or in the planner prompt.
-// ---------------------------------------------------------------------------
-
 import { buildDatedTable, buildLabelledTable, type SyntheticTable } from "../__fixtures__/synthetic-tables.js";
 
 const SERIALS = [45292, 45627, 45962, 45992]; // four dated periods

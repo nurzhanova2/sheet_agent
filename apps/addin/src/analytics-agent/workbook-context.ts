@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 25 §4 — the compact TABLE CONTEXT block for the planner.
-//
-// Semantic schema metadata only — sheet, range, orientation, metric labels +
-// semantic classes, period labels, prior conversational refs. Never the raw
-// workbook grid (that stays behind the tool boundary, read via metric.list /
-// series.get / value.at_period so every number keeps its provenance).
-// ---------------------------------------------------------------------------
-
 import { isPercentNumberFormat } from "../app/schema/excel-date.js";
 import { classifySemanticMetricClass } from "../app/schema/measure-compatibility.js";
 import type { AnalysisGrids } from "../app/schema/matrix-analysis.js";

@@ -1,20 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.8 §4/§5/§6/§7/§8 — WHO OWNS THIS TURN.
-//
-// The Stage 26.7 audit counted ELEVEN branches in `use-agent.ts` that can
-// answer an analytical question about a table. Wiring V2 in as a twelfth would
-// leave the question "which engine answered this?" unanswerable, and §44 needs
-// it answerable. So one decision goes in FRONT of all of them, and it decides
-// exactly one thing: ownership.
-//
-// §8 — IT IS NOT AN INTENT COMPILER. It never determines the operation, the
-// metric, the period, the ranking basis or the requested outputs. It answers
-// "is this an ordinary analytical question about a recognised table?" and stops.
-// Everything downstream of that is the V2 planner's job, and the moment this
-// module starts deciding WHAT to compute, Stage 26 has grown a thirteenth
-// analytical route.
-// ---------------------------------------------------------------------------
-
 import type { TurnRoute } from "../../app/conversation-route.js";
 
 export type TurnOwner = "V2_OWNED" | "NON_V2";

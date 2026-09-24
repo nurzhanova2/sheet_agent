@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.3 §21 — generator for the tool/argument compatibility matrix.
-//
-// Derived from the registry itself rather than written by hand, so it cannot
-// drift from the real contract. `interop.test.ts` asserts the invariant this
-// document reports; this renders it for humans.
-//
-// Run:  npx vitest run src/analytical-engine-v2/tools/compatibility-matrix.test.ts
-// ---------------------------------------------------------------------------
-
 import { V2_TOOLS } from "./registry.js";
 import type { ArgSpec } from "./contracts.js";
 

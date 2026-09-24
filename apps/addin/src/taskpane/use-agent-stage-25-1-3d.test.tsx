@@ -1,11 +1,3 @@
-// Stage 25.1.3d — result-shape fidelity & post-success focus stability.
-// Integration through useAgent().submit(): real routing, real tool
-// composition, real SessionMemory — only decideAgentStep is scripted;
-// `narrate` always returns "" so every turn's visible body comes from the
-// DETERMINISTIC FALLBACK renderer — the most direct way to prove the
-// fallback (and therefore `outcome.primary`/session-memory, which share the
-// SAME `determinePrimaryAnswer` selection — §15) shows the correctly-shaped
-// result, not just that some narrator prose happens to sound right.
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { CellValue, ExcelMutationPort, ExcelPort } from "@sheet-agent/application";

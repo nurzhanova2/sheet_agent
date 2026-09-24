@@ -1,19 +1,10 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §3/§4 — CHANGE and AGGREGATE tools.
-//
-// Change arithmetic comes from `comparePoints` / `compareMetricSetAtTwoPoints`
-// (the same primitives every Stage 24/25 comparison has always used), and the
-// aggregates from `seriesExtrema` and `series-aggregates.ts`. Nothing here
-// computes a percentage or a mean itself.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import { seriesExtrema, comparePoints } from "../../app/schema/analytical/temporal-primitives.js";
 import { compareMetricSetAtTwoPoints, getPointValue } from "../../app/schema/analytical/temporal-series.js";
 import { seriesMean, seriesStdDev, seriesSum } from "../../app/schema/analytical/series-aggregates.js";
 import { toolError } from "../types.js";
 import { METRIC_FIELD, cell, isErr, metricScope, num, seriesOf, text, type ToolSpec } from "./contracts.js";
-import { METRIC_REF_DESCRIBE, PERIOD_REF_DESCRIBE, resolveMetricInput, resolvePeriodInput } from "./semantic-refs.js";
+import { METRIC_REF_DESCRIBE, PERIOD_REF_DESCRIBE, periodPairDefaults, resolveMetricInput, resolvePeriodInput } from "./semantic-refs.js";
 
 const COMPARISON_FIELDS = [METRIC_FIELD, num("startValue"), num("endValue"), num("absoluteChange"), num("percentageChange"), cell("startCell"), cell("endCell")];
 
@@ -26,8 +17,9 @@ const SCOPE_ACCEPTS = ["metric_set", "comparison", "filtered_set", "ranked_set",
 
 const changeComparePeriods: ToolSpec = {
   name: "change.compare_periods",
+  capability: "comparison",
   description:
-    "Compare metrics between TWO periods: start value, end value, absolute change and percentage change, one row per metric. Returns a comparison result — the usual starting point for 'what changed', and the input you then filter or rank. Pass inputRef to compare only the metrics of an earlier result instead of the whole table.",
+    "Compare metrics between TWO periods: start value, end value, absolute change and percentage change, one row per metric. Returns a comparison result — the usual starting point for 'what changed', and the input you then filter or rank. Pass inputRef to compare only the metrics of an earlier result instead of the whole table. Omit BOTH periods to compare the latest period against the one immediately before it; omit only startPeriod to compare against the period immediately before endPeriod; omit only endPeriod to compare from startPeriod to the latest period.",
   args: {
     startPeriod: { type: "string", describe: "canonical period (earlier)" },
     startPeriodRef: { type: "periodRef", describe: PERIOD_REF_DESCRIBE },
@@ -38,7 +30,10 @@ const changeComparePeriods: ToolSpec = {
   returns: "comparison",
   accepts: [...SCOPE_ACCEPTS],
   reads: true,
-  run: (args, env) => {
+  run: (rawArgs, env) => {
+    const defaulted = periodPairDefaults(rawArgs, env);
+    if (isErr(defaulted)) return defaulted.error;
+    const args = defaulted;
     const startPicked = resolvePeriodInput(args, env, "startPeriod");
     if (isErr(startPicked)) return startPicked.error;
     const start = startPicked.value;
@@ -73,8 +68,9 @@ const changeComparePeriods: ToolSpec = {
 
 const changeCompute: ToolSpec = {
   name: "change.compute",
+  capability: "comparison",
   description:
-    "The change of ONE metric between two periods — absolute and percentage, with both source cells. Returns a comparison result of one row. Use it when the request is about a single named metric; use change.compare_periods when several metrics must be compared with each other.",
+    "The change of ONE metric between two periods — absolute and percentage, with both source cells. Returns a comparison result of one row. Use it when the request is about a single named metric; use change.compare_periods when several metrics must be compared with each other. Omit BOTH periods to compare the latest period against the one immediately before it; omit only startPeriod to compare against the period immediately before endPeriod; omit only endPeriod to compare from startPeriod to the latest period.",
   args: {
     metric: { type: "string", describe: "the metric label" },
     metricRef: { type: "metricRef", describe: METRIC_REF_DESCRIBE },
@@ -85,7 +81,10 @@ const changeCompute: ToolSpec = {
   },
   returns: "comparison",
   reads: true,
-  run: (args, env) => {
+  run: (rawArgs, env) => {
+    const defaulted = periodPairDefaults(rawArgs, env);
+    if (isErr(defaulted)) return defaulted.error;
+    const args = defaulted;
     const picked = resolveMetricInput(args, env);
     if (isErr(picked)) return picked.error;
     const member = picked.value;
@@ -109,6 +108,7 @@ const changeCompute: ToolSpec = {
         rows: [[member.display, a.value, b.value, cmp.absoluteChange, cmp.percentChange, a.cell, b.cell]],
         metricKeys: [member.display],
         periodCanonicals: [start.canonical, end.canonical],
+        metadata: { startLabel: start.headerPath, endLabel: end.headerPath },
         parents: [...picked.parents, ...startPicked.parents, ...endPicked.parents],
       }),
     };
@@ -129,6 +129,7 @@ function aggregate(kind: AggKind): ToolSpec {
   const extremum = kind === "min" || kind === "max";
   return {
     name: `aggregate.${kind}`,
+    capability: "statistics",
     description: `${AGG_DESCRIPTION[kind]} Takes metrics (or an inputRef whose metric universe to reuse) and returns an aggregate result with one row per metric, which you can then rank or filter.`,
     args: { ...METRIC_SCOPE_ARGS },
     returns: "aggregate",

@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------------
-// Compound planning & goal tracking (Stage 21.2.3).
-//
-// A multi-part request becomes an explicit list of typed goals. Each distinct
-// user requirement is one goal; goals are never silently dropped. The 21.2.1
-// deterministic engine / canonicalization / group_correlation and the 21.2.2
-// VerifiedFacts layer are the frozen baseline — this module orchestrates them,
-// it does NOT introduce a second numeric-grounding system.
-//
-//   plan   : CompoundPlan  { goals: AnalysisGoal[] }
-//   prepare: dedupe + merge goal requests into <= N canonical operations
-//   execute: one runAnalysis batch, then resolve dependent goals from the facts
-//   report : CompoundExecutionSummary  (drives the answer prompt + completeness)
-// ---------------------------------------------------------------------------
-
 import { canonicalizeAnalysisRequest, canonicalKey, stableStringify } from "./canonical.js";
 import { validateAnalysisRequest } from "./validate.js";
 import { validateVisualizationRequest } from "../visualization/validate.js";

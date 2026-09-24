@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §5/§14/§17/§18/§22/§59 — the planner prompt and decision parser.
-//
-// The prompt states a DIVISION OF LABOUR and explains what the tools MEAN. It
-// contains no benchmark sentence, no acceptance phrase, and no rule keyed to
-// particular wording (§59) — the composition for any given question has to
-// follow from the tool semantics, because that is the hypothesis Stage 26.2
-// exists to test.
-// ---------------------------------------------------------------------------
-
 import type { EngineContext } from "../context/build-context.js";
 import { renderResultsForPlanner } from "./result-preview.js";
 import type {
@@ -21,7 +11,9 @@ import type {
   PlannerDecision,
 } from "../types.js";
 import { scanDecisions, type DecisionScan, type SerializationClass } from "./decision-scan.js";
+import { toolNames } from "../tools/registry.js";
 import { EXPLORATION_BOUNDS, EXPLORATION_DIMENSIONS, readDimension, type ExplorationDimension } from "../sandbox/exploration.js";
+import { METHOD_COMPARISON_BOUNDS } from "../sandbox/method-comparison.js";
 
 export interface PlannerMessage {
   readonly role: "system" | "user";
@@ -61,6 +53,14 @@ const SYSTEM_BASE = [
   "- A question asking for a single metric ends with a ranking tool (set.argmax / set.argmin), not with a table. Give it the result that holds the candidates and the field that defines the ranking; it scans every row and returns the winner.",
   "- magnitude=true compares SIZES and discards the sign, so set.argmin with magnitude=true selects whatever moved LEAST — never the largest fall. When a filter has already restricted the rows to one direction, the extreme of that direction is set.argmax with magnitude=true. Reach for set.argmin only when the request is genuinely about the smallest movement, or when you are ranking a signed field with magnitude off.",
   "",
+  "FINISHING IN ONE STEP",
+  "- The TABLE block already lists every period and the METRIC LABELS block already lists every metric name. Use them directly. Never spend a call discovering what is already printed in front of you.",
+  "- For a change request that says current, latest, previous period, or simply asks how much a metric grew/changed WITHOUT naming dates, omit BOTH period arguments from change.compute or change.compare_periods. The tool then uses the latest available comparable period and the one immediately before it. Do not copy the oldest and newest entries from TABLE into that call. Supply endpoints only when the user explicitly names a period or asks for the whole history.",
+  '- When the tool call you are about to make PRODUCES THE ANSWER and nothing further is needed, add "final":true to that call. The turn ends on its result: you send no separate complete decision and you are not asked again.',
+  '- Use "final":true for an ordinary single-answer question — a change between two periods, a value at one period, a ranking, an extreme, a trend, a volatility comparison — where one call finishes the work.',
+  '- Do NOT set "final":true when your plan declared several outputs, when the call only narrows or prepares data for a later call, or when you are not yet sure its result answers the request. Finish those with a complete decision as usual.',
+  '- A "final" call whose result turns out to be empty or merely descriptive does not end the turn: you are told so, and you continue.',
+  "",
   "ANSWERING IN PARTS",
   "- Read the request to the end before completing. If it asks for several things, every one of them must be represented in your completion — one as the primary result, the rest as supporting results.",
   "- When a request asks for MORE THAN ONE output, make your FIRST decision a `plan` listing those outputs in the order the request states them. Declare them ONCE: once they appear under OUTPUTS YOU ALREADY DECLARED, move on to tool calls, then bind each output id to a result in your `complete`.",
@@ -76,7 +76,7 @@ const SYSTEM_BASE = [
   "",
   "OUTPUT — return EXACTLY ONE JSON object and nothing else (no prose, no code fence, no extra keys):",
   '  {"kind":"plan","outputs":["<what the request asks for, one short phrase each>", …],"primaryOutputId":"o<N>"}',
-  '  {"kind":"tool_call","tool":"<name>","arguments":{ … }}',
+  '  {"kind":"tool_call","tool":"<name>","arguments":{ … },"final":true}   ("final" is optional — see FINISHING IN ONE STEP)',
   '  {"kind":"clarify","question":"<one question>","options":["<option>", …]}',
   '  {"kind":"complete","primaryResultRef":"result_N","supportingResultRefs":["result_M", …],"outputBindings":[{"outputId":"o1","resultRef":"result_M"}, …]}',
   "EVERY tool argument goes inside \"arguments\". A value written at the top level of the decision is rejected.",
@@ -105,17 +105,42 @@ const SYSTEM_SANDBOX = [
   "- For an operation NO tool performs, send an `analyze` decision. It runs real Python (pandas, numpy, scipy, scikit-learn) over this table. Use it for: clustering and segmentation, correlation between indicators, principal components and dimensionality reduction, statistical tests, regression, anomaly and outlier detection, change-point detection, custom normalisation or aggregation, similarity and distance, distribution shape, and open-ended exploration of what is notable in the data.",
   "- `analyze` is NOT a retry for a tool call that failed. If a tool returned an error, fix the call.",
   "- State in `objective` what the analysis must establish, and list every result you need in `requestedOutputs` with the shape it must arrive in. You will be held to that list: an analysis that returns something else is refused, not accepted.",
-  "- When the request asks you to TRY SEVERAL approaches, name them all in `methods` and compare them in ONE analyze — not one method per decision.",
+  "- Grouping, segmentation, clustering, correlation, components and outlier detection have NO tool. Do not assemble one out of analysis.trend, set.sort and set.filter and call it a grouping — that is answering a different question (§5). Send `analyze`.",
+  `- When the request asks you to TRY SEVERAL approaches, name them all in \`methods\` and compare them in ONE analyze — not one method per decision. At most ${METHOD_COMPARISON_BOUNDS.max}: each one has to be run and measured, and a list of four comes back with none of them executed.`,
   "- An analysis result is an ordinary result: you may pass it to set.* tools afterwards, and you may narrow the data with tools before analysing.",
   `- For an OPEN-ENDED request — "исследуй таблицу", "что здесь интересно?", "найди что-нибудь необычное", "какие закономерности?" — do not pick one tool. Send ONE analyze and list ${EXPLORATION_BOUNDS.suggestedMin}–${EXPLORATION_BOUNDS.max} dimensions in \`exploration\`, chosen from: ${EXPLORATION_DIMENSIONS.join(", ")}.`,
+  "- `exploration` is ONLY for an open-ended request. A focused question — one named operation, one named subject — takes no `exploration` at all: attaching dimensions to it makes the script longer, not the answer better.",
+  "- One analyze does ONE of the two: it compares `methods` for a single objective, or it covers several `exploration` dimensions. Never both in the same decision.",
   "- Choose those dimensions from what the SCHEMA actually offers: no `relationships` with one numeric column, no `trends` with one period. Every dimension you name will be reported on, including when it found nothing.",
   "- Never answer a request for one operation with a different operation. If the analysis cannot be done, say that rather than substituting something you can do.",
-  '  {"kind":"analyze","objective":"<what it must establish>","requestedOutputs":[{"id":"a1","description":"<what>","shape":"groups|table|series|scalar|model|diagnostic"}],"methods":["<method>"],"exploration":["<dimension>"],"necessity":"MISSING_DETERMINISTIC_CAPABILITY|OPEN_ENDED_EXPLORATION|CUSTOM_TRANSFORMATION|ADVANCED_STATISTICS|MULTI_METHOD_ANALYSIS|OTHER"}',
+  "- A request for a CAUSE is not an analysis request. The table records what happened, never why, and no amount of Python recovers a reason that is not in the data. Answer it from the deterministic tools — what moved, when, by how much, and what moved alongside it — and let the answer say plainly that the cause is not something this table shows.",
+  '  {"kind":"analyze","objective":"<what it must establish>","requestedOutputs":[{"description":"<what>","shape":"groups|table|series|scalar|model|diagnostic"}],"methods":["<method>"],"exploration":["<dimension>"],"necessity":"MISSING_DETERMINISTIC_CAPABILITY|OPEN_ENDED_EXPLORATION|CUSTOM_TRANSFORMATION|ADVANCED_STATISTICS|MULTI_METHOD_ANALYSIS|OTHER"}',
 ].join("\n");
 
 /** §4 — the planner hears about the sandbox only when one is wired in. */
-export function plannerSystemPrompt(sandboxAvailable: boolean): string {
-  return sandboxAvailable ? `${SYSTEM_BASE}\n${SYSTEM_SANDBOX}` : SYSTEM_BASE;
+const TOOL_TOKEN = /[a-z_]+\.[a-z_]+/gu;
+
+function namesAbsentTool(line: string, exposed: ReadonlySet<string>, known: ReadonlySet<string>): boolean {
+  const tokens = line.match(TOOL_TOKEN) ?? [];
+  return tokens.some((token) => known.has(token) && !exposed.has(token));
+}
+
+const SYSTEM_CACHE = new Map<string, string>();
+
+export function plannerSystemPrompt(sandboxAvailable: boolean, exposedTools?: readonly string[]): string {
+  const base = sandboxAvailable ? `${SYSTEM_BASE}\n${SYSTEM_SANDBOX}` : SYSTEM_BASE;
+  if (!exposedTools) return base;
+  const key = `${sandboxAvailable ? "s" : "-"}|${[...exposedTools].sort().join(",")}`;
+  const hit = SYSTEM_CACHE.get(key);
+  if (hit !== undefined) return hit;
+  const exposed = new Set(exposedTools);
+  const known = new Set(toolNames());
+  const built = base
+    .split("\n")
+    .filter((line) => !namesAbsentTool(line, exposed, known))
+    .join("\n");
+  SYSTEM_CACHE.set(key, built);
+  return built;
 }
 
 
@@ -129,6 +154,7 @@ export interface PlannerPromptInput {
   readonly declaredPrimaryOutputId?: string;
   /** Stage 27 §4 — is the code sandbox available for this turn? */
   readonly sandboxAvailable?: boolean;
+  readonly exposedTools?: readonly string[];
   /** Stage 26.7 §30 — the task this message is answering a question for. */
   readonly resume?: {
     readonly request: string;
@@ -200,7 +226,7 @@ export function buildPlannerMessages(input: PlannerPromptInput): readonly Planne
   }
   parts.push("", input.resume ? "=== THE REPLY ===" : "=== USER REQUEST ===", input.request, "", `Round ${input.round} of ${input.round + input.remainingRounds}. Return exactly one JSON decision.`);
   return [
-    { role: "system", content: plannerSystemPrompt(input.sandboxAvailable ?? false) },
+    { role: "system", content: plannerSystemPrompt(input.sandboxAvailable ?? false, input.exposedTools) },
     { role: "user", content: parts.join("\n") },
   ];
 }
@@ -208,7 +234,7 @@ export function buildPlannerMessages(input: PlannerPromptInput): readonly Planne
 // --- decision parsing (§14/§15) ---------------------------------------------
 
 const PROTOCOL_KEYS: Readonly<Record<string, readonly string[]>> = {
-  tool_call: ["kind", "tool", "arguments"],
+  tool_call: ["kind", "tool", "arguments", "final"],
   clarify: ["kind", "question", "options"],
   complete: ["kind", "primaryResultRef", "supportingResultRefs", "answerStyle", "outputBindings"],
   // Stage 26.5 §4 — a plan may also name which of its outputs is the answer.
@@ -374,7 +400,15 @@ Return a corrected decision: {"kind":"tool_call","tool":"…","arguments":{ … 
     if (args !== undefined && (typeof args !== "object" || args === null || Array.isArray(args))) {
       return fail("BAD_CONTAINER", '"arguments" must be an object', 'The "arguments" field of a tool_call must be a JSON object mapping argument names to values.');
     }
-    return { ok: true, decision: { kind: "tool_call", tool, arguments: (args as Record<string, unknown>) ?? {} }, serialization: scan.serialization };
+    const final = o["final"];
+    if (final !== undefined && typeof final !== "boolean") {
+      return fail("BAD_CONTAINER", '"final" must be true or false', 'The "final" field of a tool_call is a boolean: true only when this call produces the principal answer.');
+    }
+    return {
+      ok: true,
+      decision: { kind: "tool_call", tool, arguments: (args as Record<string, unknown>) ?? {}, ...(final === true ? { final: true } : {}) },
+      serialization: scan.serialization,
+    };
   }
 
   if (kind === "clarify") {
@@ -418,12 +452,25 @@ Return a corrected decision: {"kind":"tool_call","tool":"…","arguments":{ … 
       outputs.push({ id: typeof e["id"] === "string" && e["id"] !== "" ? e["id"] : `a${i + 1}`, description, shape: shape as AnalyzeOutput["shape"] });
     }
     const methods = Array.isArray(o["methods"]) ? (o["methods"] as unknown[]).filter((m): m is string => typeof m === "string") : [];
+    // §19 — every named method is one the script must actually RUN and
+    // MEASURE, so the list is a workload, not a wish list. Plans naming four
+    // produced no executed comparison at all in the live run.
+    // TRIMMED, not refused — for the same reason the methods/exploration
+    // overlap is normalised rather than rejected, and measured the same way.
+    // An over-specified plan was answered with a protocol correction, the
+    // planner over-specified the OTHER field on its next try, and the two
+    // rejections together spent the whole per-turn correction budget: both
+    // "исследуй таблицу" questions died having produced nothing. A plan naming
+    // five methods is not malformed, it is greedy; the first three are a real
+    // comparison and the turn survives.
+    const methodsDropped = methods.splice(METHOD_COMPARISON_BOUNDS.max);
 
     // §37/§38 — an exploration is bounded by its plan. The ceiling is enforced
     // because boundedness is the safety property §38 actually asks for; the
     // suggested floor is not, because a small table with little to explore
     // should not fail a turn for being small.
     const exploration: ExplorationDimension[] = [];
+    const excess: ExplorationDimension[] = [];
     const rawExploration = o["exploration"];
     if (rawExploration !== undefined) {
       if (!Array.isArray(rawExploration)) {
@@ -436,16 +483,50 @@ Return a corrected decision: {"kind":"tool_call","tool":"…","arguments":{ … 
         }
         if (!exploration.includes(dimension)) exploration.push(dimension);
       }
-      if (exploration.length > EXPLORATION_BOUNDS.max) {
-        return fail(
-          "INCONSISTENT_PLAN",
-          `an exploration may cover at most ${EXPLORATION_BOUNDS.max} dimensions`,
-          `Keep "exploration" to ${EXPLORATION_BOUNDS.max} dimensions or fewer — choose the ones this schema can actually support.`,
-        );
-      }
+      // Trimmed rather than refused, for the reason given at the methods
+      // ceiling above: the dimensions the planner listed FIRST are the ones it
+      // thought mattered most, and four of them is a real exploration. A turn
+      // that dies arguing about the fifth is not.
+      excess.push(...exploration.splice(EXPLORATION_BOUNDS.max));
     }
     const assumptions = Array.isArray(o["assumptions"]) ? (o["assumptions"] as unknown[]).filter((a): a is string => typeof a === "string") : [];
     const necessity = typeof o["necessity"] === "string" && ANALYZE_NECESSITY.has(o["necessity"]) ? (o["necessity"] as AnalysisNecessity) : "OTHER";
+
+    // §19 — a plan that calls itself multi-method and names no methods is
+    // contradicting itself, and the contradiction is not harmless: nothing
+    // downstream requires a comparison unless `methods` holds two or more, so
+    // the turn proceeds as an ordinary single-method analysis while its own
+    // trace says several were compared. The live run produced exactly that on
+    // both multi-method questions. Recoverable, like every other protocol
+    // slip — the planner is told what is missing and sends the decision again.
+    // §19/§36 — comparing methods and exploring dimensions are different
+    // analyses, and a plan asking for both in one script asks for their
+    // product: every method measured along every dimension, with §19's
+    // comparison gate and §37's coverage gate both binding at once. Nothing
+    // analytical is gained — you cannot compare three clustering methods "by
+    // data quality" — and the cost is a script no generation reliably lands.
+    //
+    // NORMALISED, not refused. Refusing it was tried and measured: the planner
+    // sent the same combination again, the §5 correction budget ran out, and
+    // the turn died in four seconds having attempted no analysis at all. That
+    // is a worse outcome than the overloaded script it was meant to prevent.
+    //
+    // `methods` wins because naming two or more is an explicit instruction to
+    // compare approaches (§19), while `exploration` is the breadth device for
+    // a request that named nothing (§36) — a plan carrying both is not open
+    // ended. The objective and the requested outputs are untouched, so the
+    // question being answered does not change (§5); what is dropped is a
+    // redundant second specification of HOW to answer it, and the trace
+    // records that it was dropped.
+    const dropped: ExplorationDimension[] = [...excess, ...(methods.length >= METHOD_COMPARISON_BOUNDS.min ? exploration.splice(0) : [])];
+
+    if (necessity === "MULTI_METHOD_ANALYSIS" && methods.length < METHOD_COMPARISON_BOUNDS.min) {
+      return fail(
+        "INCONSISTENT_PLAN",
+        `"necessity" is MULTI_METHOD_ANALYSIS but "methods" names ${methods.length}`,
+        `List the approaches in "methods" — at least ${METHOD_COMPARISON_BOUNDS.min}, at most ${METHOD_COMPARISON_BOUNDS.max}. Naming them only in "objective" does not make them run.`,
+      );
+    }
     return {
       ok: true,
       decision: {
@@ -454,6 +535,8 @@ Return a corrected decision: {"kind":"tool_call","tool":"…","arguments":{ … 
         requestedOutputs: outputs,
         ...(methods.length > 0 ? { methods } : {}),
         ...(exploration.length > 0 ? { exploration } : {}),
+        ...(dropped.length > 0 ? { explorationDropped: dropped } : {}),
+        ...(methodsDropped.length > 0 ? { methodsDropped } : {}),
         ...(assumptions.length > 0 ? { assumptions } : {}),
         necessity,
       },

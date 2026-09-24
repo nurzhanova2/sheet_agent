@@ -1,33 +1,7 @@
-// ---------------------------------------------------------------------------
-// Stage 26.3 §3/§4/§5/§11 — the canonical semantic-reference layer.
-//
-// Stage 26.2L's dominant failure was structural, not cognitive: the planner
-// picked the right tool and then could not hand it the previous tool's result.
-// 58 of 87 tool errors were a reference pushed into a slot that only accepted
-// a literal string, across 36 of 50 turns.
-//
-// The fix is ONE shared dereferencer, not per-tool special cases (§5). Every
-// semantic scalar input now has two spellings:
-//
-//     series.get { metric: "Доля брака" }        — a literal, still valid (§10)
-//     series.get { metricRef: "result_1" }       — a typed reference (§3)
-//
-// The `<arg>Ref` sibling is the single canonical representation (§8): a flat
-// resultId string, which structured generation emits reliably, and which can
-// never be confused with a label the way an overloaded slot could.
-//
-// Coercion stays STRONGLY TYPED (§4). There is deliberately no
-// `resolveAnyResultRefToString`. A result qualifies as a metric only if it
-// NAMES exactly one metric, and as a period only if it names exactly one
-// period — so a period result can never satisfy a metric slot, a comparison
-// (two periods) can never satisfy a single-period slot, and a multi-metric set
-// is refused with its members listed rather than silently taking the first.
-// ---------------------------------------------------------------------------
-
 import type { RowAxisMember } from "../../app/schema/schema-induction.js";
 import type { CanonicalPeriod } from "../../app/schema/analytical/types.js";
 import { toolError, type EngineResult } from "../types.js";
-import { isErr, memberFor, periodFor, sortedPoints, type Resolved, type ToolEnv } from "./contracts.js";
+import { isErr, memberFor, periodFor, sortedPoints, unknownReference, type Resolved, type ToolEnv } from "./contracts.js";
 
 /** A resultId as the planner spells it. Used to catch one pushed into a literal slot. */
 export const RESULT_ID_RE = /^result_\d+$/;
@@ -47,7 +21,7 @@ function storedResult(ref: unknown, env: ToolEnv, argName: string): Resolved<Eng
     return { error: toolError("INVALID_ARGUMENT", `"${argName}" must be the resultId of an earlier tool result`) };
   }
   const r = env.store.get(ref);
-  if (!r) return { error: toolError("UNKNOWN_REFERENCE", `no result "${ref}" in this analysis`, env.store.ids()) };
+  if (!r) return { error: unknownReference(ref, env) };
   if (r.sourceVersion !== env.schema.sourceVersion) {
     return { error: toolError("STALE_REFERENCE", `"${ref}" was computed before the table changed — recompute it`) };
   }
@@ -159,3 +133,37 @@ export const PERIOD_REF_DESCRIBE =
 
 /** All period labels, for a recoverable error (§5). */
 export const allPeriodCanonicals = (env: ToolEnv): readonly string[] => sortedPoints(env).map((p) => p.canonical);
+
+export function periodPairDefaults(args: Readonly<Record<string, unknown>>, env: ToolEnv): Resolved<Readonly<Record<string, unknown>>> {
+  const hasStart = args["startPeriod"] !== undefined || args["startPeriodRef"] !== undefined;
+  const hasEnd = args["endPeriod"] !== undefined || args["endPeriodRef"] !== undefined;
+  if (hasStart && hasEnd) return args;
+
+  const points = sortedPoints(env);
+  if (points.length < 2) {
+    return { error: toolError("INVALID_ARGUMENT", "the table has fewer than two periods, so a comparison needs both endpoints named", allPeriodCanonicals(env)) };
+  }
+
+  if (!hasStart && !hasEnd) {
+    return { ...args, startPeriod: points[points.length - 2]!.canonical, endPeriod: points[points.length - 1]!.canonical };
+  }
+  if (!hasEnd) return { ...args, endPeriod: points[points.length - 1]!.canonical };
+
+  const endLiteral = args["endPeriod"];
+  if (typeof endLiteral !== "string") {
+    return { error: toolError("INVALID_ARGUMENT", '"startPeriod" (a canonical period) or "startPeriodRef" (a result reference) is required', allPeriodCanonicals(env)) };
+  }
+  const at = points.findIndex((p) => p.canonical === endLiteral);
+  if (at < 1) {
+    return {
+      error: toolError(
+        "INVALID_ARGUMENT",
+        at === 0
+          ? `"${endLiteral}" is the earliest period in the table, so there is no period before it to compare against`
+          : '"startPeriod" (a canonical period) or "startPeriodRef" (a result reference) is required',
+        allPeriodCanonicals(env),
+      ),
+    };
+  }
+  return { ...args, startPeriod: points[at - 1]!.canonical };
+}

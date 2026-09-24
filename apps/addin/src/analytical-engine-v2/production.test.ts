@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.8 §4–§8, §24–§30, §32 — the pieces the production route is built from.
-//
-// The integration tests in `taskpane/use-agent-stage-26-8.test.tsx` prove the
-// wiring end to end. These pin the CONTRACTS underneath it: the ownership
-// table, the compact catalogue's completeness, the prompt budget, the
-// clarification loop's floor, and the promise that no internal name reaches a
-// user-facing string.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it } from "vitest";
 import { classifyTurnOwner, type OwnershipContext } from "./production/turn-owner.js";
 import {
@@ -20,7 +10,10 @@ import {
 } from "./production/answer-ux.js";
 import { beginTurn, enginesThisTurn, finishTurn, lastTurn, recordAnalyticalExecution, resetTurnLedger } from "./production/turn-ledger.js";
 import { alreadyAnswered, clarificationSignature, repeatedClarificationFeedback, type AnsweredClarification } from "./state/clarification-loop.js";
-import { buildEngineContext, toolCatalogModel } from "./context/build-context.js";
+import { buildEngineContext, buildToolCatalog, toolCatalogModel } from "./context/build-context.js";
+import { capabilityFactsOf } from "./capability/capability-availability.js";
+import { selectCapabilities } from "./capability/capability-selection.js";
+import { buildToolContext } from "./capability/tool-context.js";
 import { buildPlannerMessages } from "./planner/planner-prompt.js";
 import { buildPeriodIndex } from "../app/schema/analytical/period-index.js";
 import { EMPTY_ANALYTICAL_STATE } from "./state/conversation-state.js";
@@ -157,16 +150,21 @@ describe("Stage 26.8 §25 — the compact catalogue hides nothing", () => {
   const table = fixtureOperations();
   const catalog = buildEngineContext(table.schema, table.grids, buildPeriodIndex(table.schema, table.grids), EMPTY_ANALYTICAL_STATE).toolCatalog;
   const model = toolCatalogModel();
+  const facts = capabilityFactsOf({ schema: table.schema, periodIndex: buildPeriodIndex(table.schema, table.grids), state: EMPTY_ANALYTICAL_STATE });
+  const contextModel = buildToolContext({ facts, selection: selectCapabilities({ facts }) });
 
-  it("contains every tool, its return type, and no [object Object]", () => {
+  it("contains every exposed tool, its return type, and no [object Object]", () => {
     expect(catalog).not.toContain("[object Object]");
     expect(model.entries).toHaveLength(V2_TOOLS.length);
+    const exposed = new Set(contextModel.exposedTools);
+    const loaded = new Set(contextModel.loadedTools);
     for (const tool of V2_TOOLS) {
       const entry = model.entries.find((e) => e.name === tool.name);
       expect(entry, tool.name).toBeDefined();
       expect(entry!.returns).toBe(tool.returns);
+      if (!exposed.has(tool.name)) continue;
       expect(catalog, tool.name).toContain(`${entry!.signature} → ${tool.returns}`);
-      expect(catalog, `${tool.name} description`).toContain(tool.description);
+      if (loaded.has(tool.name)) expect(catalog, `${tool.name} description`).toContain(tool.description);
     }
   });
 
@@ -181,15 +179,20 @@ describe("Stage 26.8 §25 — the compact catalogue hides nothing", () => {
     }
   });
 
-  it("states every argument contract exactly once — shared ones in the shared block", () => {
+  it("states every loaded argument contract exactly once — shared ones in the shared block", () => {
+    const loaded = new Set(contextModel.loadedTools);
     for (const tool of V2_TOOLS) {
+      if (!loaded.has(tool.name)) continue;
       for (const [, spec] of Object.entries(tool.args)) {
         expect(catalog, spec.describe.slice(0, 40)).toContain(spec.describe);
       }
     }
-    // and the shared block is the reason the catalogue shrank at all
     expect(model.shared.length).toBeGreaterThan(10);
     for (const s of model.shared) expect(s.uses).toBeGreaterThan(1);
+  });
+
+  it("§31 — the tiered catalogue is materially smaller than the full registry serialization", () => {
+    expect(catalog.length).toBeLessThan(buildToolCatalog().length * 0.8);
   });
 
   it("§23 — every ref alternative is still advertised", () => {

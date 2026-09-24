@@ -1,21 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §43/§51/§58 — saying what a number IS, without printing its key.
-//
-// Exploration returns numbers under machine names: `zScore`, `iqrDistance`,
-// `coefficientOfVariation`, `missingCount`. Every one of them means something
-// a person can be told, and none of them may appear in an answer — §18's rule
-// against field names as words does not stop applying because the field came
-// from Python instead of from a tool.
-//
-// So each known measure gets a phrase, and — the part that matters more — an
-// UNKNOWN measure gets none. The tempting fallback is to de-snake the key and
-// hope: `skewness_robust` becomes "skewness robust" and the sentence looks
-// finished. It is not finished, it is a field name with a space in it, and in
-// a Russian answer it is also in the wrong language. The honest fallback is to
-// state the number without claiming what it measures, and `measureWord`
-// returns null to force that choice on the caller.
-// ---------------------------------------------------------------------------
-
 import type { NumberLocale } from "../../analysis/format-number.js";
 
 /** How a measure reads inside a sentence, and whether it needs its number. */

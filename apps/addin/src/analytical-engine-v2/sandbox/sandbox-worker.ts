@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §7/§8/§11 — the worker that hosts the analytical runtime.
-//
-// This file runs on the far side of the boundary. Before Pyodide is even
-// loaded it deletes the JavaScript capabilities a compromised analysis would
-// reach for — `fetch`, `XMLHttpRequest`, `WebSocket`, `importScripts` — so
-// that the `js` bridge, if it were ever reopened, would find an empty room.
-//
-// That ordering is the point. `python-runtime.ts` closes the bridge from the
-// Python side; this closes the room from the JavaScript side. §8's "offline by
-// default" is then true of the environment rather than of a policy: there is
-// no network primitive in this scope to call.
-// ---------------------------------------------------------------------------
-
 import { BOOTSTRAP_SOURCES } from "./python-runtime.js";
 import type { HostMessage, WorkerMessage } from "./worker-runtime.js";
 
@@ -21,16 +7,28 @@ interface WorkerPyodide {
 }
 
 /**
- * §8 — remove the network and loader primitives from the worker scope.
+ * §8 — the network and loader primitives removed from the worker scope.
  *
- * Deleting rather than stubbing: a stub is a function a determined caller can
- * inspect and work around, while a missing global is a TypeError at the call
- * site. Pyodide itself does not need these once its assets are fetched, which
- * is why the deletion happens after the dynamic import resolves.
+ * Deleted rather than stubbed: a missing global is a TypeError at the call
+ * site, while a stub can be inspected and worked around. Removal runs after
+ * the dynamic import resolves — Pyodide needs the network for its own assets.
  */
+export const SEALED_GLOBALS: readonly string[] = [
+  "fetch",
+  "XMLHttpRequest",
+  "WebSocket",
+  "EventSource",
+  "importScripts",
+  "Request",
+  "Response",
+  "navigator",
+  "indexedDB",
+  "caches",
+];
+
 function sealScope(scope: Record<string, unknown>): readonly string[] {
   const sealed: string[] = [];
-  for (const name of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "Request", "Response", "navigator", "indexedDB", "caches"]) {
+  for (const name of SEALED_GLOBALS) {
     if (name in scope) {
       try {
         delete scope[name];
@@ -76,8 +74,7 @@ export async function startSandboxWorker(): Promise<void> {
     const mod = (await import("pyodide")) as unknown as { loadPyodide: (o: { indexURL?: string }) => Promise<WorkerPyodide> };
     const runtime = await mod.loadPyodide(indexURL !== undefined ? { indexURL } : {});
     await runtime.loadPackage(packages ?? ["numpy", "pandas", "scikit-learn"]);
-    // §8 — assets are in; the network primitives are no longer needed by
-    // anyone, so they leave the scope entirely.
+    // §8 — assets are in; the primitives leave the scope.
     sealScope(globalThis as unknown as Record<string, unknown>);
     for (const source of BOOTSTRAP_SOURCES) runtime.runPython(source);
     py = runtime;
@@ -104,6 +101,48 @@ export async function startSandboxWorker(): Promise<void> {
           const payload = JSON.stringify(message.dataset);
           const raw = String(py.runPython(`__sa_run(${JSON.stringify(message.code)}, ${JSON.stringify(payload)}, ${message.maxRows})`));
           send({ type: "result", id: message.id, envelope: JSON.parse(raw) });
+          return;
+        }
+        // Stage 27.2 §15/§16 — the iterative session, over the same worker.
+        //
+        // These are four more `runPython` calls into the same bootstrapped
+        // interpreter, carrying no new capability: the session namespace is
+        // built by the same `__sa_namespace` a one-shot run uses, under the
+        // same restricted builtins. What crosses the boundary is a session
+        // id, which is a string the host chose.
+        if (message.type === "step") {
+          const payload = JSON.stringify(message.dataset);
+          const raw = String(
+            py.runPython(`__sa_step(${JSON.stringify(message.sessionId)}, ${JSON.stringify(message.code)}, ${JSON.stringify(payload)}, ${message.maxRows})`),
+          );
+          send({ type: "observation", id: message.id, observation: JSON.parse(raw) });
+          return;
+        }
+        if (message.type === "look") {
+          const payload = JSON.stringify(message.dataset);
+          const raw = String(
+            py.runPython(
+              `__sa_look(${JSON.stringify(message.sessionId)}, ${JSON.stringify(message.target)}, ${JSON.stringify(message.variable)}, ${JSON.stringify(payload)}, ${message.limit})`,
+            ),
+          );
+          send({ type: "observation", id: message.id, observation: JSON.parse(raw) });
+          return;
+        }
+        if (message.type === "inspect") {
+          const payload = JSON.stringify(message.dataset);
+          const raw = String(py.runPython(`__sa_inspect(${JSON.stringify(message.sessionId)}, ${JSON.stringify(payload)})`));
+          send({ type: "observation", id: message.id, observation: JSON.parse(raw) });
+          return;
+        }
+        if (message.type === "finish") {
+          const raw = String(py.runPython(`__sa_finish(${JSON.stringify(message.sessionId)}, ${message.maxRows})`));
+          send({ type: "result", id: message.id, envelope: JSON.parse(raw) });
+          return;
+        }
+        if (message.type === "dispose") {
+          py.runPython(`__sa_dispose(${JSON.stringify(message.sessionId)})`);
+          send({ type: "observation", id: message.id, observation: { status: "ok" } });
+          return;
         }
       } catch (err) {
         const id = (message as { id?: number }).id;

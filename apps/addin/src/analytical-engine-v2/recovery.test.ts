@@ -1,15 +1,9 @@
-// ---------------------------------------------------------------------------
-// Stage 26.4 §27/§29–§34 — protocol recovery, compound completion, joins and
-// reference absence.
-//
-// The theme: a planner is allowed to make a small protocol mistake, and the
-// engine must let it correct that mistake safely — while anything unsafe still
-// fails closed the first time.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it } from "vitest";
 import { runAnalyticalEngine, type EngineTurn } from "./engine.js";
 import { buildEngineContext } from "./context/build-context.js";
+import { capabilityFactsOf } from "./capability/capability-availability.js";
+import { selectCapabilities } from "./capability/capability-selection.js";
+import { buildToolContext } from "./capability/tool-context.js";
 import { buildPeriodIndex } from "../app/schema/analytical/period-index.js";
 import { buildPlannerMessages, parsePlannerDecision } from "./planner/planner-prompt.js";
 import { buildToolEnv } from "./tools/contracts.js";
@@ -78,21 +72,37 @@ describe("Stage 26.4 §27 — the planner's tool catalogue is never malformed", 
     expect(catalog).not.toContain("[object Object]");
   });
 
-  // Stage 26.8 §24 renders the catalogue compactly — a signature per tool, and
-  // each shared argument contract stated once instead of fifty times. The
-  // assertion is the same one: every tool, every argument, its type, its
-  // requiredness, its description and its ref alternative are all still there.
-  it("names every tool, and every argument with its type and requiredness", () => {
+  // Stage 27.2C §42/§43 OVERTURNS the "every tool" form of this guard. The
+  // catalogue is now tiered: every EXPOSED tool carries its signature, its
+  // return type and every required flag — so it stays callable — while the
+  // per-argument prose loads only for SELECTED capabilities. What no longer
+  // holds is that the registry is serialized whole, which is the point.
+  it("names every exposed tool with its type and requiredness, and loads contracts for the selected ones", () => {
+    const facts = capabilityFactsOf({ schema: table.schema, periodIndex: buildPeriodIndex(table.schema, table.grids), state: EMPTY_ANALYTICAL_STATE });
+    const model = buildToolContext({ facts, selection: selectCapabilities({ facts }) });
+    const exposed = new Set(model.exposedTools);
+    const loaded = new Set(model.loadedTools);
+    expect(exposed.size).toBeGreaterThan(0);
     for (const tool of V2_TOOLS) {
+      if (!exposed.has(tool.name)) continue;
       const signature = `${tool.name}(${Object.entries(tool.args)
         .map(([n, spec]) => `${n}${spec.required ? "!" : ""}:${spec.type}`)
         .join(", ")})`;
       expect(catalog, tool.name).toContain(signature);
-      expect(catalog, `${tool.name} returns`).toContain(`${signature} \u2192 ${tool.returns}`);
+      expect(catalog, `${tool.name} returns`).toContain(`${signature} → ${tool.returns}`);
+      if (!loaded.has(tool.name)) continue;
       for (const [arg, spec] of Object.entries(tool.args)) {
         expect(catalog, `${tool.name}.${arg} describe`).toContain(spec.describe);
+        void arg;
       }
     }
+  });
+
+  it("names no tool whose capability is unavailable this turn", () => {
+    const facts = capabilityFactsOf({ schema: table.schema, periodIndex: buildPeriodIndex(table.schema, table.grids), state: EMPTY_ANALYTICAL_STATE });
+    const model = buildToolContext({ facts, selection: selectCapabilities({ facts }) });
+    expect(model.absentTools.length).toBeGreaterThan(0);
+    for (const name of model.absentTools) expect(catalog, name).not.toContain(name);
   });
 
   it("advertises the reference alternative wherever a literal slot has one", () => {
@@ -424,7 +434,7 @@ describe("Stage 26.4 §34 — absent history is data, not a crash", () => {
     });
     expect(turn.kind).toBe("answered");
     if (turn.kind !== "answered") return;
-    expect(turn.trace.rounds.some((r) => r.toolError?.code === "NO_PREVIOUS_RESULT")).toBe(true);
+    expect(turn.trace.rounds.some((r) => r.toolError?.code === "CAPABILITY_UNAVAILABLE")).toBe(true);
   });
 
   it("§24 — an absent reference never fabricates a stand-in", () => {

@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.7 — a bounded PeriodIndex derived from a TableSchema (§49).
-//
-// Point-in-time periods (dated column headers, or a date-valued row axis) and
-// derived change horizons ("за 1 месяц, Δ", "с начала года") are indexed once
-// and reused by the period resolver. Every entry keeps the exact header path
-// and coordinates — no LLM-generated coordinates.
-// ---------------------------------------------------------------------------
-
 import { coerceHeaderDate, isDateNumberFormat } from "../excel-date.js";
 import { SCHEMA_LIMITS } from "../table-profile.js";
 import type { TableSchema } from "../schema-induction.js";

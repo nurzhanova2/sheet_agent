@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §18/§19 — the ResultStore: every useful tool output gets a
-// first-class, addressable handle with a recorded lineage.
-//
-// This is what makes "из них" a POINTER rather than a re-derivation: the
-// planner passes `result_101` to the next tool, and the engine can always
-// answer "where did this come from?" without parsing anything.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { EngineResult, ResultField, ResultId, ResultType } from "../types.js";
 

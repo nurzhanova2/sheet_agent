@@ -1,22 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 25 — the analytical tool registry.
-//
-// Every tool here is a thin, deterministic wrapper over the EXISTING Stage
-// 24.6–24.9 schema / metric / period / temporal primitives — nothing here
-// recomputes a number a different way. The LLM planner (Stage 25) composes
-// these tools; it never calculates a workbook value itself (§1, §3).
-//
-// Tools operate over an ALREADY-INDUCED TableSchema + AnalysisGrids (read
-// once per turn, exactly like the Stage 24.7 compiler) — they never touch
-// `ctx.deps` (the flat-table agent's async Office.js deps). `readCost: 1` on
-// every tool turns the existing `AgentBounds.maxWorkbookReads` into the
-// "max analytical tool calls" budget from §7, with zero changes to
-// `agent/agent-loop.ts` / `agent/bounds.ts` / `agent/decision-schema.ts`.
-//
-// Row-axis metrics only (schema.orientation !== "column_metrics") — the same
-// documented scope limitation Stage 24.9's MetricSetRef already carries.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import { createAgentToolRegistry } from "../agent/tool-registry.js";
 import type { AgentObservation, AgentTool, AgentToolContext, AgentToolRegistry, ToolInputResult } from "../agent/types.js";

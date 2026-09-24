@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.7 — deterministic execution of a validated AnalyticalPlan (§16–§35).
-//
-// Every number, extremum, ranking value, trend / volatility score and source
-// cell is computed here. Output is projected per the plan (period / value /
-// period+value / series / ranking / table). A period audit records
-// requested-vs-executed endpoints so a silent substitution can never pass.
-// ---------------------------------------------------------------------------
-
 import { columnIndexToLetters, parseLocalRange, splitSheetAddress } from "../../a1.js";
 import { classifyCell } from "../cell-typing.js";
 import type { CellValue } from "@sheet-agent/application";

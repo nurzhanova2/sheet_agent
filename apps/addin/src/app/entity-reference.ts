@@ -1,20 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.5 §3–§7 — conversational reference resolution for actions on an
-// earlier analytical result, plus entity-set extraction.
-//
-//  • extractEntitySet(ref) : reads the entity column + canonical entity values
-//    out of a remembered result's STRUCTURED rows (never rendered markdown).
-//    Returns `ambiguous` when two columns are equally plausible entity columns
-//    (§15) so the caller can ask "regions or managers?".
-//  • resolveActionReference(text, memory, action) : maps "их" / "его" / "them" /
-//    "those" / "this result" to the most recent object in SessionMemory that is
-//    COMPATIBLE with the requested action, using the deterministic priority in
-//    §4. Compatibility beats recency: "выдели их" after (result → chart of it)
-//    resolves to the result, not the chart.
-//
-// `\b` is ASCII-only in JS regex — Russian alternatives use explicit classes.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ChartRef, ResultRef, RowSetRef, SessionMemory } from "./session-memory.js";
 

@@ -1,20 +1,3 @@
-// Stage 25.1.3f §7/§8/§10 — FOLLOW-UP RESULTSET CONTINUITY.
-//
-// Integration through useAgent().submit(): real routing, real tool
-// composition, real SessionMemory — only decideAgentStep is scripted.
-//
-// The point of this file is the REAL run's exact shape:
-//
-//   • turn 1 executes a full comparison successfully, but its NARRATION is
-//     forced to fail numeric verification, so the visible body comes from the
-//     deterministic fallback renderer. That is a PRESENTATION outcome — the
-//     structured continuation state must still be committed (§5).
-//   • turn 2 is a bare restriction ("Теперь покажи только показатели, которые
-//     снизились.") whose plan is DELIBERATELY unable to rebuild the universe:
-//     it never calls metric.list / period.* / change.compare_periods. The only
-//     way it can answer is by consuming turn 1's stored ResultSet (§4/§9).
-//   • turns 3–5 then continue into Stage 25.1.3e's deterministic winner
-//     reduction and the compound pronoun follow-up, unchanged (§10).
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { CellValue, ExcelMutationPort, ExcelPort } from "@sheet-agent/application";

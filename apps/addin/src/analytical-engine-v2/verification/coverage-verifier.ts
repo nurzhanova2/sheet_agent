@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §23 — clause coverage.
-//
-// Deliberately the WEAKEST component in the engine. Its only job is to notice
-// that a request asking for two things came back pointing at one, and give the
-// planner one more round. It does NOT decide what the missing operation was,
-// and it never implements it — that was exactly the Stage 25 mistake where a
-// verifier grew into a second intent engine.
-//
-// Note what it counts: the number of distinct analytical ASKS in the sentence,
-// against the number of distinct RESULTS the planner named. Neither side is
-// matched by phrase.
-// ---------------------------------------------------------------------------
-
 import type { EngineAnalysis } from "../types.js";
 
 // A word that opens an analytical ask, in either language. Counting these is a

@@ -1,17 +1,3 @@
-// Stage 25.1.3e — deterministic winner reduction by validated ranking
-// basis. Integration through useAgent().submit(): real routing, real tool
-// composition, real SessionMemory — only decideAgentStep is scripted;
-// `narrate` always returns "" so every turn's visible body comes from the
-// DETERMINISTIC FALLBACK renderer (the most direct proof the mechanism
-// itself — not scripted prose — produces the correct winner).
-//
-// The fixture reproduces the REAL bug's exact structural shape: a decoy
-// metric with a NEAR-ZERO change ("займы клиентам", the wrong answer the
-// real Excel run showed) sitting ahead of the TRUE largest-magnitude
-// decliner ("обратное РЕПО") in whatever order the plan happens to produce
-// — turn 3's decide function deliberately never calls set.sort/set.argmax
-// at all, so the ONLY way to reach the correct answer is the new
-// deterministic reduction recomputing it directly from the candidate rows.
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { CellValue, ExcelMutationPort, ExcelPort } from "@sheet-agent/application";

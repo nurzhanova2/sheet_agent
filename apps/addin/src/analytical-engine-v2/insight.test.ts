@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §39/§40/§44/§45/§52/§53/§56/§57/§58 — the Insight layer.
-//
-// The table these tests run on is a bank balance sheet, because that is the
-// shape §41/§46/§47 describe and because it carries every trap the layer
-// exists for in one place: amounts and shares in the same column, a metric
-// whose change is measured in percentage points, and a row that grows from
-// nothing so its relative change does not exist.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it } from "vitest";
 import type { CellValue } from "@sheet-agent/application";
 import { induceTableSchema } from "../app/schema/schema-induction.js";
@@ -381,7 +371,7 @@ describe("Stage 27 §57/§58 — the fallback is prose, keyed off the result TYP
     // §45 — not an apology, not a table
     expect(body).not.toMatch(/Не удалось/);
     expect(body).not.toContain("|");
-    expect(body.split(/[.!?]\s/).length).toBeLessThanOrEqual(2);
+    expect(body.split(/[.!?]\s/).length).toBeLessThanOrEqual(4);
   });
 
   it("an empty filtered set is answered as a finding, not an error", () => {

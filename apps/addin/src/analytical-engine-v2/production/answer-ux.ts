@@ -1,17 +1,10 @@
-// ---------------------------------------------------------------------------
-// Stage 26.8 §18/§20/§31/§32 — what the PERSON sees.
-//
-// Everything the engine produces for a developer — planner JSON, tool
-// arguments, result ids, protocol errors, typed error codes — stops here. The
-// rule from Stage 25 stands and gets stricter: a user-facing string is built
-// from this module or it is a narrated answer, never from an internal field.
-// ---------------------------------------------------------------------------
-
 import type { EngineAnalysis, EngineTerminationReason } from "../types.js";
 
 export type Lang = "ru" | "en";
 
 const pick = (language: Lang, ru: string, en: string): string => (language === "ru" ? ru : en);
+
+const NEWLINE = String.fromCharCode(10);
 
 /**
  * §20 — the stages a ~30-second turn shows. Deliberately few, deliberately
@@ -19,17 +12,45 @@ const pick = (language: Lang, ru: string, en: string): string => (language === "
  * claim about what it has found. They describe the PHASE, and the phase is the
  * one thing the engine always knows.
  */
-export type ProgressPhase = "reading" | "analysing" | "composing";
+//
+// Stage 27.2A §37 adds three more, for the iterative loop. The rule is
+// unchanged and matters more here, not less: an iterative turn KNOWS it hit a
+// NameError, and that is exactly the thing a reader must never be shown. They
+// are told the analysis is being checked or adjusted, which is true, and the
+// NameError goes to `/debug analytical-agent`.
+export type ProgressPhase = "reading" | "inspecting" | "analysing" | "adjusting" | "verifying" | "composing";
 
 export function progressLabel(phase: ProgressPhase, language: Lang): string {
   switch (phase) {
     case "reading":
       return pick(language, "Читаю данные…", "Reading the data…");
+    case "inspecting":
+      return pick(language, "Изучаю данные…", "Looking at the data…");
     case "analysing":
       return pick(language, "Анализирую данные…", "Analysing the data…");
+    case "adjusting":
+      // What a reader sees INSTEAD of a Python error.
+      return pick(language, "Уточняю расчёт…", "Refining the calculation…");
+    case "verifying":
+      return pick(language, "Проверяю результат…", "Checking the result…");
     case "composing":
       return pick(language, "Формирую ответ…", "Composing the answer…");
   }
+}
+
+/**
+ * §37 — the phase an agent action puts the turn in.
+ *
+ * The mapping is deliberately lossy. An INSPECT and a failed EXECUTE_CODE are
+ * very different events internally and the reader is told two calm, true
+ * things about them; nothing here can leak an exception type, because nothing
+ * here receives one.
+ */
+export function phaseForAgentAction(action: "INSPECT" | "EXECUTE_CODE" | "CALL_TOOL" | "CLARIFY" | "COMPLETE" | "CONTROL", failed: boolean): ProgressPhase {
+  if (action === "COMPLETE") return "verifying";
+  if (action === "INSPECT") return "inspecting";
+  if (failed) return "adjusting";
+  return "analysing";
 }
 
 /**
@@ -41,6 +62,46 @@ export function progressLabel(phase: ProgressPhase, language: Lang): string {
  * difference between "the planner exceeded its rounds" and "it exceeded its
  * tool calls" is not a difference the person can act on.
  */
+export interface SandboxFailureContext {
+  readonly attempts: number;
+  readonly objective?: string;
+  readonly code?: string;
+}
+
+function attemptsPhrase(attempts: number, language: Lang): string {
+  if (language === "en") return attempts === 1 ? "one attempt" : `${attempts} attempts`;
+  const mod100 = attempts % 100;
+  const mod10 = attempts % 10;
+  const word = mod100 >= 11 && mod100 <= 14 ? "попыток" : mod10 === 1 ? "попытки" : mod10 >= 2 && mod10 <= 4 ? "попыток" : "попыток";
+  return `${attempts} ${word}`;
+}
+
+export function sandboxFailureMessage(context: SandboxFailureContext, language: Lang): string {
+  const objective = (context.objective ?? "").trim();
+  const headline =
+    objective === ""
+      ? pick(language, "Не удалось выполнить запрошенный расчёт.", "I could not carry out the calculation you asked for.")
+      : pick(language, `Не удалось выполнить расчёт: ${objective}.`, `I could not carry out this calculation: ${objective}.`);
+  if (context.code === "SANDBOX_UNAVAILABLE") {
+    return [
+      headline,
+      pick(
+        language,
+        "Python-песочница не запустилась в этой сборке, поэтому расчёт выполнить нечем. Подменять его другим показателем я не стану.",
+        "The Python sandbox did not start in this build, so there is nothing to run the calculation with. I will not substitute a different measure for it.",
+      ),
+    ].join(NEWLINE + NEWLINE);
+  }
+  return [
+    headline,
+    pick(
+      language,
+      `Python-анализ не выполнился после ${attemptsPhrase(context.attempts, language)}, поэтому я не буду подменять его другим показателем. Попробуйте сузить вопрос или сформулировать расчёт иначе.`,
+      `The Python analysis did not run after ${attemptsPhrase(context.attempts, language)}, so I will not substitute a different measure for it. Try narrowing the question or describing the calculation differently.`,
+    ),
+  ].join(NEWLINE + NEWLINE);
+}
+
 export function failureMessage(reason: EngineTerminationReason, language: Lang): string {
   switch (reason) {
     case "planner_rounds":

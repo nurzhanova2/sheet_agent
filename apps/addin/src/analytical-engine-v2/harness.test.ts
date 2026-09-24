@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §48/§56/§57/§60 — the live harness, exercised with a SCRIPTED
-// client.
-//
-// The harness is the instrument the live benchmark is measured with, so its
-// own arithmetic has to be trustworthy before any number it reports means
-// anything: these tests check that it judges the ANSWER rather than the route,
-// carries conversation state between turns, and classifies failures correctly.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it, vi } from "vitest";
 import type { ChatClient } from "../app/chat-client.js";
 import { runHarnessConversation, runHarnessTurn, renderHarnessReport, summarize, type HarnessQuestion } from "./harness/live-harness.js";
@@ -129,9 +119,9 @@ describe("Stage 26.2 §60 — failures are classified by root cause", () => {
     expect(report.failureClass).toBe("PLANNER_ARGUMENT");
   });
 
-  it("a stale/unknown reference is REFERENCE_RESOLUTION", async () => {
+  it("a reference tool on a turn with no history is CAPABILITY_UNAVAILABLE", async () => {
     const { report } = await runHarnessTurn({ chatClient: scriptedClient(() => call("reference.last_result")), table, question });
-    expect(report.failureClass).toBe("REFERENCE_RESOLUTION");
+    expect(report.failureClass).toBe("CAPABILITY_UNAVAILABLE");
   });
 
   it("filtering a series is TOOL_CONTRACT", async () => {

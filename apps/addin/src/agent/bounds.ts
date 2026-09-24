@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4 — hard bounds for the agentic analysis loop.
-//
-// The loop is a controlled USER → AGENT → TOOL → OBSERVATION → AGENT cycle on
-// top of the existing deterministic execution + safety layer. It MUST be
-// bounded: no recursive, uncontrolled model loop. Every constant below is
-// explicit and independently tested (`bounds.test.ts`).
-// ---------------------------------------------------------------------------
-
 export interface AgentBounds {
   /** Maximum model reasoning steps (one typed decision each). */
   readonly maxAgentSteps: number;

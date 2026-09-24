@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Deterministic canonicalization of analysis requests (Stage 21.2).
-//
-// Two semantically-equivalent plans the model might emit for the same intent —
-// operand order swapped, a bare condition vs. an {all:[…]} wrapper, nested
-// abs/neg, key order — must resolve to ONE stable typed representation so that
-//
-//     same snapshot + same normalized intent = same deterministic result.
-//
-// This is PURELY STRUCTURAL. It never rewrites one column into another and never
-// assumes formula equivalence (e.g. it does NOT turn `Fact - Plan` into
-// `Variance`). It only removes representational noise.
-// ---------------------------------------------------------------------------
-
 import { normalizeConditionGroup } from "./expression.js";
 import type {
   AnalysisRequest,

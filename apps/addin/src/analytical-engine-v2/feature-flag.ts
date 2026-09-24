@@ -1,20 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §43/§67 and Stage 26.8 §9/§10/§45 — the migration switch.
-//
-// Through Stage 26.7 this defaulted OFF: the engine was built, tested and
-// traceable, but production routing was untouched, so every Stage 24/25
-// regression suite kept running against the path it was written for.
-//
-// Stage 26.8 is the activation stage, and §10 asks for V2 ON by default in the
-// HUMAN TESTING RC. So the default flips, and the flag's real job changes: it
-// is now the ROLLBACK (§45). Setting VITE_UNIFIED_ANALYTICAL_ENGINE_V2=false
-// restores Stage 24/25 production behaviour exactly, with no code change — the
-// installer and the manual-test guide both name that switch.
-//
-// There is still deliberately no "mixed" mode: a turn is owned by one engine or
-// the other (§4), never handed from one to the other mid-flight (§11/§44).
-// ---------------------------------------------------------------------------
-
 /**
  * Read from the bundle's own env first, then the process env.
  *
@@ -48,4 +31,46 @@ export function unifiedAnalyticalEngineV2Enabled(): boolean {
 export function unifiedAnalyticalEngineV2FlagSource(): string {
   const raw = readFlag();
   return raw === undefined ? "default" : `VITE_UNIFIED_ANALYTICAL_ENGINE_V2=${raw}`;
+}
+
+// ---------------------------------------------------------------------------
+// Stage 27.2A §2 — the iterative analytical loop.
+//
+// A SEPARATE switch from the engine flag above, and separate on purpose. The
+// engine flag chooses between two whole architectures that were each tested
+// end to end; this one chooses how the sandbox is DRIVEN inside the V2 engine,
+// and the two failure modes have nothing to do with each other. Folding them
+// together would mean a rollback of the loop also rolled back Stage 26.
+//
+// It defaults ON once the loop has live evidence behind it. Until §46's smoke
+// run exists it defaults OFF: the one-shot path is the one with five
+// benchmark series behind it, and an unproven loop should not be what a human
+// tester meets first.
+// ---------------------------------------------------------------------------
+
+function readLoopFlag(): string | undefined {
+  let value: string | undefined;
+  try {
+    value = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_ANALYTICAL_AGENT_LOOP;
+  } catch {
+    value = undefined;
+  }
+  if (value !== undefined) return value;
+  try {
+    return (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env?.["VITE_ANALYTICAL_AGENT_LOOP"];
+  } catch {
+    return undefined;
+  }
+}
+
+export function analyticalAgentLoopEnabled(): boolean {
+  const raw = readLoopFlag();
+  if (raw === undefined) return false;
+  return raw !== "false" && raw !== "0";
+}
+
+/** Shown in the build identity beside the engine flag. */
+export function analyticalAgentLoopFlagSource(): string {
+  const raw = readLoopFlag();
+  return raw === undefined ? "default(off)" : `VITE_ANALYTICAL_AGENT_LOOP=${raw}`;
 }

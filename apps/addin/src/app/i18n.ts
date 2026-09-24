@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Small typed localization layer for APPLICATION-generated user-facing text
-// (Stage 21.2.5). RU + EN only. Not an i18n framework — a flat keyed table plus
-// a handful of parameterised helpers.
-//
-// RULES
-//  - Application-generated wording follows the user's request language.
-//  - Workbook identifiers (column headers: Plan, Fact, Category, Variance %,
-//    Revenue …) are NEVER translated — they are interpolated verbatim.
-//  - Typed error codes (COLUMN_NOT_AVAILABLE, VISUALIZATION_UNSUPPORTED …) stay
-//    stable English in logic; only their DISPLAY message is localized.
-// ---------------------------------------------------------------------------
-
 import type { ResponseLanguage } from "./language.js";
 
 export type Lang = ResponseLanguage;

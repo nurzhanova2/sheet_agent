@@ -1,20 +1,11 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §48/§56/§57/§60/§61 — the developer-only live planner harness.
-//
-// Sends a synthetic table + conversation state + a question to the REAL
-// configured planner model and reports what it did: the tool sequence, the
-// completion, the deterministic result, budget use and a failure class.
-//
-// It is NOT reachable from the taskpane. Nothing here can become the normal
-// analytical route (§1): it is imported only by the benchmark runner and its
-// tests, takes its ChatClient as a parameter, and never touches SessionMemory
-// or the Excel port.
-// ---------------------------------------------------------------------------
-
 import type { AnalysisGrids } from "../../app/schema/matrix-analysis.js";
 import type { TableSchema } from "../../app/schema/schema-induction.js";
 import type { ChatClient } from "../../app/chat-client.js";
 import { runAnalyticalEngine, type EngineTurn } from "../engine.js";
+import type { AnalysisCapability } from "../sandbox/analysis-runner.js";
+import type { IterativeCapability } from "../sandbox/iterative-runner.js";
+import type { AgentMetrics } from "../sandbox/analysis-agent.js";
+import type { AnalyticalRuntime } from "../sandbox/executor.js";
 import { renderTrace, type AnalyticalTraceV2 } from "../debug/analytical-trace.js";
 import { EMPTY_ANALYTICAL_STATE, type AnalyticalConversationState } from "../state/conversation-state.js";
 import type { EngineResult } from "../types.js";
@@ -26,6 +17,7 @@ export type FailureClass =
   | "REFERENCE_RESOLUTION"
   | "TOOL_CONTRACT"
   | "MISSING_TOOL"
+  | "CAPABILITY_UNAVAILABLE"
   | "COMPLETION"
   | "COVERAGE"
   | "BUDGET"
@@ -76,10 +68,96 @@ export interface HarnessTurnReport {
   readonly mismatches: readonly string[];
   readonly failureClass?: FailureClass;
   readonly elapsedMs: number;
+  /** Stage 27 §87 — where the wall clock actually went. */
+  readonly stages: StageTimings;
+  /** Stage 27 §84 — what the sandbox was asked for, and what it did. */
+  readonly analysis?: AnalysisReport;
+  /** §38 — what the loop's DECISION calls cost, apart from code generation. */
+  readonly decisionMs?: number;
+  readonly decisionCalls?: number;
   readonly trace: AnalyticalTraceV2;
 }
 
+/**
+ * §87 — latency, split by the thing that spent it.
+ *
+ * Five of the six are measured directly, at the callback boundary. The sixth,
+ * `engineMs`, is the remainder: tool execution, result storage, the coverage
+ * and numeric verification, and the state commit. §87 asks for verification as
+ * its own number and this does not give it one — isolating it would take
+ * instrumentation inside the engine, and reporting a made-up split would be
+ * worse than reporting an honest bucket. What `engineMs` does establish is the
+ * ceiling: verification cannot have cost more than it.
+ */
+export interface StageTimings {
+  readonly plannerMs: number;
+  readonly plannerCalls: number;
+  readonly codeGenMs: number;
+  readonly codeGenCalls: number;
+  readonly sandboxExecMs: number;
+  readonly sandboxAttempts: number;
+  readonly narrationMs: number;
+  readonly engineMs: number;
+}
+
+export interface AnalysisReport {
+  readonly requested: boolean;
+  readonly objective?: string;
+  readonly necessity?: string;
+  readonly method?: string;
+  readonly attempts: number;
+  /** Set when the analysis did not produce a usable result (§68). */
+  readonly failureCode?: string;
+  /** §19 — how many methods actually ran and reported metrics. */
+  readonly methodsCompared?: number;
+  /** §37 — the dimensions an exploration was asked to cover. */
+  readonly explorationDimensions?: readonly string[];
+  /**
+   * §71 — why each attempt failed, and what it ran.
+   *
+   * The report used to carry only `attempts: 3`, which says an analysis was
+   * repaired twice and nothing about what went wrong. Reading a run then
+   * meant re-running it with a debugger attached. The code is included
+   * because the failure and the line that caused it are only useful together.
+   */
+  readonly attemptLog?: readonly AttemptNote[];
+  /**
+   * Stage 27.2A §26/§47 — the iterative loop's own record.
+   *
+   * Absent when the turn ran the one-shot path, which is the distinction the
+   * §47 metrics table needs: SELF_RECOVERY_RATE is defined over turns that
+   * CONTAINED an execution error, and a turn with no loop contributes to
+   * neither half of that ratio.
+   */
+  readonly agent?: AgentMetrics;
+  /** §36 — the decision trace, for the report only. Never user-facing (§37). */
+  readonly agentTrace?: string;
+}
+
+export interface AttemptNote {
+  readonly attempt: number;
+  readonly ok: boolean;
+  readonly durationMs: number;
+  readonly codeLines: number;
+  readonly errorCode?: string;
+  readonly error?: string;
+  readonly code?: string;
+  /**
+   * Stage 27.x.1 §31 — the class the REFUSING LAYER assigned, when it knew.
+   *
+   * `classifyAttemptFailure` reads the message with a regex and is right most
+   * of the time, but the preflight checks and the output-contract check do not
+   * have to guess: they are the thing that decided. Carrying the verdict means
+   * the taxonomy stops depending on a regex agreeing with a hint that was
+   * written from the same rule two files away.
+   */
+  readonly failureClass?: string;
+  /** §12 — OUTPUT_SHAPE_MISMATCH: computed correctly, serialized wrongly. */
+  readonly subtype?: string;
+}
+
 const REFERENCE_TOOL = /^reference\./;
+const NEWLINE = String.fromCharCode(10);
 
 function classify(turn: EngineTurn, trace: AnalyticalTraceV2, mismatches: readonly string[]): FailureClass | undefined {
   if (turn.kind === "failed") {
@@ -92,6 +170,8 @@ function classify(turn: EngineTurn, trace: AnalyticalTraceV2, mismatches: readon
     switch (lastError.code) {
       case "UNKNOWN_TOOL":
         return "MISSING_TOOL";
+      case "CAPABILITY_UNAVAILABLE":
+        return "CAPABILITY_UNAVAILABLE";
       case "UNKNOWN_REFERENCE":
       case "STALE_REFERENCE":
       case "NO_PREVIOUS_RESULT":
@@ -139,6 +219,35 @@ function checkExpectations(turn: EngineTurn, expect: HarnessQuestion["expect"]):
   return out;
 }
 
+/**
+ * §83/§84 — what the trace says the sandbox was asked to do.
+ *
+ * Read from the TRACE rather than from the capability, so a turn where the
+ * planner asked for an analysis and the runtime refused still reports that one
+ * was requested. The difference between "never wanted an analysis" and "wanted
+ * one and did not get it" is the whole point of the §5 counters downstream.
+ */
+function describeAnalysis(trace: AnalyticalTraceV2, attempts: number, attemptLog: readonly AttemptNote[]): AnalysisReport | undefined {
+  const asked = trace.rounds.find((r) => r.decision?.kind === "analyze");
+  const method = trace.analysisMethod as Record<string, unknown> | undefined;
+  const failure = trace.analysisFailure as { readonly code?: string } | undefined;
+  if (!asked && !method && !failure) return undefined;
+
+  const decision = asked?.decision?.kind === "analyze" ? asked.decision : undefined;
+  const comparison = method?.["methodComparison"] as { readonly methods?: readonly unknown[] } | undefined;
+  return {
+    requested: Boolean(asked),
+    ...(decision?.objective ? { objective: decision.objective } : {}),
+    ...(decision?.necessity ? { necessity: decision.necessity } : {}),
+    ...(typeof method?.["method"] === "string" ? { method: method["method"] } : {}),
+    attempts,
+    ...(failure?.code ? { failureCode: failure.code } : {}),
+    ...(comparison?.methods ? { methodsCompared: comparison.methods.length } : {}),
+    ...(decision?.exploration ? { explorationDimensions: decision.exploration } : {}),
+    ...(attemptLog.length > 0 ? { attemptLog } : {}),
+  };
+}
+
 export interface HarnessTableEnv {
   readonly schema: TableSchema;
   readonly grids: AnalysisGrids;
@@ -152,6 +261,15 @@ export interface RunHarnessTurnParams {
   readonly language?: "ru" | "en";
   readonly model?: string;
   readonly signal?: AbortSignal;
+  /**
+   * Stage 27 §90 — the analytical runtime, when the suite is measuring it.
+   *
+   * Absent by default, and its absence is not a degraded mode: without it the
+   * engine answers an `analyze` decision with a capability error, which is
+   * exactly what a build with no sandbox must do (§5). Stage 26 suites keep
+   * running unchanged.
+   */
+  readonly runtime?: AnalyticalRuntime;
 }
 
 /** Runs ONE question against the real planner and reports what happened. */
@@ -165,6 +283,87 @@ export async function runHarnessTurn(
   const state = params.state ?? EMPTY_ANALYTICAL_STATE;
   const started = Date.now();
 
+  // §87 — every model call and every sandbox attempt is timed at its own
+  // boundary. Timing from OUTSIDE the engine keeps benchmark scaffolding out
+  // of the engine, which §1 has required since Stage 26.
+  let plannerMs = 0;
+  let plannerCalls = 0;
+  let codeGenMs = 0;
+  let codeGenCalls = 0;
+  let sandboxExecMs = 0;
+  let sandboxAttempts = 0;
+  const attemptLog: AttemptNote[] = [];
+  let narrationMs = 0;
+  // Stage 27.2A §38/§47 — the iterative loop's own costs and outcome.
+  let decisionMs = 0;
+  let decisionCalls = 0;
+  let agentMetrics: AgentMetrics | undefined;
+  let agentTrace: string | undefined;
+
+  const timed = async <T>(fn: () => Promise<T>, add: (ms: number) => void): Promise<T> => {
+    const at = Date.now();
+    try {
+      return await fn();
+    } finally {
+      add(Date.now() - at);
+    }
+  };
+
+  const analysis: (AnalysisCapability & Partial<IterativeCapability>) | undefined = params.runtime
+    ? {
+        runtime: params.runtime,
+        generateCode: async (messages) => {
+          codeGenCalls += 1;
+          return timed(
+            async () => (typeof chatClient.generateAnalysisCode === "function" ? chatClient.generateAnalysisCode(messages, signal, params.model) : ""),
+            (ms) => {
+              codeGenMs += ms;
+            },
+          );
+        },
+        // Stage 27.2A §2/§46 — the iterative loop's decision channel, timed at
+        // its own boundary. A decision call is not a code-generation call and
+        // must not be counted as one: §38 asks for decision latency and
+        // execution latency separately, and one bucket cannot answer both.
+        ...(typeof chatClient.decideAnalysisStep === "function"
+          ? {
+              decideStep: async (messages: readonly { readonly role: "system" | "user"; readonly content: string }[]) => {
+                decisionCalls += 1;
+                return timed(async () => chatClient.decideAnalysisStep!(messages, signal, params.model), (ms) => {
+                  decisionMs += ms;
+                });
+              },
+            }
+          : {}),
+        // §26/§47 — the self-recovery record, which only the loop can report.
+        onMetrics: (metrics: AgentMetrics) => {
+          agentMetrics = metrics;
+        },
+        onTrace: (trace: { readonly text: string }) => {
+          agentTrace = trace.text;
+        },
+        onAttempt: (record) => {
+          sandboxAttempts += 1;
+          sandboxExecMs += record.durationMs;
+          attemptLog.push({
+            attempt: record.attempt,
+            ok: record.ok,
+            durationMs: record.durationMs,
+            codeLines: record.code.split(NEWLINE).length,
+            ...(record.error
+              ? {
+                  errorCode: record.error.code,
+                  error: record.error.message,
+                  ...(record.error.failureClass ? { failureClass: record.error.failureClass } : {}),
+                  ...(record.error.subtype ? { subtype: record.error.subtype } : {}),
+                }
+              : {}),
+            ...(record.ok ? {} : { code: record.code }),
+          });
+        },
+      }
+    : undefined;
+
   const turn = await runAnalyticalEngine({
     turnId: question.id,
     request: question.text,
@@ -172,14 +371,34 @@ export async function runHarnessTurn(
     grids: table.grids,
     language: params.language ?? "ru",
     state,
-    decide: (messages) => plan(messages, signal, params.model),
-    narrate: async (messages) => (typeof chatClient.narrate === "function" ? chatClient.narrate(messages, signal, params.model) : ""),
+    decide: (messages) => {
+      plannerCalls += 1;
+      return timed(
+        () => plan(messages, signal, params.model),
+        (ms) => {
+          plannerMs += ms;
+        },
+      );
+    },
+    narrate: async (messages) =>
+      timed(
+        async () => (typeof chatClient.narrate === "function" ? chatClient.narrate(messages, signal, params.model) : ""),
+        (ms) => {
+          narrationMs += ms;
+        },
+      ),
+    ...(analysis ? { analysis } : {}),
   });
 
   const trace = turn.trace;
   const toolSequence = trace.rounds.flatMap((r) => (r.decision?.kind === "tool_call" ? [r.decision.tool] : []));
   const mismatches = checkExpectations(turn, question.expect);
   const failureClass = classify(turn, trace, mismatches);
+  const elapsedMs = Date.now() - started;
+  const base = describeAnalysis(trace, sandboxAttempts, attemptLog);
+  const analysisReport = base
+    ? { ...base, ...(agentMetrics ? { agent: agentMetrics } : {}), ...(agentTrace ? { agentTrace } : {}) }
+    : base;
   const report: HarnessTurnReport = {
     id: question.id,
     question: question.text,
@@ -200,7 +419,19 @@ export async function runHarnessTurn(
     semanticallyCorrect: question.expect ? turn.kind === "answered" && mismatches.length === 0 : null,
     mismatches,
     ...(failureClass ? { failureClass } : {}),
-    elapsedMs: Date.now() - started,
+    elapsedMs,
+    stages: {
+      plannerMs,
+      plannerCalls,
+      codeGenMs,
+      codeGenCalls,
+      sandboxExecMs,
+      sandboxAttempts,
+      narrationMs,
+      engineMs: Math.max(0, elapsedMs - plannerMs - codeGenMs - sandboxExecMs - narrationMs),
+    },
+    ...(analysisReport ? { analysis: analysisReport } : {}),
+    ...(decisionCalls > 0 ? { decisionMs, decisionCalls } : {}),
     trace,
   };
 

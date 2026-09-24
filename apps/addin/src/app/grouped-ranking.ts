@@ -1,22 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.5.4 — deterministic compilation of a "grouped ranking" request.
-//
-// "покажи 3 менеджеров с худшим Variance" / "5 regions with the highest Revenue"
-// is ONE compositional analytical pipeline, not two sibling operations:
-//
-//   SOURCE ROWS
-//     → GROUP BY <entityColumn>
-//     → AGGREGATE mean(<metricColumn>)
-//     → RANK the grouped rows (asc for "worst", desc for "best")
-//     → LIMIT N
-//
-// The model may help resolve the entity noun / metric phrase, but once resolved
-// the DAG is fixed and runs as a single `group_by` engine request. This module
-// only parses + resolves; the caller runs the engine and persists the result.
-//
-// `\b` is ASCII-only in JS regex — Russian alternatives use explicit classes.
-// ---------------------------------------------------------------------------
-
 /** A parsed "N <entities> with worst/best <metric>" request (pre-column-resolution). */
 export interface GroupedRankingRequest {
   readonly n: number;

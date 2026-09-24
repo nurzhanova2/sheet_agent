@@ -1,20 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.3A / 24.5 — deterministic planning for autonomous cross-sheet
-// comparison from a natural-language turn ("what changed between 2024 and
-// 2025?", "compare Fact between Sales Test Data and Agent Test").
-//
-// This module NEVER reads the workbook and NEVER guesses between material
-// alternatives:
-//   • two targets that each resolve to exactly one sheet (or one is the current
-//     selection) → a concrete compare plan;
-//   • a target that matches two or more distinct dataset families → ambiguous;
-//   • a target with no candidate sheet at all → missing;
-//   • more candidate sheets than the discovery budget → budget stop.
-//
-// The caller resolves the plan into bounded reads + the Stage 23 compare
-// builder, or into a PendingClarification / missing-data message.
-// ---------------------------------------------------------------------------
-
 import type { WorkbookMap, WorkbookMapSheet } from "./commands/workbook-map.js";
 import { detectComparison } from "./conversation-route.js";
 

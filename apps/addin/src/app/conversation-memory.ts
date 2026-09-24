@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24 — the SessionMemory container plus the deterministic conversational
-// reference resolver.
-//
-//  • remember* : bounded, immutable updates to SessionMemory.
-//  • resolveReference : maps "that" / "those rows" / "the chart" / "the new
-//    sheet" (EN + RU) to a structured object in memory — NEVER by scraping
-//    assistant prose. Returns `ambiguous` (never guesses) and `evicted`
-//    (the object existed but aged out) as first-class outcomes.
-//  • isUndoPhrase : "undo that" / "отмени это" → the existing undoLast path.
-//  • interpretClarificationAnswer : short replies ("Portfolio", "both",
-//    "the first one") answered against a PendingClarification.
-//  • projectMemoryForModel : the compact PRIOR RESULTS context block.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ResponseLanguage } from "./language.js";
 import { nextId } from "./agent-session.js";

@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.6 — deterministic analytical primitives over a canonical TableSchema.
-//
-// Generic (no business names): schemaDescribe, measureSeries, seriesExtrema,
-// seriesPeaks, iqrOutliers, axisRank. Every numeric result keeps exact source
-// cells and header-path provenance. Series of different measure kinds are never
-// mixed in one distribution / comparison.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import { columnIndexToLetters, parseLocalRange, splitSheetAddress } from "../a1.js";
 import { classifyCell } from "./cell-typing.js";

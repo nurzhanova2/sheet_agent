@@ -1,19 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.6 §10/§11/§12 — how many DECISIONS did the planner actually send?
-//
-// One planner round produces one decision. The forensics behind this stage
-// found that every remaining serialization failure was the model sending
-// SEVERAL complete, individually valid decisions in one response — usually two
-// newline-separated tool calls, sometimes a plan followed by the whole route it
-// intended to take. That is not malformed JSON, and calling it malformed loses
-// the only fact that makes it actionable.
-//
-// So the text is classified BEFORE it is parsed, by a bounded, string-aware
-// scan for balanced top-level objects. The scanner reports structure and
-// nothing else: it never repairs, never completes a brace, never picks one
-// object out of several (§5), and never decides what the model meant.
-// ---------------------------------------------------------------------------
-
 import type { SerializationClass } from "../types.js";
 
 export type { SerializationClass };
@@ -86,7 +70,7 @@ function unwrap(raw: string): string {
  * Classify one planner response. Structure only — the caller parses and
  * validates whatever this says is there.
  */
-export function scanDecisions(raw: string): DecisionScan {
+export function scanDecisions(raw: string, marker = '"kind"'): DecisionScan {
   const text = unwrap(raw).slice(0, MAX_SCAN_CHARS);
   if (text === "") return { serialization: "none", objects: [] };
 
@@ -127,7 +111,7 @@ export function scanDecisions(raw: string): DecisionScan {
       const [from, to] = spans[i]!;
       outside = outside.slice(0, from) + outside.slice(to);
     }
-    if (outside.includes('"kind"')) return { serialization: "concatenated", objects: complete };
+    if (outside.includes(marker)) return { serialization: "concatenated", objects: complete };
     return { serialization: outside.trim() === "" ? "single" : "wrapped_single", objects: complete };
   }
 

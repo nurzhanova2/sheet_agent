@@ -141,7 +141,7 @@ describe("Stage 26 §36 — narration cannot change analytical state", () => {
     expect(bad.kind).toBe("answered");
     if (good.kind !== "answered" || bad.kind !== "answered") return;
     expect(good.usedFallback).toBe(false);
-    expect(bad.usedFallback).toBe(true);
+    expect(bad.trace.narratorStatus).toBe("deterministic");
     expect(bad.body).not.toContain("88888.77");
     // §36 — identical structured state either way
     expect(bad.state.lastMetric).toEqual(good.state.lastMetric);

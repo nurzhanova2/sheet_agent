@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.7 — Universal Analytical Intent Compiler: shared typed model.
-//
-// NATURAL LANGUAGE → AnalyticalIntent → ResolvedIntent → AnalyticalPlan →
-// validatePlan → executePlan → sections + evidence. The model may classify
-// intent and suggest candidate schema concepts; every exact address, period
-// coordinate, extremum, ranking value, trend / volatility number and source
-// membership is computed deterministically here.
-// ---------------------------------------------------------------------------
-
 import type { MeasureKind, SemanticMetricClass } from "../measure-compatibility.js";
 import type { ColumnPath, RowAxisMember } from "../schema-induction.js";
 

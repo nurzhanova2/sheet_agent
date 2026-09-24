@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 23 — `/compare` (bounded, read-only, deterministic).
-//
-// Scope for this stage: compare ONE column's aggregates between TWO explicitly
-// named worksheets. The resolver proves both sheets exist and the column exists
-// in BOTH before anything is computed. Only AGGREGATE comparison is supported
-// (count / sum / mean / min / max). Row-level / keyed comparison is intentionally
-// NOT implemented here — without a key, matching by row number would be a guess,
-// so we return guidance instead.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ResponseLanguage } from "../language.js";
 import type { SelectionSnapshot } from "../workbook-context.js";
