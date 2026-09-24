@@ -185,6 +185,7 @@ lines — the audit's own target was "fewer concepts, not fewer lines".
 - `tsc`: PASS repo-wide · `eslint`: PASS (one pre-existing unrelated warning in
   `packages/excel-adapter-officejs`)
 - No companion change, so no companion run. No installer build. No live Qwen.
+- Commit: `c3745ab` refactor(agent): consolidate state and tool ownership
 
 ## 9. Remaining debt
 

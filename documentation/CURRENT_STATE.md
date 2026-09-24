@@ -77,7 +77,7 @@ state tests 28/28; new registry tests 17/17; root Node 29/29; tsc PASS; eslint
 PASS. No companion run, no installer, no live Qwen.
 
 Report: documentation/stages/stage28/STAGE_28F_REPORT.md
-Commit: recorded below by the docs commit.
+Commit: c3745ab refactor(agent): consolidate state and tool ownership
 Next: Stage 28G - sandbox consolidation + final architecture cleanup.
 Stage 28 is NOT PASS.
 
