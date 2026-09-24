@@ -3,12 +3,13 @@ import type { TableSchema } from "../app/schema/schema-induction.js";
 import { runPlannerLoop } from "./planner/planner-loop.js";
 import type { PlannerMessage } from "./planner/planner-prompt.js";
 import { methodNoteFor } from "./narration/method-note.js";
-import { buildNarratorMessages, buildNarratorRetryMessages, deterministicAnswerPlan, gateNarration, renderDeterministic, type NarrationInput, type NarratorMessage } from "./narration/narrator.js";
+import { buildNarratorMessages, buildNarratorRetryMessages, deterministicRenderEligibility, gateNarration, renderDeterministic, type NarrationInput, type NarratorMessage } from "./narration/narrator.js";
 import { buildFindings } from "./insight/extract-findings.js";
 import { groundFindings, groundingContextOf, groundingStats } from "./insight/finding-subject.js";
 import { evaluateAnswer, type AnswerEvaluation } from "./narration/answer-evaluator.js";
 import { scanPresented } from "./narration/presented-claims.js";
 import { answerIntentFromResult } from "./narration/answer-shape.js";
+import { planPresentation } from "./narration/presentation-plan.js";
 import { createAnalysisRunner, type AnalysisCapability } from "./sandbox/analysis-runner.js";
 import { createIterativeRunner, supportsSessions, type IterativeCapability } from "./sandbox/iterative-runner.js";
 import { analyticalAgentLoopEnabled } from "./feature-flag.js";
@@ -373,6 +374,8 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
     heldFindings: grounded.held.length,
     ...(method ? { method } : {}),
   };
+  const presentationPlan = planPresentation(analysis, grounded.visible, answerIntent, method);
+  const narratedInput: NarrationInput = { ...narration, presentationPlan };
 
   const evaluate = (text: string): AnswerEvaluation =>
     evaluateAnswer({
@@ -391,9 +394,9 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
   params.onProgress?.({ kind: "composing" });
 
   let deterministicFirst = false;
-  const deterministicPlan = deterministicAnswerPlan(narration);
+  const deterministicPlan = deterministicRenderEligibility(narratedInput);
   if (deterministicPlan !== null) {
-    const rendered = renderDeterministic(narration);
+    const rendered = renderDeterministic(narratedInput);
     const renderedEvaluation = evaluate(rendered);
     if (rendered.trim() !== "" && renderedEvaluation.accept) {
       deterministicFirst = true;
@@ -412,14 +415,14 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
   } else {
     const narratorStarted = Date.now();
     try {
-      draft = await params.narrate(buildNarratorMessages(narration));
+      draft = await params.narrate(buildNarratorMessages(narratedInput));
     } catch {
       draft = "";
     }
     narratorLatencyMs = Date.now() - narratorStarted;
     timings.addNarration(narratorLatencyMs);
 
-    narrated = gateNarration(draft, narration);
+    narrated = gateNarration(draft, narratedInput);
     const evaluationStarted = Date.now();
     evaluation = evaluate(draft);
     evaluatorLatencyMs = Date.now() - evaluationStarted;
@@ -441,7 +444,7 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
     params.onProgress?.({ kind: "rewriting" });
     const rewriteStarted = Date.now();
     try {
-      second = await params.narrate(buildNarratorRetryMessages(narration, draft, narrated.unsupported, evaluation.rewriteGuidance));
+      second = await params.narrate(buildNarratorRetryMessages(narratedInput, draft, narrated.unsupported, evaluation.rewriteGuidance));
     } catch {
       second = "";
     }
@@ -450,7 +453,7 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
 
     if (second.trim() !== "") {
       narratorDrafts += 1;
-      const retried = gateNarration(second, narration, 2);
+      const retried = gateNarration(second, narratedInput, 2);
       const reEvaluationStarted = Date.now();
       const reEvaluated = evaluate(second);
       evaluatorLatencyMs += Date.now() - reEvaluationStarted;
@@ -465,7 +468,7 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
         rewriteFailureReasons = [...reEvaluated.issues, ...(retried.usedFallback ? ["NARRATION_GATE"] : [])];
         rejectedDrafts.push({ stage: "rewrite", text: second, gateReasons: retried.reasons, evaluatorIssues: reEvaluated.issues });
         narrated = {
-          text: renderDeterministic(narration),
+          text: renderDeterministic(narratedInput),
           usedFallback: true,
           reasons: [
             ...narrated.reasons,
@@ -484,7 +487,7 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
   if (narrated.usedFallback) {
     const fallbackEvaluation = evaluate(narrated.text);
     if (!fallbackEvaluation.accept) {
-      const minimal = renderDeterministic(narration, { minimal: true });
+      const minimal = renderDeterministic(narratedInput, { minimal: true });
       narrated = { ...narrated, text: minimal, reasons: [...narrated.reasons, `fallback: ${fallbackEvaluation.issues.join(", ")}`] };
       usedMinimalFallback = true;
     }

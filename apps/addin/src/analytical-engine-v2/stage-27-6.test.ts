@@ -4,7 +4,8 @@ import { TimingRecorder, summarizeTimings, type ExecutionEvent } from "./product
 import { codeEntryTitle, completionLabel, describeSandboxOutput, progressStepFor } from "./production/progress-labels.js";
 import { sandboxFailureMessage } from "./production/answer-ux.js";
 import { errorTypeOf, shortErrorMessage } from "./sandbox/executor.js";
-import { selectForShape } from "./narration/answer-shape.js";
+import { planPresentation } from "./narration/presentation-plan.js";
+import type { EngineAnalysis } from "./types.js";
 import type { VerifiedFinding } from "./insight/verified-finding.js";
 
 const NEWLINE = String.fromCharCode(10);
@@ -178,10 +179,15 @@ describe("Stage 27.6 §8 — a request for three results is not answered with on
   const three = [finding("Кама"), finding("Зея"), finding("Енисей")];
   const rankingIntent = { shape: "ranking", count: 3, direction: "down", subjects: [], periodIntent: { kind: "full_range" }, wantsTable: false, wantsRecommendation: false, answerStyle: "concise" } as const;
 
-  it("returns the planner-selected three findings when three comparable ones exist", () => expect(selectForShape(three, rankingIntent)).toHaveLength(3));
+  const analysis = { primary: { resultId: "res_1", rows: [], fields: [], type: "ranked_set" }, supporting: [], answerStyle: "concise" } as unknown as EngineAnalysis;
+  it("returns the planner-selected three findings when three comparable ones exist", () => {
+    const plan = planPresentation(analysis, three, rankingIntent);
+    expect([plan.lead, ...plan.support]).toHaveLength(3);
+  });
 
   it("does not invent results it does not have", () => {
-    expect(selectForShape([three[0]!], rankingIntent)).toHaveLength(1);
+    const plan = planPresentation(analysis, [three[0]!], rankingIntent);
+    expect([plan.lead, ...plan.support]).toHaveLength(1);
   });
 });
 

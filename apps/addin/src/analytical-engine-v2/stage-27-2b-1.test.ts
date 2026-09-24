@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CellValue } from "@sheet-agent/application";
 import { evaluateAnswer } from "./narration/answer-evaluator.js";
-import { answerIntentFromResult, isMetaFinding, orderByRelevance, selectForShape } from "./narration/answer-shape.js";
+import { answerIntentFromResult, isMetaFinding } from "./narration/answer-shape.js";
+import { planPresentation } from "./narration/presentation-plan.js";
 import { renderDeterministic, type NarrationInput } from "./narration/narrator.js";
 import { buildNarratorRetryMessages } from "./narration/narrator.js";
 import { scanPresented, withoutEngineCaveats } from "./narration/presented-claims.js";
@@ -120,7 +121,8 @@ describe("Stage 27.2B.1 §3 — relevance ordering uses structured signals", () 
     ];
     const analysis: EngineAnalysis = { primary: TREND_RESULT(), supporting: [], answerStyle: "explanatory" };
     const requested = fixtureIntent("У какого продукта самый сильный отрицательный тренд?", analysis, findings);
-    expect(orderByRelevance(findings, analysis, requested).map((f) => f.subject)).toEqual(["Иртыш", "Обь"]);
+    const plan = planPresentation(analysis, findings, { ...requested, shape: "comparison" });
+    expect([plan.lead, ...plan.support].map((f) => f?.subject)).toEqual(["Иртыш", "Обь"]);
   });
 
   it("the primary result outranks a supporting finding of the same direction", () => {
@@ -131,7 +133,8 @@ describe("Stage 27.2B.1 §3 — relevance ordering uses structured signals", () 
     const withPrimaryRef: VerifiedFinding = { ...fromPrimary, provenance: { ...fromPrimary.provenance, resultRef: primary.resultId } };
     const analysis: EngineAnalysis = { primary, supporting: [], answerStyle: "explanatory" };
     const requested = fixtureIntent("У какого продукта самый сильный отрицательный тренд?", analysis, [fromSupporting, withPrimaryRef]);
-    expect(orderByRelevance([fromSupporting, withPrimaryRef], analysis, requested).map((f) => f.subject)).toEqual(["Иртыш", "Кама"]);
+    const plan = planPresentation(analysis, [fromSupporting, withPrimaryRef], { ...requested, shape: "comparison" });
+    expect([plan.lead, ...plan.support].map((f) => f?.subject)).toEqual(["Иртыш", "Кама"]);
   });
 });
 
@@ -165,7 +168,9 @@ describe("Stage 27.2B.1 §5/§16 — aq-5: no meta-answer text", () => {
 
   it("honours the requested count", () => {
     const intent = { shape: "ranking", count: 3, direction: "down", subjects: [], periodIntent: { kind: "full_range" }, wantsTable: false, wantsRecommendation: false, answerStyle: "explanatory" } as const;
-    expect(selectForShape(ranked, intent)).toHaveLength(3);
+    const analysis = { primary: TREND_RESULT(), supporting: [], answerStyle: "explanatory" } as unknown as EngineAnalysis;
+    const plan = planPresentation(analysis, ranked, intent);
+    expect([plan.lead, ...plan.support]).toHaveLength(3);
   });
 });
 

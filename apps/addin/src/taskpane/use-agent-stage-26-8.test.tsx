@@ -115,7 +115,7 @@ function biggestMoverScript(messages: readonly { readonly role: string; readonly
   const prev = idOf(p, "period.previous");
   if (!prev) return call("period.previous", { ofRef: latest });
   const cmp = idOf(p, "change.compare_periods");
-  if (!cmp) return call("change.compare_periods", { startPeriodRef: prev, endPeriodRef: latest });
+  if (!cmp) return call("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
   const win = idOf(p, "set.argmax");
   if (!win) return call("set.argmax", { inputRef: cmp, field: "percentageChange", magnitude: true });
   return complete(win, [cmp]);

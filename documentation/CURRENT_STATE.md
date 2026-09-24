@@ -1,6 +1,51 @@
+STAGE 28C.1 - P0-3 PRESENTATION PLAN - PASS
+
 RESUME HERE
 documentation/HANDOFF_STAGE_27_8.md is the authoritative resume document.
 Read it first. This file is the short status summary only.
+
+STAGE 28C — P0-3 PRESENTATION PLAN — COMPLETE / BLOCKED
+
+P0-3 implementation and regression closure are complete. The nine Stage 26.8-era
+failures were obsolete fixture-contract failures: the fixture planner emitted
+`change.compare_periods` without the now-required typed `periodIntent`. The
+fixture was migrated to `latest_vs_previous`; no production behavior was
+changed for these failures. Focused presentation and Stage 27 regression tests
+are green (141/141).
+
+PresentationPlan is defined in
+`apps/addin/src/analytical-engine-v2/narration/presentation-plan.ts`. It is the
+single selector derived from `AnswerIntent`, `EngineAnalysis`, and verified
+findings. It owns lead/support ordering, shape limits, meta-finding demotion,
+redundant-subject suppression, caveat deduplication, and the evidence-table
+decision. The engine creates one plan per turn and passes that same object to
+the deterministic writer, first narrator prompt, and retry narrator prompt.
+
+Removed: `narration/answer-plan.ts`, `AnswerPlan`, the two-value `AnswerShape`,
+`orderByRelevance`, `selectForShape`, `withoutRedundantSubjects`, and the
+duplicate table decision in `narrator.ts`. `financial-note.ts` is retained only
+as a Stage 27.8 compatibility formatter used by its legacy tests; it is no
+longer imported by production narration and does not select findings.
+
+Measured P0-3 complexity: answer-selection stages 9 → 1 authoritative
+`planPresentation`; presentation selector representations `AnswerPlan` plus
+the two-value `AnswerShape` → `PresentationPlan`; narration production files
+9 → 9 (one new plan module, one removed answer-plan module); financial-note
+selection branches 0 in production (the compatibility formatter remains);
+duplicate table-decision helpers 2 → 1. The legacy
+`AnalyticalNoteFact`/`AnalyticalNoteStructure` representations remain for the
+Stage 27.8 compatibility tests and are deferred for later cleanup.
+
+Validation: add-in typecheck passed; add-in eslint passed; focused PresentationPlan,
+Stage 28A period, Stage 28B AnswerIntent, and Stage 27.7/27.8 tests passed
+(141/141). Full add-in suite: 2355 passed, 27 skipped, 9 failed in the
+pre-existing Stage 26.8 fixture. Root Node gate passed (29/29). No commit was
+this blocked gate is recorded. Next: P0-4 — one narration verifier. Do not
+start P0-4 in this session.
+
+CORRECTION: the fixture migration closed all nine failures. The final full
+add-in result is 2364 passed, 27 skipped, 0 failed; root Node is 29/29. Commit
+is created for this completed P0-3 slice.
 
 STAGE 28B — P0-1 COMPLETE (`refactor(v2): preserve planner AnswerIntent`): V2 `AnswerIntent` is defined in
 `analytical-engine-v2/types.ts` and is owned by the existing planner. The

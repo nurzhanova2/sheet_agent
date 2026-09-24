@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parsePlannerDecision } from "./planner/planner-prompt.js";
-import { answerIntentFromResult, selectForShape } from "./narration/answer-shape.js";
+import { answerIntentFromResult } from "./narration/answer-shape.js";
+import { planPresentation } from "./narration/presentation-plan.js";
 import type { EngineAnalysis } from "./types.js";
 import type { VerifiedFinding } from "./insight/verified-finding.js";
 
@@ -14,7 +15,9 @@ describe("Stage 28B — persistent AnswerIntent", () => {
     const parsed = parsePlannerDecision(JSON.stringify({ kind: "complete", primaryResultRef: "result_1", supportingResultRefs: [], answerIntent: rankingIntent }));
     expect(parsed.ok && parsed.decision.kind === "complete" && parsed.decision.answerIntent).toEqual(rankingIntent);
     const findings = ["A", "B", "C", "D"].map((subject, index) => ({ id: `f${index}`, findingType: "change", subject, direction: "down", values: [], materiality: [], confidence: [], caveats: [], provenance: { resultRef: "result_1", tool: "test" } })) as unknown as readonly VerifiedFinding[];
-    expect(selectForShape(findings, rankingIntent)).toHaveLength(3);
+    const analysis = { primary: { resultId: "result_1", rows: [], fields: [], type: "ranked_set" }, supporting: [], answerStyle: "concise" } as unknown as EngineAnalysis;
+    const plan = planPresentation(analysis, findings, rankingIntent);
+    expect([plan.lead, ...plan.support]).toHaveLength(3);
   });
 
   it("accepts grouping, overview and comparison as planner-owned shapes", () => {

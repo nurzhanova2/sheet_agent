@@ -7,12 +7,11 @@ import { allowedNumbers } from "../insight/extract-findings.js";
 import { criterionLabel, executedMethods, readCriterion, type MethodComparison } from "../sandbox/method-comparison.js";
 import { measureWord } from "../insight/measure-words.js";
 import { periodSpanSentence, statementFor } from "../insight/statement.js";
-import { caveatText, type Caveat, type FindingValue, type VerifiedFinding } from "../insight/verified-finding.js";
-import { composeFinancialNote } from "./financial-note.js";
+import { caveatText, type FindingValue, type VerifiedFinding } from "../insight/verified-finding.js";
 import { isReadableLabel, subjectLabel } from "../insight/finding-subject.js";
 import type { EngineAnalysis, EngineResult } from "../types.js";
-import { planAnswer } from "./answer-plan.js";
-import { answerIntentFromResult, isMetaFinding, orderByRelevance, selectForShape, shapeInstruction } from "./answer-shape.js";
+import { answerIntentFromResult, shapeInstruction } from "./answer-shape.js";
+import { planPresentation, suppressRedundantSubjects, type MethodNote, type PresentationPlan } from "./presentation-plan.js";
 import type { AnswerIntent } from "../types.js";
 import { verifyNarration, type NarrationCheck } from "./narration-verifier.js";
 import {
@@ -42,17 +41,13 @@ export interface NarrationInput {
   readonly locale: NumberLocale;
   /** §60 — how the analysis was performed, when that is worth a sentence. */
   readonly method?: MethodNote;
+  readonly presentationPlan?: PresentationPlan;
   readonly heldFindings?: number;
 }
 
 /** §60/§63 — a method summary, shown only for analyses that warrant one. */
-export interface MethodNote {
-  readonly name: string;
-  readonly parameters?: Readonly<Record<string, unknown>>;
-  readonly preprocessing?: readonly string[];
   /** §19/§21 — present when several methods ran, so the answer can say why this one. */
-  readonly comparison?: MethodComparison;
-}
+export type { MethodNote, PresentationPlan } from "./presentation-plan.js";
 
 const SYSTEM_RU = [
   "Ты — аналитик. Ты объясняешь человеку УЖЕ ПРОВЕРЕННЫЕ наблюдения по его таблице.",
@@ -262,7 +257,8 @@ function renderMethod(method: MethodNote, locale: NumberLocale): string {
 /** §35/§55 — the narrator's whole world, assembled. */
 export function buildNarratorMessages(input: NarrationInput): readonly NarratorMessage[] {
   const { locale } = input;
-  const plan = planAnswer(input.analysis, input.findings);
+  const requested = input.answerIntent ?? answerIntentFromResult(input.analysis, input.findings);
+  const plan = input.presentationPlan ?? planPresentation(input.analysis, input.findings, requested, input.method);
   const findings = [plan.lead, ...plan.support].filter((f): f is VerifiedFinding => f !== null);
 
   const sections: string[] = [
@@ -362,41 +358,17 @@ const HUMAN_RENDERABLE: ReadonlySet<string> = new Set([
 
 const MAX_DETERMINISTIC_FINDINGS = 4;
 
-export function deterministicAnswerPlan(input: NarrationInput): readonly VerifiedFinding[] | null {
+export function deterministicRenderEligibility(input: NarrationInput): readonly VerifiedFinding[] | null {
   if (input.method !== undefined) return null;
-  const speakable = input.findings.filter((f) => !isMetaFinding(f) && groundedStatement(f, input.locale) !== "");
-  if (speakable.length === 0) return null;
   const requested = input.answerIntent ?? answerIntentFromResult(input.analysis, input.findings);
-  if (requested.wantsTable) return null;
-  const ordered = withoutRedundantSubjects(orderByRelevance(speakable, input.analysis, requested), input.locale);
-  const chosen = selectForShape(ordered, requested);
+  const plan = input.presentationPlan ?? planPresentation(input.analysis, input.findings, requested);
+  const chosen = [plan.lead, ...plan.support].filter((f): f is VerifiedFinding => f !== null).filter((f) => groundedStatement(f, input.locale) !== "");
+  if (chosen.length === 0 || requested.wantsTable || plan.showEvidenceTable) return null;
   if (chosen.length === 0 || chosen.length > MAX_DETERMINISTIC_FINDINGS) return null;
   const types = new Set(chosen.map((f) => f.findingType as string));
   if (types.size > 2) return null;
   for (const type of types) if (!HUMAN_RENDERABLE.has(type)) return null;
   return chosen;
-}
-
-function selectedCaveats(findings: readonly VerifiedFinding[]): readonly Caveat[] {
-  const out: Caveat[] = [];
-  const seen = new Set<string>();
-  for (const finding of findings) {
-    for (const caveat of finding.caveats) {
-      const key = `${caveat.code}:${caveat.detail ?? ""}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(caveat);
-    }
-  }
-  return out.slice(0, 2);
-}
-
-function tableIsWarranted(input: NarrationInput, requested: AnswerIntent, shown: number): boolean {
-  if (requested.shape === "direct" || requested.shape === "overview") return false;
-  if (requested.wantsTable) return true;
-  if (requested.shape !== "ranking") return false;
-  const numericColumns = input.analysis.primary.fields.filter((f) => f.kind === "number").length;
-  return shown >= 3 && numericColumns >= 2 && input.analysis.primary.rows.length >= shown;
 }
 
 function groundedStatement(finding: VerifiedFinding, locale: NumberLocale): string {
@@ -416,23 +388,8 @@ function groundedStatement(finding: VerifiedFinding, locale: NumberLocale): stri
   return locale === "ru" ? `У ${quotedName} — ${figures}.` : `For ${quotedName}: ${figures}.`;
 }
 
-const DIGIT = /[0-9]/u;
-
-export function withoutRedundantSubjects(
-  findings: readonly VerifiedFinding[],
-  locale: NumberLocale,
-): readonly VerifiedFinding[] {
-  const informative = new Set<string>();
-  for (const finding of findings) {
-    if (DIGIT.test(groundedStatement(finding, locale))) informative.add(finding.subject);
-  }
-  return findings.filter((f) => DIGIT.test(groundedStatement(f, locale)) || !informative.has(f.subject));
-}
-
 export function composeStatements(input: readonly VerifiedFinding[], locale: NumberLocale): readonly string[] {
-  const chosen = withoutRedundantSubjects(input, locale);
-  const note = composeFinancialNote(chosen, locale);
-  if (note !== null) return note;
+  const chosen = suppressRedundantSubjects(input);
   if (chosen.length === 1) {
     const only = chosen[0]!;
     const expanded = statementFor(only, locale, { expand: true }).trim();
@@ -455,7 +412,10 @@ export function composeStatements(input: readonly VerifiedFinding[], locale: Num
 export function renderDeterministic(input: NarrationInput, options: DeterministicOptions = {}): string {
   const { locale } = input;
   const requested = input.answerIntent ?? answerIntentFromResult(input.analysis, input.findings);
-  const speakable = input.findings.filter((f) => !isMetaFinding(f) && groundedStatement(f, locale) !== "");
+  const presentation = input.presentationPlan ?? planPresentation(input.analysis, input.findings, requested, input.method);
+  const speakable = [presentation.lead, ...presentation.support]
+    .filter((f): f is VerifiedFinding => f !== null)
+    .filter((f) => groundedStatement(f, locale) !== "");
 
   if (speakable.length === 0) {
     if (input.analysis.primary.rows.length === 0) {
@@ -469,11 +429,10 @@ export function renderDeterministic(input: NarrationInput, options: Deterministi
     return evidenceTable(input.analysis.primary, locale);
   }
 
-  const ordered = withoutRedundantSubjects(orderByRelevance(speakable, input.analysis, requested), locale);
-  const chosen = options.minimal === true ? ordered.slice(0, 1) : selectForShape(ordered, requested);
+  const chosen = options.minimal === true ? speakable.slice(0, 1) : speakable;
   const parts = [...composeStatements(chosen, locale)];
 
-  const caveats = selectedCaveats(chosen);
+  const caveats = options.minimal === true ? presentation.caveats.slice(0, 1) : presentation.caveats;
   if (options.minimal !== true && caveats.length > 0) {
     const notes = caveats.map((c) => caveatText(c, locale)).join("; ");
     parts.push(locale === "ru" ? `Оговорки: ${notes}.` : `Caveats: ${notes}.`);
@@ -484,7 +443,7 @@ export function renderDeterministic(input: NarrationInput, options: Deterministi
 
   const prose = parts.join(" ");
   if (options.minimal === true) return prose;
-  return tableIsWarranted(input, requested, chosen.length) ? `${prose}\n\n${evidenceTable(input.analysis.primary, locale)}` : prose;
+  return presentation.showEvidenceTable ? `${prose}\n\n${evidenceTable(input.analysis.primary, locale)}` : prose;
 }
 
 /** §37 — the same numeric evidence gate, reused by adapting results into observations. */

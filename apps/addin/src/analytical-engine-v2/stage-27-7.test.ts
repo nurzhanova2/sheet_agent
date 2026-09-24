@@ -8,7 +8,7 @@ import { assetHint, startupDiagnosticsOf, WorkerSandboxRuntime, type SandboxWork
 import { createSandboxRuntime, describeSandboxEnvironment, resolvedAgainstDocument, VENDORED_INDEX_URL } from "./sandbox/runtime-factory.js";
 import { progressStepFor, executionMetrics, stoppedLabel, pythonSummaryLabel } from "./production/progress-labels.js";
 import { EMPTY_TIMINGS, type ExecutionEvent } from "./production/execution-progress.js";
-import { composeStatements, deterministicAnswerPlan, renderDeterministic } from "./narration/narrator.js";
+import { composeStatements, deterministicRenderEligibility, renderDeterministic } from "./narration/narrator.js";
 import { statementFor } from "./insight/statement.js";
 import { buildToolEnv, findTool } from "./tools/registry.js";
 import { ResultStore } from "./results/result-store.js";
@@ -360,7 +360,7 @@ const analysisOf = (rows: readonly (readonly unknown[])[]): EngineAnalysis =>
 describe("Stage 27.7 §8 — the deterministic renderer is preferred where it writes well", () => {
   it("takes an ordinary change without calling the model", () => {
     const finding = { ...changeFinding(), statement: statementFor(changeFinding(), "ru") } as VerifiedFinding;
-    const plan = deterministicAnswerPlan({
+    const plan = deterministicRenderEligibility({
       request: "На сколько выросли активы?",
       analysis: analysisOf([["Активы", 0.54]]),
       findings: [finding],
@@ -377,7 +377,7 @@ describe("Stage 27.7 §8 — the deterministic renderer is preferred where it wr
 
   it("leaves a sandbox analysis to the narrator", () => {
     const finding = { ...changeFinding(), statement: statementFor(changeFinding(), "ru") } as VerifiedFinding;
-    const plan = deterministicAnswerPlan({
+    const plan = deterministicRenderEligibility({
       request: "Проведи кластеризацию показателей по динамике.",
       analysis: analysisOf([["Активы", 0.54]]),
       findings: [finding],
@@ -393,7 +393,7 @@ describe("Stage 27.7 §8 — the deterministic renderer is preferred where it wr
       findingType: "cluster",
       statement: "Группа 1 — 3: «А», «Б», «В».",
     } as unknown as VerifiedFinding;
-    const plan = deterministicAnswerPlan({
+    const plan = deterministicRenderEligibility({
       request: "Сгруппируй показатели.",
       analysis: analysisOf([["Активы", 0.54]]),
       findings: [cluster],

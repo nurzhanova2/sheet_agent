@@ -8,7 +8,7 @@ import { displayUnit, metricSemanticClass, relativeChangeOf } from "./insight/me
 import { humanizeValue, percentagePointMove } from "./insight/humanize.js";
 import { valueOf } from "./insight/verified-finding.js";
 import { verifyNarration } from "./narration/narration-verifier.js";
-import { planAnswer } from "./narration/answer-plan.js";
+import { planPresentation } from "./narration/presentation-plan.js";
 import { renderDeterministic, gateNarration, buildNarratorMessages, type NarrationInput } from "./narration/narrator.js";
 import type { EngineAnalysis, ResultField } from "./types.js";
 
@@ -236,7 +236,7 @@ describe("Stage 27 §44/§45 — structure comes from the evidence, not the phra
 
   it("a single observation plans a direct answer with no structure", () => {
     const analysis = analysisOf([[ASSETS, "01.01.25", "01.12.25", 17941.741778, 19871.544896, 1929.8, 0.1076]]);
-    const plan = planAnswer(analysis, buildFindings(analysis.primary, [], ctx()));
+    const plan = planPresentation(analysis, buildFindings(analysis.primary, [], ctx()), { shape: "direct", count: null, direction: null, subjects: [], periodIntent: { kind: "full_range" }, wantsTable: false, wantsRecommendation: false, answerStyle: "concise" });
     expect(plan.shape).toBe("direct");
     expect(plan.showEvidenceTable).toBe(false);
   });
@@ -247,14 +247,14 @@ describe("Stage 27 §44/§45 — structure comes from the evidence, not the phra
       [LIQUID_SHARE, "a", "b", 0.311, 0.304, -0.007, -0.0225],
       [DOLLARIZATION, "a", "b", 0.2782, 0.2863, 0.0081, 0.0291],
     ]);
-    const plan = planAnswer(analysis, buildFindings(analysis.primary, [], ctx()));
-    expect(plan.shape).toBe("structured");
+    const plan = planPresentation(analysis, buildFindings(analysis.primary, [], ctx()), { shape: "comparison", count: null, direction: null, subjects: [], periodIntent: { kind: "full_range" }, wantsTable: false, wantsRecommendation: false, answerStyle: "concise" });
+    expect(plan.shape).toBe("comparison");
     expect(plan.support.length).toBeGreaterThan(0);
   });
 
   it("the lead observation comes from the PRIMARY result, never re-guessed", () => {
     const analysis = analysisOf([[ASSETS, "01.01.25", "01.12.25", 17941.741778, 19871.544896, 1929.8, 0.1076]]);
-    const plan = planAnswer(analysis, buildFindings(analysis.primary, [], ctx()));
+    const plan = planPresentation(analysis, buildFindings(analysis.primary, [], ctx()), { shape: "direct", count: null, direction: null, subjects: [], periodIntent: { kind: "full_range" }, wantsTable: false, wantsRecommendation: false, answerStyle: "concise" });
     expect(plan.lead?.subject).toBe(ASSETS);
     expect(plan.lead?.provenance.resultRef).toBe(analysis.primary.resultId);
   });

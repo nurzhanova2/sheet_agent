@@ -1,6 +1,6 @@
 import type { MethodComparison } from "../sandbox/method-comparison.js";
 import type { EngineResult } from "../types.js";
-import type { MethodNote } from "./narrator.js";
+import type { MethodNote } from "./presentation-plan.js";
 
 function str(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
