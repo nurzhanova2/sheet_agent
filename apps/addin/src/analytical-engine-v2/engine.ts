@@ -8,7 +8,7 @@ import { buildFindings } from "./insight/extract-findings.js";
 import { groundFindings, groundingContextOf, groundingStats } from "./insight/finding-subject.js";
 import { evaluateAnswer, type AnswerEvaluation } from "./narration/answer-evaluator.js";
 import { scanPresented } from "./narration/presented-claims.js";
-import { readRequest } from "./narration/answer-shape.js";
+import { answerIntentFromResult } from "./narration/answer-shape.js";
 import { createAnalysisRunner, type AnalysisCapability } from "./sandbox/analysis-runner.js";
 import { createIterativeRunner, supportsSessions, type IterativeCapability } from "./sandbox/iterative-runner.js";
 import { analyticalAgentLoopEnabled } from "./feature-flag.js";
@@ -358,6 +358,7 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
   });
   const grounded = groundFindings(findings, groundingContextOf(params.schema, params.grids));
   const stats = groundingStats(grounded);
+  const answerIntent = run.outcome.answerIntent ?? answerIntentFromResult(analysis, grounded.visible);
 
   // §60 — and, for a sandbox analysis only, how it was computed: the method,
   // what it did to the data first, and (§19/§21) which other methods were
@@ -366,6 +367,7 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
   const narration: NarrationInput = {
     request: params.request,
     analysis,
+    answerIntent,
     findings: grounded.visible,
     locale: params.language,
     heldFindings: grounded.held.length,
@@ -516,7 +518,8 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
         subject: entry.finding.subject,
         reason: entry.reason,
       })),
-      answerShape: readRequest(params.request, analysis, grounded.visible).shape,
+      answerShape: answerIntent.shape,
+      ...(run.outcome.answerIntent ? {} : { answerIntentOmitted: true }),
       deterministicFirstAnswers: deterministicFirst ? 1 : 0,
       narratorDrafts,
       narrationGateRejects,

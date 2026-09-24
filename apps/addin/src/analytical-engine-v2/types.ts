@@ -11,6 +11,19 @@ export type PeriodIntent =
   | { readonly kind: "full_range" }
   | { readonly kind: "single"; readonly at: string };
 
+/** The planner's semantic decision about the answer it is producing. */
+export interface AnswerIntent {
+  readonly shape: "direct" | "ranking" | "comparison" | "exploratory" | "grouping" | "overview";
+  readonly count: number | null;
+  readonly direction: "up" | "down" | null;
+  readonly subjects: readonly string[];
+  /** Semantic period scope, retained independently from the resolved periods. */
+  readonly periodIntent: PeriodIntent;
+  readonly wantsTable: boolean;
+  readonly wantsRecommendation: boolean;
+  readonly answerStyle: "concise" | "explanatory";
+}
+
 /**
  * §17 — what a result IS, so downstream consumers (state commit, renderer,
  * narrator) never have to re-infer it from row shape or tool name.
@@ -149,6 +162,8 @@ export interface ToolCallDecision {
   readonly tool: string;
   readonly arguments: Readonly<Record<string, unknown>>;
   readonly final?: boolean;
+  /** Required semantic payload when this call itself finishes the answer. */
+  readonly answerIntent?: AnswerIntent;
 }
 
 export interface ClarifyDecision {
@@ -167,6 +182,8 @@ export interface CompleteDecision {
   readonly primaryResultRef: ResultId;
   readonly supportingResultRefs: readonly ResultId[];
   readonly answerStyle?: "concise" | "explanatory";
+  /** The semantic answer decision made by the planner, never reconstructed downstream. */
+  readonly answerIntent?: AnswerIntent;
   /**
    * Stage 26.4 §12 — which result answers which declared output. Present only
    * when the planner declared outputs with a `plan` decision. It lets the

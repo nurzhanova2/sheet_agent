@@ -4,9 +4,8 @@ import { TimingRecorder, summarizeTimings, type ExecutionEvent } from "./product
 import { codeEntryTitle, completionLabel, describeSandboxOutput, progressStepFor } from "./production/progress-labels.js";
 import { sandboxFailureMessage } from "./production/answer-ux.js";
 import { errorTypeOf, shortErrorMessage } from "./sandbox/executor.js";
-import { readRequest, selectForShape } from "./narration/answer-shape.js";
+import { selectForShape } from "./narration/answer-shape.js";
 import type { VerifiedFinding } from "./insight/verified-finding.js";
-import type { EngineAnalysis } from "./types.js";
 
 const NEWLINE = String.fromCharCode(10);
 
@@ -176,29 +175,13 @@ describe("Stage 27.6 §8 — a request for three results is not answered with on
       provenance: { resultRef: "res_1", tool: "change.compute" },
     }) as unknown as VerifiedFinding;
 
-  const analysis = { primary: { type: "metric_winner", rows: [[1]] }, supporting: [], answerStyle: "direct" } as unknown as EngineAnalysis;
   const three = [finding("Кама"), finding("Зея"), finding("Енисей")];
+  const rankingIntent = { shape: "ranking", count: 3, direction: "down", subjects: [], periodIntent: { kind: "full_range" }, wantsTable: false, wantsRecommendation: false, answerStyle: "concise" } as const;
 
-  it("reads a counted superlative question as a ranking, not a single answer", () => {
-    const requested = readRequest("Какие три показателя упали сильнее всего?", analysis, three);
-    expect(requested.shape).toBe("ranking");
-    expect(requested.count).toBe(3);
-  });
-
-  it("returns three findings when three comparable ones exist", () => {
-    const requested = readRequest("Назови три показателя с самым сильным падением.", analysis, three);
-    expect(selectForShape(three, requested)).toHaveLength(3);
-  });
-
-  it("still answers a genuinely single question with one finding", () => {
-    const requested = readRequest("Какой показатель упал сильнее всего?", analysis, three);
-    expect(requested.shape).toBe("direct");
-    expect(selectForShape(three, requested)).toHaveLength(1);
-  });
+  it("returns the planner-selected three findings when three comparable ones exist", () => expect(selectForShape(three, rankingIntent)).toHaveLength(3));
 
   it("does not invent results it does not have", () => {
-    const requested = readRequest("Назови три показателя с самым сильным падением.", analysis, three);
-    expect(selectForShape([three[0]!], requested)).toHaveLength(1);
+    expect(selectForShape([three[0]!], rankingIntent)).toHaveLength(1);
   });
 });
 

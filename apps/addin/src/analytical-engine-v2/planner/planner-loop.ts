@@ -17,6 +17,7 @@ import { TraceBuilder, type AnalyticalTraceV2, type BudgetUse } from "../debug/a
 import {
   ENGINE_BOUNDS,
   type AnalyzeDecision,
+  type AnswerIntent,
   type CompleteDecision,
   type EngineBounds,
   type EngineResult,
@@ -85,7 +86,7 @@ export interface ResumeContext {
 }
 
 export type PlannerRunOutcome =
-  | { readonly kind: "complete"; readonly primary: EngineResult; readonly supporting: readonly EngineResult[]; readonly answerStyle: "concise" | "explanatory" }
+  | { readonly kind: "complete"; readonly primary: EngineResult; readonly supporting: readonly EngineResult[]; readonly answerStyle: "concise" | "explanatory"; readonly answerIntent?: AnswerIntent }
   | { readonly kind: "clarify"; readonly question: string; readonly options: readonly string[] }
   | { readonly kind: "failed"; readonly reason: EngineTerminationReason; readonly detail: string };
 
@@ -518,7 +519,7 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
         completePrimaryResultRef: primary.resultId,
         ...(boundPrimary ? { boundPrimaryResultRef: boundPrimary.resultRef } : {}),
       });
-      return finish({ kind: "complete", primary, supporting, answerStyle: decision.answerStyle ?? "concise" }, "complete");
+      return finish({ kind: "complete", primary, supporting, answerStyle: decision.answerIntent?.answerStyle ?? decision.answerStyle ?? "concise", ...(decision.answerIntent ? { answerIntent: decision.answerIntent } : {}) }, "complete");
     }
 
     if (decision.kind === "analyze") {
@@ -638,7 +639,7 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
           completion: { primaryResultRef: outcome.result.resultId, supportingResultRefs: [] },
           completePrimaryResultRef: outcome.result.resultId,
         });
-        return finish({ kind: "complete", primary: outcome.result, supporting: [], answerStyle: "concise" }, "complete");
+        return finish({ kind: "complete", primary: outcome.result, supporting: [], answerStyle: decision.answerIntent?.answerStyle ?? "concise", ...(decision.answerIntent ? { answerIntent: decision.answerIntent } : {}) }, "complete");
       }
       errors.push(`tool_call final → ${refusal}`);
     }

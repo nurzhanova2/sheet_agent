@@ -12,7 +12,8 @@ import { composeFinancialNote } from "./financial-note.js";
 import { isReadableLabel, subjectLabel } from "../insight/finding-subject.js";
 import type { EngineAnalysis, EngineResult } from "../types.js";
 import { planAnswer } from "./answer-plan.js";
-import { isMetaFinding, orderByRelevance, readRequest, selectForShape, shapeInstruction, type RequestedAnswer } from "./answer-shape.js";
+import { answerIntentFromResult, isMetaFinding, orderByRelevance, selectForShape, shapeInstruction } from "./answer-shape.js";
+import type { AnswerIntent } from "../types.js";
 import { verifyNarration, type NarrationCheck } from "./narration-verifier.js";
 import {
   compileNarrationFacts,
@@ -35,6 +36,8 @@ export interface NarratorMessage {
 export interface NarrationInput {
   readonly request: string;
   readonly analysis: EngineAnalysis;
+  /** Present in the production engine; optional only for legacy test fixtures. */
+  readonly answerIntent?: AnswerIntent;
   readonly findings: readonly VerifiedFinding[];
   readonly locale: NumberLocale;
   /** §60 — how the analysis was performed, when that is worth a sentence. */
@@ -363,7 +366,7 @@ export function deterministicAnswerPlan(input: NarrationInput): readonly Verifie
   if (input.method !== undefined) return null;
   const speakable = input.findings.filter((f) => !isMetaFinding(f) && groundedStatement(f, input.locale) !== "");
   if (speakable.length === 0) return null;
-  const requested = readRequest(input.request, input.analysis, input.findings);
+  const requested = input.answerIntent ?? answerIntentFromResult(input.analysis, input.findings);
   if (requested.wantsTable) return null;
   const ordered = withoutRedundantSubjects(orderByRelevance(speakable, input.analysis, requested), input.locale);
   const chosen = selectForShape(ordered, requested);
@@ -388,7 +391,7 @@ function selectedCaveats(findings: readonly VerifiedFinding[]): readonly Caveat[
   return out.slice(0, 2);
 }
 
-function tableIsWarranted(input: NarrationInput, requested: RequestedAnswer, shown: number): boolean {
+function tableIsWarranted(input: NarrationInput, requested: AnswerIntent, shown: number): boolean {
   if (requested.shape === "direct" || requested.shape === "overview") return false;
   if (requested.wantsTable) return true;
   if (requested.shape !== "ranking") return false;
@@ -451,7 +454,7 @@ export function composeStatements(input: readonly VerifiedFinding[], locale: Num
 
 export function renderDeterministic(input: NarrationInput, options: DeterministicOptions = {}): string {
   const { locale } = input;
-  const requested = readRequest(input.request, input.analysis, input.findings);
+  const requested = input.answerIntent ?? answerIntentFromResult(input.analysis, input.findings);
   const speakable = input.findings.filter((f) => !isMetaFinding(f) && groundedStatement(f, locale) !== "");
 
   if (speakable.length === 0) {
@@ -585,7 +588,7 @@ export function buildNarratorRetryMessages(
   const { locale } = input;
   const ru = locale === "ru";
   const base = buildNarratorMessages(input);
-  const requested = readRequest(input.request, input.analysis, input.findings);
+  const requested = input.answerIntent ?? answerIntentFromResult(input.analysis, input.findings);
   const offending = [...new Set(unsupported.map((u) => u.numericToken))].join(", ");
   const sentences = [...new Set(unsupported.map((u) => u.claimText))].slice(0, 3);
   const subjects = [...new Set(input.findings.map((f) => subjectLabel(f.subjectRef, f.subject)).filter((s) => isReadableLabel(s)))].slice(0, 20);

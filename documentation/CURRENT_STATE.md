@@ -2,6 +2,17 @@ RESUME HERE
 documentation/HANDOFF_STAGE_27_8.md is the authoritative resume document.
 Read it first. This file is the short status summary only.
 
+STAGE 28B — P0-1 COMPLETE (`refactor(v2): preserve planner AnswerIntent`): V2 `AnswerIntent` is defined in
+`analytical-engine-v2/types.ts` and is owned by the existing planner. The
+planner protocol carries it on `complete` and final `tool_call` decisions;
+the loop, engine and narrator preserve it without another model call.
+`PeriodIntent` is retained unchanged within it. `answer-shape.ts` no longer
+parses request text for shape, count, direction, table or recommendation;
+its sole omission fallback is result/finding-derived and the engine records
+`answerIntentOmitted` in the trace. The recommendation regex remains only in
+`answer-evaluator.ts` as a fail-closed output-quality guard. P0-0 and P0-2
+are complete. Do not mark Stage 28 PASS. Next: P0-3 PresentationPlan.
+
 STAGE 28A — P0-0 is complete (baseline `2f5f54a`). P0-2 period ownership is
 implemented and committed: `PeriodIntent` is owned by `analytical-engine-v2/types.ts` and
 `resolvePeriodIntent` in `tools/semantic-refs.ts` is the authoritative V2

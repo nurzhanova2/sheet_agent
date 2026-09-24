@@ -6,6 +6,7 @@ import type {
   DecisionProblem,
   EngineResult,
   OutputBinding,
+  AnswerIntent,
   ParsedPlannerDecision,
   PlannedOutput,
   PlannerDecision,
@@ -56,7 +57,7 @@ const SYSTEM_BASE = [
   "FINISHING IN ONE STEP",
   "- The TABLE block already lists every period and the METRIC LABELS block already lists every metric name. Use them directly. Never spend a call discovering what is already printed in front of you.",
   '- Every change.compute or change.compare_periods call requires periodIntent in arguments: {"kind":"latest_vs_previous"} for an implicit current comparison; {"kind":"named_pair","start":"…","end":"…"} for explicit dates; or {"kind":"full_range"} for whole history. Endpoints without named_pair are rejected.',
-  '- When the tool call you are about to make PRODUCES THE ANSWER and nothing further is needed, add "final":true to that call. The turn ends on its result: you send no separate complete decision and you are not asked again.',
+  '- When the tool call you are about to make PRODUCES THE ANSWER and nothing further is needed, add "final":true and answerIntent to that call. The turn ends on its result: you send no separate complete decision and you are not asked again.',
   '- Use "final":true for an ordinary single-answer question — a change between two periods, a value at one period, a ranking, an extreme, a trend, a volatility comparison — where one call finishes the work.',
   '- Do NOT set "final":true when your plan declared several outputs, when the call only narrows or prepares data for a later call, or when you are not yet sure its result answers the request. Finish those with a complete decision as usual.',
   '- A "final" call whose result turns out to be empty or merely descriptive does not end the turn: you are told so, and you continue.',
@@ -76,9 +77,10 @@ const SYSTEM_BASE = [
   "",
   "OUTPUT — return EXACTLY ONE JSON object and nothing else (no prose, no code fence, no extra keys):",
   '  {"kind":"plan","outputs":["<what the request asks for, one short phrase each>", …],"primaryOutputId":"o<N>"}',
-  '  {"kind":"tool_call","tool":"<name>","arguments":{ … },"final":true}   ("final" is optional — see FINISHING IN ONE STEP)',
+  '  {"kind":"tool_call","tool":"<name>","arguments":{ … },"final":true,"answerIntent":<intent>}   ("final" is optional — see FINISHING IN ONE STEP)',
   '  {"kind":"clarify","question":"<one question>","options":["<option>", …]}',
-  '  {"kind":"complete","primaryResultRef":"result_N","supportingResultRefs":["result_M", …],"outputBindings":[{"outputId":"o1","resultRef":"result_M"}, …]}',
+  '  {"kind":"complete","primaryResultRef":"result_N","supportingResultRefs":["result_M", …],"answerIntent":<intent>,"outputBindings":[{"outputId":"o1","resultRef":"result_M"}, …]}',
+  '  intent = {"shape":"direct|ranking|comparison|exploratory|grouping|overview","count":number|null,"direction":"up|down|null","subjects":["exact subject", …],"periodIntent":{"kind":"latest_vs_previous|named_pair|full_range|single", …},"wantsTable":boolean,"wantsRecommendation":boolean,"answerStyle":"concise|explanatory"}',
   "EVERY tool argument goes inside \"arguments\". A value written at the top level of the decision is rejected.",
   "Any other output is rejected.",
 ].join("\n");
@@ -234,9 +236,9 @@ export function buildPlannerMessages(input: PlannerPromptInput): readonly Planne
 // --- decision parsing (§14/§15) ---------------------------------------------
 
 const PROTOCOL_KEYS: Readonly<Record<string, readonly string[]>> = {
-  tool_call: ["kind", "tool", "arguments", "final"],
+  tool_call: ["kind", "tool", "arguments", "final", "answerIntent"],
   clarify: ["kind", "question", "options"],
-  complete: ["kind", "primaryResultRef", "supportingResultRefs", "answerStyle", "outputBindings"],
+  complete: ["kind", "primaryResultRef", "supportingResultRefs", "answerStyle", "answerIntent", "outputBindings"],
   // Stage 26.5 §4 — a plan may also name which of its outputs is the answer.
   plan: ["kind", "outputs", "primaryOutputId"],
   // Stage 27 §13 — an analysis REQUEST. Note what is absent: there is no field
@@ -302,6 +304,27 @@ function extractJson(raw: string): string | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   return start >= 0 && end > start ? text.slice(start, end + 1) : null;
+}
+
+function readAnswerIntent(value: unknown): AnswerIntent | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const { shape, count, direction, subjects, periodIntent, wantsTable, wantsRecommendation, answerStyle } = input;
+  if (
+    !["direct", "ranking", "comparison", "exploratory", "grouping", "overview"].includes(String(shape)) ||
+    !(count === null || (typeof count === "number" && Number.isInteger(count) && count > 0 && count <= 20)) ||
+    !(direction === null || direction === "up" || direction === "down") ||
+    !Array.isArray(subjects) || !subjects.every((subject) => typeof subject === "string") ||
+    typeof wantsTable !== "boolean" || typeof wantsRecommendation !== "boolean" ||
+    !(answerStyle === "concise" || answerStyle === "explanatory") ||
+    typeof periodIntent !== "object" || periodIntent === null || Array.isArray(periodIntent)
+  ) return null;
+  const period = periodIntent as Record<string, unknown>;
+  const base = { shape: shape as AnswerIntent["shape"], count: count as number | null, direction: direction as AnswerIntent["direction"], subjects: subjects as readonly string[], wantsTable, wantsRecommendation, answerStyle: answerStyle as AnswerIntent["answerStyle"] };
+  if (period["kind"] === "latest_vs_previous" || period["kind"] === "full_range") return { ...base, periodIntent: { kind: period["kind"] } };
+  if (period["kind"] === "named_pair" && typeof period["start"] === "string" && typeof period["end"] === "string") return { ...base, periodIntent: { kind: "named_pair", start: period["start"], end: period["end"] } };
+  if (period["kind"] === "single" && typeof period["at"] === "string") return { ...base, periodIntent: { kind: "single", at: period["at"] } };
+  return null;
 }
 
 export function parsePlannerDecision(raw: unknown): ParsedPlannerDecision {
@@ -404,9 +427,13 @@ Return a corrected decision: {"kind":"tool_call","tool":"…","arguments":{ … 
     if (final !== undefined && typeof final !== "boolean") {
       return fail("BAD_CONTAINER", '"final" must be true or false', 'The "final" field of a tool_call is a boolean: true only when this call produces the principal answer.');
     }
+    const answerIntent = o["answerIntent"];
+    if (answerIntent !== undefined && readAnswerIntent(answerIntent) === null) {
+      return fail("BAD_CONTAINER", '"answerIntent" must be a complete semantic intent object', 'Provide answerIntent with shape, count, direction, subjects, periodIntent, wantsTable, wantsRecommendation and answerStyle.');
+    }
     return {
       ok: true,
-      decision: { kind: "tool_call", tool, arguments: (args as Record<string, unknown>) ?? {}, ...(final === true ? { final: true } : {}) },
+      decision: { kind: "tool_call", tool, arguments: (args as Record<string, unknown>) ?? {}, ...(final === true ? { final: true } : {}), ...(answerIntent !== undefined ? { answerIntent: readAnswerIntent(answerIntent)! } : {}) },
       serialization: scan.serialization,
     };
   }
@@ -627,6 +654,10 @@ Return a corrected decision: {"kind":"tool_call","tool":"…","arguments":{ … 
   }
   const supporting = Array.isArray(o["supportingResultRefs"]) ? (o["supportingResultRefs"] as unknown[]).filter((s): s is string => typeof s === "string") : [];
   const style = o["answerStyle"];
+  const answerIntent = o["answerIntent"];
+  if (answerIntent !== undefined && readAnswerIntent(answerIntent) === null) {
+    return fail("BAD_CONTAINER", '"answerIntent" must be a complete semantic intent object', 'Provide answerIntent with shape, count, direction, subjects, periodIntent, wantsTable, wantsRecommendation and answerStyle.');
+  }
   const bindingsRaw = Array.isArray(o["outputBindings"]) ? (o["outputBindings"] as unknown[]) : [];
   const outputBindings: OutputBinding[] = [];
   for (const b of bindingsRaw) {
@@ -643,6 +674,7 @@ Return a corrected decision: {"kind":"tool_call","tool":"…","arguments":{ … 
     // duplicate in the supporting list is a protocol slip, not two results.
     supportingResultRefs: [...new Set(supporting)].filter((s) => s !== primary),
     ...(style === "concise" || style === "explanatory" ? { answerStyle: style } : {}),
+    ...(answerIntent !== undefined ? { answerIntent: readAnswerIntent(answerIntent)! } : {}),
     ...(outputBindings.length > 0 ? { outputBindings } : {}),
   };
   return { ok: true, decision, serialization: scan.serialization };

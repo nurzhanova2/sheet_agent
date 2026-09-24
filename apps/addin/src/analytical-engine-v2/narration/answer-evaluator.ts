@@ -1,7 +1,8 @@
 import type { NumberLocale } from "../../analysis/format-number.js";
 import type { VerifiedFinding } from "../insight/verified-finding.js";
 import { isReadableLabel, normalizeLabel, subjectLabel, subjectNames } from "../insight/finding-subject.js";
-import { RECOMMENDATION_REQUESTED } from "./answer-shape.js";
+/** Fail-closed output guard, deliberately not planner semantic routing. */
+export const RECOMMENDATION_REQUESTED = /(?:рекоменд\p{L}*|посоветуй\p{L}*|что\s+(?:делать|предприн\p{L}*|дальше)|куда\s+(?:копать|смотреть)|на\s+что\s+обратить\s+внимание|какие\p{L}*\s+(?:шаги|действия)|что\s+стоит\s+проверить|recommend\p{L}*|advi[cs]e|what\s+should\s+(?:i|we)|next\s+steps?|what\s+to\s+(?:do|check))/iu;
 
 export type AnswerIssue =
   | "TASK_NOT_FULFILLED"
