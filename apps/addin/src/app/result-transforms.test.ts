@@ -21,8 +21,6 @@ const REF: ResultRef = {
     ["Outdoor", 210, 205],
   ],
   rowsTruncated: false,
-  facts: [],
-  resolved: [],
 };
 
 describe("detectResultTransform", () => {

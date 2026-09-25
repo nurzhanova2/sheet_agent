@@ -4,6 +4,7 @@ import { buildPeriodIndex } from "../../app/schema/analytical/period-index.js";
 import { buildEngineContext } from "../context/build-context.js";
 import { capabilityFactsOf, type RuntimeCapabilities } from "../capability/capability-availability.js";
 import { selectCapabilities } from "../capability/capability-selection.js";
+import { verifyCoverage, type CoverageResult } from "../verification/coverage-verifier.js";
 import { buildToolContext } from "../capability/tool-context.js";
 import { buildToolCatalog } from "../context/build-context.js";
 import { findTool, V2_TOOLS } from "../tools/registry.js";
@@ -96,6 +97,12 @@ export interface PlannerRun {
   /** Stage 26.7 §29 — what the planner had declared when it stopped. */
   readonly declaredOutputs: readonly PlannedOutput[];
   readonly primaryOutputId?: string;
+  /**
+   * Stage 28G §11/§12 — the coverage verdict for a `complete` outcome, from
+   * the planner contract. The engine reads it; it never recomputes coverage
+   * from the request text.
+   */
+  readonly coverage?: CoverageResult;
   readonly budget: BudgetUse;
   readonly trace: AnalyticalTraceV2;
   readonly traceBuilder: TraceBuilder;
@@ -160,37 +167,6 @@ function completionProblem(primary: EngineResult): string | null {
   // empty result is still a protocol slip: nothing was actually computed.
   if (primary.rows.length === 0 && primary.type !== "filtered_set") return `"${primary.resultId}" has no rows`;
   if (primary.type === "schema") return `"${primary.resultId}" describes the table's shape, not an analytical answer`;
-  return null;
-}
-
-/**
- * Stage 26.4 §12/§13 — COVERAGE, not answer selection (§9). The engine checks
- * only that each output the PLANNER itself declared is bound to a result that
- * exists, and that the primary is one of them. It never inspects the user's
- * text, never ranks the results, and never substitutes a different primary.
- */
-function coverageProblem(outputs: readonly PlannedOutput[], decision: CompleteDecision, store: ResultStore): { readonly message: string; readonly unsatisfied: readonly string[] } | null {
-  // A single declared output needs no binding: the primary IS the answer.
-  if (outputs.length < 2) return null;
-  const bindings = decision.outputBindings ?? [];
-  const bound = new Map(bindings.map((b) => [b.outputId, b.resultRef]));
-  const unsatisfied = outputs.filter((o) => {
-    const ref = bound.get(o.id);
-    return ref === undefined || !store.has(ref);
-  });
-  if (unsatisfied.length > 0) {
-    return {
-      message: `your completion does not account for every output you declared — unbound or unknown: ${unsatisfied.map((o) => `${o.id} (${o.description})`).join("; ")}`,
-      unsatisfied: unsatisfied.map((o) => o.id),
-    };
-  }
-  const refs = new Set(bindings.map((b) => b.resultRef));
-  if (!refs.has(decision.primaryResultRef)) {
-    return {
-      message: `"${decision.primaryResultRef}" is not bound to any declared output — the primary must be one of the results you bound`,
-      unsatisfied: [],
-    };
-  }
   return null;
 }
 
@@ -319,6 +295,7 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
   let planDeclarations = 0;
   let analyses = 0;
 
+  let coverageVerdict: CoverageResult | undefined;
   const finish = (outcome: PlannerRunOutcome, kind: AnalyticalTraceV2["outcome"]): PlannerRun => {
     const finalContext = toolContext;
     trace.set({
@@ -356,6 +333,7 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
       results: store.all(),
       declaredOutputs,
       ...(declaredPrimaryOutputId !== undefined ? { primaryOutputId: declaredPrimaryOutputId } : {}),
+      ...(coverageVerdict ? { coverage: coverageVerdict } : {}),
       budget: { ...budget },
       trace: trace.commit(store.all(), kind),
       traceBuilder: trace,
@@ -485,13 +463,14 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
       // §14/§15 — a completion that does not cover every declared output gets
       // ONE correction round. The ResultStore is untouched, so the planner
       // re-binds without rerunning a single tool.
-      const coverage = coverageProblem(declaredOutputs, decision, store);
-      if (coverage && budget.completionRetries < bounds.maxCompletionRetries) {
+      const coverage = verifyCoverage({ declaredOutputs, decision, knownResult: (id) => store.has(id) });
+      if (!coverage.ok && budget.completionRetries < bounds.maxCompletionRetries) {
         budget.completionRetries += 1;
-        errors.push(`complete → ${coverage.message}. Re-check which result answers which output, and which one is the principal answer.`);
+        errors.push(`complete → ${coverage.detail}. Re-check which result answers which output, and which one is the principal answer.`);
         continue;
       }
-      if (coverage) trace.set({ coverageUnsatisfied: coverage.unsatisfied });
+      coverageVerdict = coverage;
+      if (!coverage.ok) trace.set({ coverageUnsatisfied: coverage.unsatisfied });
 
       // §8/§12 — the completion must agree with the plan the planner declared.
       // One correction, no tool rerun. Past that the engine ACCEPTS what the

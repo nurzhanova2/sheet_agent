@@ -1,39 +1,67 @@
-import type { EngineAnalysis } from "../types.js";
+import type { CompleteDecision, PlannedOutput } from "../types.js";
 
-// A word that opens an analytical ask, in either language. Counting these is a
-// structural signal ("do X and also Y"), not a catalogue of supported
-// sentences: any verb in the list opens a clause wherever it appears.
-const ASK_TRIGGER_RE =
-  /(?<![\p{L}])(?:покажи|найди|скажи|назови|объясни|поясни|расскажи|укажи|сравни|определи|выведи|посчитай|when|where|which|what|how|explain|show|tell|find|compare|identify|determine|list)(?![\p{L}])/giu;
-
-const MAX_CLAUSES = 4;
-
-/** §23 — 1–4 distinct analytical asks in the sentence. */
-export function countAsks(text: string): number {
-  const matches = text.match(ASK_TRIGGER_RE) ?? [];
-  return Math.max(1, Math.min(MAX_CLAUSES, matches.length || 1));
+export interface CoverageInput {
+  /** What the PLANNER declared this turn has to produce (§10/§11). */
+  readonly declaredOutputs: readonly PlannedOutput[];
+  readonly decision: CompleteDecision;
+  /** Whether a bound `resultRef` names a result that actually exists. */
+  readonly knownResult: (resultId: string) => boolean;
 }
 
 export interface CoverageResult {
   readonly ok: boolean;
-  readonly asks: number;
-  readonly named: number;
+  /** How many outputs the planner declared. */
+  readonly declared: number;
+  /** How many of them are bound to a result that exists. */
+  readonly bound: number;
+  readonly unsatisfied: readonly string[];
   readonly detail?: string;
 }
 
 /**
- * §23 — a completion covers the request when it names at least as many
- * distinct results as the sentence has asks. An answer whose parts genuinely
- * come from ONE result (a single event row that carries both "which period"
- * and "how much") is accepted: only a demonstrably thinner completion fails.
+ * Stage 26.4 §12/§13 · Stage 28G §11 — COVERAGE, and nothing else.
+ *
+ * The question is "is every output the planner ITSELF declared bound to a
+ * result that exists, and is the primary one of them?". It is answered from
+ * the planner contract — `PlanDecision.outputs` against
+ * `CompleteDecision.outputBindings` — and never from the user's sentence. The
+ * count N comes from the planner, so a second language parser cannot disagree
+ * with the planner about how many parts a request has.
+ *
+ * A single declared output needs no binding: it IS the answer. This never
+ * ranks results and never substitutes a primary — that is §9's job, not this
+ * one's.
  */
-export function verifyCoverage(request: string, analysis: EngineAnalysis): CoverageResult {
-  const asks = countAsks(request);
-  if (asks < 2) return { ok: true, asks, named: 1 + analysis.supporting.length };
-  const named = 1 + analysis.supporting.length;
-  if (named >= asks) return { ok: true, asks, named };
-  // A compound ask answered from a single EVENT still covers "what" and
-  // "when" — the event row carries both, so it is not a thin completion.
-  if (analysis.primary.type === "event" && asks === 2) return { ok: true, asks, named };
-  return { ok: false, asks, named, detail: `the request has ${asks} parts but the completion names ${named} result(s)` };
+export function verifyCoverage(input: CoverageInput): CoverageResult {
+  const declared = input.declaredOutputs.length;
+  const bindings = input.decision.outputBindings ?? [];
+  if (declared < 2) return { ok: true, declared, bound: declared, unsatisfied: [] };
+
+  const bound = new Map(bindings.map((b) => [b.outputId, b.resultRef]));
+  const satisfied = input.declaredOutputs.filter((o) => {
+    const ref = bound.get(o.id);
+    return ref !== undefined && input.knownResult(ref);
+  });
+  const missing = input.declaredOutputs.filter((o) => !satisfied.includes(o));
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      declared,
+      bound: satisfied.length,
+      unsatisfied: missing.map((o) => o.id),
+      detail: `your completion does not account for every output you declared — unbound or unknown: ${missing.map((o) => `${o.id} (${o.description})`).join("; ")}`,
+    };
+  }
+
+  const refs = new Set(bindings.map((b) => b.resultRef));
+  if (!refs.has(input.decision.primaryResultRef)) {
+    return {
+      ok: false,
+      declared,
+      bound: satisfied.length,
+      unsatisfied: [],
+      detail: `"${input.decision.primaryResultRef}" is not bound to any declared output — the primary must be one of the results you bound`,
+    };
+  }
+  return { ok: true, declared, bound: satisfied.length, unsatisfied: [] };
 }

@@ -26,11 +26,9 @@ function grouped(
     columns,
     rows,
     rowsTruncated: false,
-    facts: [],
     sourceSheet: "Sales Test Data",
     sourceRange: "Sales Test Data!A1:L121",
     sourceVersion: "v1",
-    resolved: [],
     ...extra,
   });
 }

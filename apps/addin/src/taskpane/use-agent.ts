@@ -1077,11 +1077,9 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
               columns: primary.columns,
               rows: primary.rows,
               rowsTruncated: primary.truncated ?? false,
-              facts: [],
               sourceSheet: firstV ? firstV.sourceRange.split("!")[0] ?? sheet : sheet,
               sourceRange: firstV ? firstV.sourceRange : primary.source ?? sheet,
               sourceVersion: firstV ? firstV.version : `agent:${primary.source ?? sheet}:${primary.rowCount ?? primary.rows.length}`,
-              resolved: [],
               ...(versions.length > 0 ? { sourceVersions: versions } : {}),
               ...(parents.length === 1 ? { derivedFromResultId: parents[0]! } : {}),
               ...(parents.length >= 2 ? { derivedFromResultIds: [...parents] } : {}),
@@ -1722,11 +1720,9 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
               columns: turn.analysis.primary.fields.map((f) => f.name),
               rows: turn.analysis.primary.rows.map((r) => r.map((c) => c as CellValue)),
               rowsTruncated: false,
-              facts: [],
               sourceSheet: table.schema.sheetName,
               sourceRange: table.schema.sourceRange,
               sourceVersion: table.schema.sourceVersion,
-              resolved: [],
             });
             collapseTurn("done", turn.timings);
             say(body, "answered", turnId);
@@ -2078,11 +2074,9 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
               columns: grGrid.columns,
               rows: grGrid.rows,
               rowsTruncated: false,
-              facts: grBatch.facts,
               sourceSheet: snap.sheetName,
               sourceRange: snap.address,
               sourceVersion: sourceVersionOf(snap),
-              resolved: [],
               entityColumn: plan.entityColumn,
               entityValues: grEntityValues,
               ...(priorGrouped ? { derivedFromResultId: priorGrouped.id } : {}),
@@ -2607,11 +2601,9 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             columns: s.columns,
             rows: s.rows,
             rowsTruncated: s.rowsTruncated,
-            facts: s.facts,
             sourceSheet: s.sourceSheet || activeSelection.sheetName,
             sourceRange: s.sourceRange || activeSelection.address,
             sourceVersion: sourceVersionOf(activeSelection),
-            resolved: [],
           });
           // Stage 24.6 — an analysis that identified specific workbook rows also
           // produces a canonical RowSetRef (the prose answer is not canonical).

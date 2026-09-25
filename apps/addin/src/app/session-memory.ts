@@ -1,6 +1,5 @@
 import type { CellValue } from "@sheet-agent/application";
 import type { ChartData } from "../visualization/types.js";
-import type { VerifiedFact } from "../analysis/facts.js";
 
 /** How the conversational runtime classified a turn (Stage 24.3 — declared here to avoid a cycle). */
 export type ConversationRoute =
@@ -37,15 +36,6 @@ export const MEMORY_LIMITS = {
   maxKnownIds: 64,
 } as const;
 
-/** A worksheet / column / range identity resolved deterministically (Stage 23 resolver). */
-export interface ResolvedWorkbookRef {
-  readonly kind: "sheet" | "column" | "range";
-  /** Exact resolved sheet or header name, or a sheet-qualified A1 for a range. */
-  readonly name: string;
-  readonly sheetName?: string;
-  readonly turnId: string;
-}
-
 /** A reusable analytical result — enough to reuse WITHOUT parsing assistant prose. */
 export interface ResultRef {
   readonly id: string;
@@ -73,8 +63,6 @@ export interface ResultRef {
   /** The canonical reusable payload — a bounded result grid. */
   readonly rows: readonly (readonly CellValue[])[];
   readonly rowsTruncated: boolean;
-  readonly facts: readonly VerifiedFact[];
-  readonly resolved: readonly ResolvedWorkbookRef[];
   /**
    * Stage 24.2B — set when this result was produced by a deterministic
    * transform of an earlier result (top N / sort / which-is-worst / column
@@ -138,16 +126,6 @@ export interface ChartRef {
   readonly placed?: { readonly sheetName: string; readonly shapeName: string };
 }
 
-export interface SheetRef {
-  readonly id: string;
-  readonly turnId: string;
-  readonly order: number;
-  readonly createdAt: number;
-  readonly name: string;
-  /** True when SheetAgent created it this session (undo may delete it). */
-  readonly createdByAgent: boolean;
-}
-
 export type ClarificationKind =
   | "column_ambiguous"
   | "dataset_ambiguous"
@@ -172,8 +150,6 @@ export interface PendingClarification {
   readonly originalPrompt: string;
   readonly route: ConversationRoute;
   readonly kind: ClarificationKind;
-  /** Pieces already resolved deterministically — so the user need not restate them. */
-  readonly resolved: readonly ResolvedWorkbookRef[];
   /** Safe-to-reuse partial observations (bounded, text only). */
   readonly observations: readonly { readonly label: string; readonly text: string }[];
   /** The candidate choices the user is picking among. */
@@ -212,7 +188,6 @@ export interface SessionMemory {
   readonly lastResultId?: string;
   readonly lastRowSet?: RowSetRef;
   readonly lastChart?: ChartRef;
-  readonly lastCreatedSheet?: SheetRef;
   readonly pendingClarification?: PendingClarification;
   /** Monotonic ordering counter for every remembered object. */
   readonly seq: number;

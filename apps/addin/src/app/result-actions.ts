@@ -245,8 +245,6 @@ export function buildCopyRowSetActions(
     columns: rowSet.columns,
     rows: rowSet.rows,
     rowsTruncated: rowSet.truncated,
-    facts: [],
-    resolved: [],
   };
   const written = buildWriteResultActions(pseudo, target, existing);
   if (isCompileError(written)) return written;

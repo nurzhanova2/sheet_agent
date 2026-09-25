@@ -6,7 +6,7 @@ import { EMPTY_ANALYTICAL_STATE, type AnalyticalConversationState } from "./stat
 import { stateInconsistency } from "./state/state-commit.js";
 import { tableMovedOn } from "./state/state-refs.js";
 import { fixtureOperations } from "./__fixtures__/synthetic-tables.js";
-import { emptySessionMemory } from "../app/conversation-memory.js";
+import { emptySessionMemory, rememberResult } from "../app/conversation-memory.js";
 import type { PlannerMessage } from "./planner/planner-prompt.js";
 
 const table = fixtureOperations();
@@ -180,12 +180,50 @@ const REMOVED_ANALYTICAL_STATE = [
   "rememberAnalyticalResultSet",
 ] as const;
 
+/**
+ * Stage 28G §13 — representations that were WRITTEN and never READ. Each was
+ * measured before deletion: `facts` and `resolved` were written at every
+ * `rememberResult` call site and read nowhere; `SheetRef` /
+ * `lastCreatedSheet` had no production writer at all, so the three readers
+ * that guarded on it could never fire.
+ */
+const REMOVED_WRITE_ONLY = [
+  "ResolvedWorkbookRef",
+  "SheetRef",
+  "lastCreatedSheet",
+  "rememberSheet",
+  "countAsks",
+] as const;
+
 describe("the mutation store carries no analytical state of its own", () => {
   const files = productionFiles(SRC);
 
   it.each(REMOVED_ANALYTICAL_STATE)("%s has no production reader or writer", (symbol) => {
     const hits = files.filter((f) => new RegExp(`\\b${symbol}\\b`).test(readFileSync(f, "utf8")));
     expect(hits.map((f) => f.slice(SRC.length))).toEqual([]);
+  });
+
+  it.each(REMOVED_WRITE_ONLY)("%s is gone from production entirely", (symbol) => {
+    const hits = files.filter((f) => new RegExp(`\b${symbol}\b`).test(readFileSync(f, "utf8")));
+    expect(hits.map((f) => f.slice(SRC.length))).toEqual([]);
+  });
+
+  it("a remembered result carries no field nothing reads", () => {
+    const remembered = rememberResult(emptySessionMemory(), {
+      turnId: "t1",
+      kind: "grouped_table",
+      title: "t",
+      spec: {},
+      columns: ["a"],
+      rows: [["x"]],
+      rowsTruncated: false,
+      sourceSheet: "S",
+      sourceRange: "S!A1:A2",
+      sourceVersion: "v1",
+    });
+    const keys = Object.keys(remembered.recentResults[0]!);
+    expect(keys).not.toContain("facts");
+    expect(keys).not.toContain("resolved");
   });
 
   it("an empty session memory holds only mutation concerns", () => {

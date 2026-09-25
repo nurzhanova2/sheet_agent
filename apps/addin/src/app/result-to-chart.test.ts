@@ -21,8 +21,6 @@ function ref(over: Partial<ResultRef>): ResultRef {
       ["Furniture", 200, 190],
     ],
     rowsTruncated: false,
-    facts: [],
-    resolved: [],
     ...over,
   };
 }

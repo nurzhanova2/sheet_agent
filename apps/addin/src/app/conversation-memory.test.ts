@@ -7,7 +7,6 @@ import {
   rememberChart,
   rememberResult,
   rememberRowSet,
-  rememberSheet,
   resolveReference,
 } from "./conversation-memory.js";
 import { MEMORY_LIMITS, type PendingClarification } from "./session-memory.js";
@@ -35,11 +34,9 @@ function resultInput(over: Partial<Parameters<typeof rememberResult>[1]> = {}) {
       ["Electronics", 222, 226],
     ],
     rowsTruncated: false,
-    facts: [],
     sourceSheet: "Sales Test Data",
     sourceRange: "Sales Test Data!A1:L121",
     sourceVersion: "121x12@Sales Test Data!A1:L121",
-    resolved: [],
     ...over,
   };
 }
@@ -145,7 +142,6 @@ describe("interpretClarificationAnswer", () => {
     originalPrompt: "Compare PD",
     route: "workbook_analysis",
     kind: "column_ambiguous",
-    resolved: [],
     observations: [],
     candidates: ["PD12", "PD_Lifetime", "PD_Model"],
     question: "Which PD column should I compare?",
@@ -168,12 +164,10 @@ describe("interpretClarificationAnswer", () => {
 
 describe("projectMemoryForModel", () => {
   it("lists refs by id without dumping the row grid", () => {
-    let m = rememberResult(emptySessionMemory(), resultInput());
-    m = rememberSheet(m, { turnId: "t2", name: "Summary", createdByAgent: true });
+    const m = rememberResult(emptySessionMemory(), resultInput());
     const block = projectMemoryForModel(m, "en");
     expect(block).toMatch(/PRIOR RESULTS/);
     expect(block).toMatch(/\[res_\w+\] "Average Plan and Fact by Category" · grouped_table/);
-    expect(block).toMatch(/last created sheet: "Summary"/);
     expect(block).not.toMatch(/Accessories/); // no grid dump
   });
   it("is empty when nothing is remembered", () => {

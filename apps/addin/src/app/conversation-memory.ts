@@ -11,7 +11,6 @@ import {
   type ResultRef,
   type RowSetRef,
   type SessionMemory,
-  type SheetRef,
 } from "./session-memory.js";
 
 export function emptySessionMemory(): SessionMemory {
@@ -25,7 +24,6 @@ function pushKnownId(ids: readonly string[], id: string): readonly string[] {
 type ResultInput = Omit<ResultRef, "id" | "order" | "createdAt">;
 type RowSetInput = Omit<RowSetRef, "id" | "order" | "createdAt">;
 type ChartInput = Omit<ChartRef, "id" | "order" | "createdAt">;
-type SheetInput = Omit<SheetRef, "id" | "order" | "createdAt">;
 
 /** Persists a structured analytical result, clamped to the row/column caps, evicting the oldest. */
 export function rememberResult(memory: SessionMemory, input: ResultInput): SessionMemory {
@@ -77,11 +75,9 @@ export function rememberDerivedResult(
     columns: derived.columns,
     rows: derived.rows,
     rowsTruncated: false,
-    facts: parent.facts,
     sourceSheet: parent.sourceSheet,
     sourceRange: parent.sourceRange,
     sourceVersion: parent.sourceVersion,
-    resolved: parent.resolved,
     derivedFromResultId: parent.id,
     transform: derived.transform,
   });
@@ -99,13 +95,6 @@ export function rememberChart(memory: SessionMemory, input: ChartInput): Session
   const id = nextId("cht");
   const ref: ChartRef = { ...input, id, order: seq, createdAt: Date.now() };
   return { ...memory, lastChart: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
-}
-
-export function rememberSheet(memory: SessionMemory, input: SheetInput): SessionMemory {
-  const seq = memory.seq + 1;
-  const id = nextId("sht");
-  const ref: SheetRef = { ...input, id, order: seq, createdAt: Date.now() };
-  return { ...memory, lastCreatedSheet: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
 }
 
 /** Returns a shallow copy of `obj` with the given keys removed (respects exactOptionalPropertyTypes). */
@@ -130,9 +119,6 @@ export function forgetSheet(memory: SessionMemory, sheetName: string): SessionMe
     ...memory,
     recentResults: memory.recentResults.filter((r) => r.sourceSheet.toLowerCase() !== lc),
   };
-  if (next.lastCreatedSheet && next.lastCreatedSheet.name.toLowerCase() === lc) {
-    next = withoutKeys(next, ["lastCreatedSheet"]);
-  }
   if (next.lastResultId && !next.recentResults.some((r) => r.id === next.lastResultId)) {
     next = withoutKeys(next, ["lastResultId"]);
   }
@@ -150,10 +136,9 @@ export function forgetChartPlacement(memory: SessionMemory, shapeName: string): 
 export type ReferenceTarget =
   | { readonly kind: "result"; readonly ref: ResultRef }
   | { readonly kind: "rowset"; readonly ref: RowSetRef }
-  | { readonly kind: "chart"; readonly ref: ChartRef }
-  | { readonly kind: "sheet"; readonly ref: SheetRef };
+  | { readonly kind: "chart"; readonly ref: ChartRef };
 
-export type ReferenceWhat = "result" | "rowset" | "chart" | "sheet";
+export type ReferenceWhat = "result" | "rowset" | "chart";
 
 export type ReferenceResolution =
   | { readonly kind: "resolved"; readonly phrase: string; readonly target: ReferenceTarget }
@@ -198,11 +183,11 @@ export function resolveReference(text: string, memory: SessionMemory): Reference
     return hadKind(memory, "rows") ? { kind: "evicted", phrase: rowsPhrase, what: "rowset" } : { kind: "none" };
   }
 
-  const sheetPhrase = firstMatch(text, SHEET_RE);
-  if (sheetPhrase) {
-    if (memory.lastCreatedSheet) return { kind: "resolved", phrase: sheetPhrase, target: { kind: "sheet", ref: memory.lastCreatedSheet } };
-    return hadKind(memory, "sht") ? { kind: "evicted", phrase: sheetPhrase, what: "sheet" } : { kind: "none" };
-  }
+  // A worksheet is not something this store holds a reference to, and a
+  // sheet-shaped phrase must not fall through to the generic branch and come
+  // back as "the last result": «положи это туда» names a destination, not a
+  // table. The phrase ends reference resolution with nothing resolved.
+  if (firstMatch(text, SHEET_RE)) return { kind: "none" };
 
   const genericPhrase = firstMatch(text, GENERIC_RE);
   if (genericPhrase) {
@@ -231,8 +216,7 @@ export function resolveReference(text: string, memory: SessionMemory): Reference
 export function describeReferenceTarget(target: ReferenceTarget): string {
   if (target.kind === "result") return `"${target.ref.title}"`;
   if (target.kind === "rowset") return target.ref.describe ? `the rows where ${target.ref.describe}` : "those rows";
-  if (target.kind === "chart") return `the chart "${target.ref.data.title}"`;
-  return `the sheet "${target.ref.name}"`;
+  return `the chart "${target.ref.data.title}"`;
 }
 
 /** Builds a PendingClarification for an ambiguous conversational reference ("show the top 3 from that"). */
@@ -251,7 +235,6 @@ export function buildReferenceClarification(
     originalPrompt,
     route: "workbook_analysis",
     kind: "reference_ambiguous",
-    resolved: [],
     observations: [],
     candidates: labels,
     targetIds: candidates.map((c) => c.ref.id),
@@ -279,7 +262,6 @@ export function buildColumnClarification(
     originalPrompt,
     route: opts.route ?? "workbook_analysis",
     kind: "column_ambiguous",
-    resolved: [],
     observations: [],
     candidates: [...candidates],
     ...(opts.resultId ? { targetIds: [opts.resultId] } : {}),
@@ -310,7 +292,6 @@ export function buildChartColumnsClarification(
     originalPrompt,
     route: "workbook_analysis",
     kind: "chart_columns",
-    resolved: [],
     observations: [],
     candidates: [...candidates],
     targetIds: [resultId],
@@ -339,7 +320,6 @@ export function buildAgentClarification(
     originalPrompt,
     route: "workbook_analysis",
     kind: "agent",
-    resolved: [],
     observations: [],
     candidates: [...candidates],
     question,
@@ -369,7 +349,6 @@ export function buildEntityActionClarification(
     originalPrompt,
     route: "workbook_analysis",
     kind: "entity_action",
-    resolved: [],
     observations: [],
     candidates: [...entityColumns],
     targetIds: [resultId],
@@ -394,7 +373,6 @@ export function buildDatasetClarification(
     originalPrompt,
     route: "workbook_analysis",
     kind: "dataset_ambiguous",
-    resolved: [],
     observations: [],
     candidates: [...candidates],
     question: ru
@@ -509,7 +487,7 @@ export function projectMemoryForModel(memory: SessionMemory, language: ResponseL
   const ru = language === "ru";
   const lines: string[] = [];
 
-  if (memory.recentResults.length > 0 || memory.lastRowSet || memory.lastChart || memory.lastCreatedSheet) {
+  if (memory.recentResults.length > 0 || memory.lastRowSet || memory.lastChart) {
     lines.push(
       ru
         ? "ПРЕДЫДУЩИЕ РЕЗУЛЬТАТЫ (этого диалога — ссылайся по фразе, не повторяй числа заново):"
@@ -526,9 +504,6 @@ export function projectMemoryForModel(memory: SessionMemory, language: ResponseL
     }
     if (memory.lastChart) {
       lines.push(`[${memory.lastChart.id}] ${ru ? "график" : "chart"} "${memory.lastChart.data.title}" (${memory.lastChart.data.type})`);
-    }
-    if (memory.lastCreatedSheet) {
-      lines.push(`${ru ? "последний созданный лист" : "last created sheet"}: "${memory.lastCreatedSheet.name}"`);
     }
   }
 

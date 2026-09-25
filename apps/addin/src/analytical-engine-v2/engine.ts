@@ -22,7 +22,6 @@ import {
 } from "./state/clarification-loop.js";
 import { sameTable } from "./state/state-refs.js";
 import type { ResumeContext } from "./planner/planner-loop.js";
-import { verifyCoverage } from "./verification/coverage-verifier.js";
 import { TimingRecorder, type ExecutionProgress, type ExecutionTimings } from "./production/execution-progress.js";
 import type { AnalyticalTraceV2 } from "./debug/analytical-trace.js";
 import { ENGINE_BOUNDS, type EngineAnalysis, type EngineBounds, type EngineTerminationReason } from "./types.js";
@@ -216,30 +215,30 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
     run = await plan([repeatedClarificationFeedback(prior, params.language)]);
   }
 
-  if (run.outcome.kind === "complete") {
+  // §23 · Stage 28G §11/§12 — one bounded coverage retry, on the PLANNER's own
+  // declaration. The loop has already spent its in-loop correction re-binding
+  // without rerunning a tool; reaching here means N declared outputs are still
+  // not all bound, so the whole loop runs once more with a note. The number N
+  // is the planner's, never a count of verbs in the request.
+  if (run.outcome.kind === "complete" && run.coverage && !run.coverage.ok) {
     params.onProgress?.({ kind: "verifying" });
     const verificationStarted = Date.now();
-    const coverage = verifyCoverage(params.request, { primary: run.outcome.primary, supporting: run.outcome.supporting, answerStyle: run.outcome.answerStyle });
+    const retry = await runPlannerLoop({
+      turnId: params.turnId,
+      request: coverageNote(params.request, run.coverage.detail ?? "", params.language),
+      schema: params.schema,
+      grids: params.grids,
+      state: params.state,
+      decide: params.decide,
+      ...(analyze ? { analyze } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+      timings,
+      bounds,
+    });
+    // Keep the retry only when it genuinely covers more; never regress.
+    if (retry.outcome.kind === "complete" && (retry.coverage?.ok ?? true)) run = retry;
     timings.addVerification(Date.now() - verificationStarted);
-    if (!coverage.ok) {
-      const retry = await runPlannerLoop({
-        turnId: params.turnId,
-        request: coverageNote(params.request, coverage.detail ?? "", params.language),
-        schema: params.schema,
-        grids: params.grids,
-        state: params.state,
-        decide: params.decide,
-        ...(analyze ? { analyze } : {}),
-        ...(params.signal ? { signal: params.signal } : {}),
-        ...(params.onProgress ? { onProgress: params.onProgress } : {}),
-        timings,
-        bounds,
-      });
-      // Keep the retry only when it genuinely covers more; never regress.
-      if (retry.outcome.kind === "complete" && verifyCoverage(params.request, { primary: retry.outcome.primary, supporting: retry.outcome.supporting, answerStyle: retry.outcome.answerStyle }).ok) {
-        run = retry;
-      }
-    }
   }
 
   if (run.outcome.kind === "clarify") {
