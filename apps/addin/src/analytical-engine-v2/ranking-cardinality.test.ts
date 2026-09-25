@@ -133,4 +133,26 @@ describe("Stage 28H.1 — ranking count is preserved end to end", () => {
     expect(userContent).toContain("место: 2 / 3");
     expect(userContent).toContain("место: 3 / 3");
   });
+
+  it("recovers all N findings when the declared shape contradicts a multi-row ranked_set", () => {
+    const primary = rankedSet([
+      ["обратное РЕПО", -50, -12.4],
+      ["депозиты", -30, -6.1],
+      ["ценные бумаги", -20, -3.9],
+    ]);
+    const mislabeled: AnswerIntent = { ...rankingIntent(3), shape: "direct" };
+    const findings = buildFindings(primary, [], CTX, 8, mislabeled.count);
+    const plan = planPresentation(analysisFor(primary), findings, mislabeled);
+    expect(plan.shape).toBe("ranking");
+    expect([plan.lead, ...plan.support].filter((f) => f !== null)).toHaveLength(3);
+  });
+
+  it("leaves a genuinely direct single-row result alone", () => {
+    const primary = rankedSet([["обратное РЕПО", -50, -12.4]]);
+    const intent: AnswerIntent = { ...rankingIntent(3), shape: "direct" };
+    const findings = buildFindings(primary, [], CTX, 8, null);
+    const plan = planPresentation(analysisFor(primary), findings, intent);
+    expect(plan.shape).toBe("direct");
+    expect([plan.lead, ...plan.support].filter((f) => f !== null)).toHaveLength(1);
+  });
 });

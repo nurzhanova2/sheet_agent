@@ -127,12 +127,19 @@ function evidenceTableFor(analysis: EngineAnalysis, intent: AnswerIntent, select
  * Selects the complete presentation once. Writers must only render this plan.
  * The request text is intentionally absent from this API.
  */
+function reconciledIntent(analysis: EngineAnalysis, answerIntent: AnswerIntent): AnswerIntent {
+  const isMultiRowRanking = analysis.primary.type === "ranked_set" && analysis.primary.rows.length > 1;
+  if (!isMultiRowRanking || answerIntent.shape === "ranking") return answerIntent;
+  return { ...answerIntent, shape: "ranking" };
+}
+
 export function planPresentation(
   analysis: EngineAnalysis,
   findings: readonly VerifiedFinding[],
-  answerIntent: AnswerIntent,
+  answerIntentRaw: AnswerIntent,
   method?: MethodNote,
 ): PresentationPlan {
+  const answerIntent = reconciledIntent(analysis, answerIntentRaw);
   const candidates = findings.filter((finding) => !isMetaFinding(finding));
   const ordered = orderFindings(suppressRedundantSubjects(candidates.length > 0 ? candidates : findings), analysis, answerIntent);
   const selected = selectFindings(ordered, answerIntent);
