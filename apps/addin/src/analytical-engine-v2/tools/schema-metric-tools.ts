@@ -2,8 +2,10 @@ import type { CellValue } from "@sheet-agent/application";
 import { isPercentNumberFormat } from "../../app/schema/excel-date.js";
 import { classifySemanticMetricClass, isPercentageLike, type SemanticMetricClass } from "../../app/schema/measure-compatibility.js";
 import type { RowAxisMember } from "../../app/schema/schema-induction.js";
+import { comparePoints } from "../../app/schema/analytical/temporal-primitives.js";
+import { compareMetricSetAtTwoPoints } from "../../app/schema/analytical/temporal-series.js";
 import { toolError } from "../types.js";
-import { METRIC_FIELD, allMetricLabels, isErr, memberFor, metricScope, resolveSetPhrase, sortedPoints, text, type ToolEnv, type ToolSpec } from "./contracts.js";
+import { METRIC_FIELD, allMetricLabels, isErr, memberFor, metricScope, num, resolveSetPhrase, sortedPoints, text, type ToolEnv, type ToolSpec } from "./contracts.js";
 
 function classOf(env: ToolEnv, member: RowAxisMember): SemanticMetricClass {
   const percentFormatted = env.periodIndex.points.some((p) => p.colIndex >= 0 && isPercentNumberFormat(env.grids.numberFormats[member.rowIndex]?.[p.colIndex] ?? null));
@@ -28,6 +30,94 @@ const schemaDescribe: ToolSpec = {
       metricKeys: env.schema.rowAxis.map((member) => member.display),
     }),
   }),
+};
+
+const OVERVIEW_EVIDENCE_FIELDS = [
+  METRIC_FIELD,
+  num("fullStartValue"),
+  num("fullEndValue"),
+  num("fullAbsoluteChange"),
+  num("fullPercentageChange"),
+  text("fullStartPeriodLabel"),
+  text("fullEndPeriodLabel"),
+  num("latestStartValue"),
+  num("latestEndValue"),
+  num("latestAbsoluteChange"),
+  num("latestPercentageChange"),
+  text("latestStartPeriodLabel"),
+  text("latestEndPeriodLabel"),
+];
+
+const schemaOverviewEvidence: ToolSpec = {
+  name: "schema.overview_evidence",
+  capability: "schema",
+  description:
+    "The deterministic evidence a table-overview answer is written from: for every metric, its value at the first available period, its latest value, its change over the WHOLE available horizon, and its change over the LATEST period alone. Returns a comparison result, one row per metric, sorted by the size of its full-range move. Call this once for a table-overview request instead of schema.describe, which names counts only and returns no 'what changed' evidence.",
+  args: {},
+  returns: "comparison",
+  reads: true,
+  run: (_args, env) => {
+    const points = sortedPoints(env);
+    if (points.length === 0) return toolError("INCOMPATIBLE_INPUT", "this table has no periods to compare");
+    const first = points[0]!;
+    const latest = points[points.length - 1]!;
+    const previous = points.length > 1 ? points[points.length - 2]! : first;
+    const members = env.schema.rowAxis;
+    const subject = { kind: "metric_set" as const, members };
+    const fullPairs = new Map(compareMetricSetAtTwoPoints(env.schema, env.grids, subject, first, latest).map((p) => [p.key, p]));
+    const latestPairs = new Map(compareMetricSetAtTwoPoints(env.schema, env.grids, subject, previous, latest).map((p) => [p.key, p]));
+
+    const rows: { readonly row: CellValue[]; readonly weight: number }[] = [];
+    for (const member of members) {
+      const full = fullPairs.get(member.display);
+      const near = latestPairs.get(member.display);
+      if (!full?.start || !full.end) continue;
+      const fullCmp = comparePoints(full.start, full.end);
+      const nearCmp = near?.start && near.end ? comparePoints(near.start, near.end) : null;
+      rows.push({
+        row: [
+          member.display,
+          full.start.value,
+          full.end.value,
+          fullCmp.absoluteChange,
+          fullCmp.percentChange,
+          full.start.periodLabel,
+          full.end.periodLabel,
+          nearCmp ? near!.start!.value : null,
+          nearCmp ? near!.end!.value : null,
+          nearCmp ? nearCmp.absoluteChange : null,
+          nearCmp ? nearCmp.percentChange : null,
+          nearCmp ? near!.start!.periodLabel : null,
+          nearCmp ? near!.end!.periodLabel : null,
+        ],
+        weight: Math.abs(fullCmp.percentChange ?? fullCmp.absoluteChange),
+      });
+    }
+    if (rows.length === 0) return toolError("INCOMPATIBLE_INPUT", "no metric has a value at both the first and the latest period");
+    rows.sort((a, b) => b.weight - a.weight);
+
+    return {
+      ok: true,
+      result: env.store.put({
+        tool: "schema.overview_evidence",
+        type: "comparison",
+        fields: OVERVIEW_EVIDENCE_FIELDS,
+        rows: rows.map((r) => r.row),
+        periodCanonicals: [first.canonical, previous.canonical, latest.canonical],
+        metricKeys: rows.map((r) => r.row[0] as string),
+        metadata: {
+          overviewEvidence: true,
+          sheet: env.schema.sheetName,
+          range: env.schema.sourceRange,
+          metricCount: members.length,
+          periodCount: points.length,
+          firstPeriodLabel: first.headerPath,
+          previousPeriodLabel: previous.headerPath,
+          latestPeriodLabel: latest.headerPath,
+        },
+      }),
+    };
+  },
 };
 
 const schemaMetrics: ToolSpec = {
@@ -165,4 +255,4 @@ const metricFilter: ToolSpec = {
   },
 };
 
-export const SCHEMA_METRIC_TOOLS: readonly ToolSpec[] = [schemaDescribe, schemaMetrics, schemaPeriods, metricList, metricResolve, metricResolveSet, metricFilter];
+export const SCHEMA_METRIC_TOOLS: readonly ToolSpec[] = [schemaDescribe, schemaOverviewEvidence, schemaMetrics, schemaPeriods, metricList, metricResolve, metricResolveSet, metricFilter];

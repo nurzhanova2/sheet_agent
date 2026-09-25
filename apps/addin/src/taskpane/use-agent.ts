@@ -334,6 +334,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
           analyticalState: analyticalStateRef.current,
           lastTurnTimings: turnTimingsRef.current,
           memory: sessionMemoryRef.current,
+          chatClient,
         });
         if (report !== null) {
           setLanguage(lang);

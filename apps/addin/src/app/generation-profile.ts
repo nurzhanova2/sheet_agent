@@ -24,7 +24,7 @@ export const GENERATION_PROFILES: Readonly<Record<GenerationRole, GenerationProf
   code: { temperature: 0, top_p: 1 },
   // Prose. Some freedom produces a better sentence; not so much that it starts
   // inventing structure the findings do not support.
-  narrator: { temperature: 0.3, top_p: 0.9 },
+  narrator: { temperature: 0.3, top_p: 0.9, max_tokens: 700 },
   // Judging an answer. A judge that changes its mind between runs is not one.
   evaluator: { temperature: 0, top_p: 1 },
   chat: {},

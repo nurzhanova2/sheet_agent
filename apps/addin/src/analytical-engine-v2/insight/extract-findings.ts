@@ -240,6 +240,58 @@ function changeRows(result: EngineResult, ctx: ExtractContext): readonly RowFind
   });
 }
 
+function overviewEvidenceRows(result: EngineResult, ctx: ExtractContext): readonly RowFinding[] {
+  const mi = metricFieldIndex(result);
+  const iFStart = idx(result, "fullStartValue");
+  const iFEnd = idx(result, "fullEndValue");
+  const iFAbs = idx(result, "fullAbsoluteChange");
+  const iFPct = idx(result, "fullPercentageChange");
+  const iFStartLabel = idx(result, "fullStartPeriodLabel");
+  const iFEndLabel = idx(result, "fullEndPeriodLabel");
+  const iLStart = idx(result, "latestStartValue");
+  const iLAbs = idx(result, "latestAbsoluteChange");
+  const iLPct = idx(result, "latestPercentageChange");
+  const iLStartLabel = idx(result, "latestStartPeriodLabel");
+  const axis = axisOf(ctx);
+
+  return result.rows.map((row) => {
+    const subject = textAt(row, mi);
+    const fStart = numberAt(row, iFStart);
+    const fEnd = numberAt(row, iFEnd);
+    const fAbs = numberAt(row, iFAbs);
+    const fPct = numberAt(row, iFPct);
+    const lStart = numberAt(row, iLStart);
+    const lAbs = numberAt(row, iLAbs);
+    const lPct = numberAt(row, iLPct);
+    const levelUnit = displayUnit(unitContext(ctx), "startValue", subject);
+    const deltaUnit = displayUnit(unitContext(ctx), "absoluteChange", subject);
+
+    const values: FindingValue[] = [];
+    if (fStart !== null) values.push(findingValue("firstValue", fStart, levelUnit, ctx.locale, { at: textAt(row, iFStartLabel) }));
+    if (fEnd !== null) values.push(findingValue("endValue", fEnd, levelUnit, ctx.locale, { at: textAt(row, iFEndLabel) }));
+    if (fAbs !== null) values.push(findingValue("fullRangeAbsoluteChange", fAbs, deltaUnit, ctx.locale, { signed: true }));
+    if (fPct !== null) values.push(findingValue("fullRangePercentageChange", fPct, { kind: "percent_fraction" }, ctx.locale, { signed: true }));
+    if (lStart !== null) values.push(findingValue("previousValue", lStart, levelUnit, ctx.locale, { at: textAt(row, iLStartLabel) }));
+    if (lAbs !== null) values.push(findingValue("latestAbsoluteChange", lAbs, deltaUnit, ctx.locale, { signed: true }));
+    if (lPct !== null) values.push(findingValue("latestPercentageChange", lPct, { kind: "percent_fraction" }, ctx.locale, { signed: true }));
+
+    const materiality: MaterialitySignal[] = [];
+    if (fAbs !== null) materiality.push({ kind: "magnitude", value: fAbs, unit: deltaUnit });
+    if (fPct !== null) materiality.push({ kind: "relative_magnitude", fraction: fPct });
+
+    return {
+      subject,
+      subjectRef: entitySubject(subject, axis, { periodRange: { start: textAt(row, iFStartLabel), end: textAt(row, iFEndLabel) } }),
+      values,
+      direction: directionOf(fAbs),
+      materiality,
+      confidence: [],
+      caveats: [],
+      weight: Math.abs(fPct ?? 0),
+    };
+  });
+}
+
 /** A `series` result: one row per period for one metric. */
 function seriesFindings(result: EngineResult, ctx: ExtractContext): readonly RowFinding[] {
   const mi = metricFieldIndex(result);
@@ -679,6 +731,7 @@ function rowsFor(result: EngineResult, ctx: ExtractContext): readonly RowFinding
     }
     return sandboxRows(result, ctx);
   }
+  if (result.metadata["overviewEvidence"] === true) return overviewEvidenceRows(result, ctx);
   if (result.type === "schema" || (has("sheet") && has("range"))) return overviewRows(result, ctx);
   if (has("absoluteChange") || has("percentageChange")) return changeRows(result, ctx);
   if (result.type === "series" || (has("periodLabel") && has("value") && result.rows.length > 2)) return seriesFindings(result, ctx);

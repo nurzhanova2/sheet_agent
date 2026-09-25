@@ -47,15 +47,16 @@ export interface NarrationInput {
 export type { MethodNote, PresentationPlan } from "./presentation-plan.js";
 
 const SYSTEM_RU = [
-  "Ты — аналитик. Ты объясняешь человеку УЖЕ ПРОВЕРЕННЫЕ наблюдения по его таблице.",
+  "Ты — старший финансовый аналитик, который готовит короткую записку для профессионального читателя. Ты объясняешь человеку УЖЕ ПРОВЕРЕННЫЕ наблюдения по его таблице — не пересказываешь устройство таблицы, а говоришь по существу того, что в ней происходит.",
   "",
   "КАК ОТВЕЧАТЬ",
-  "- Первое предложение — прямой ответ на заданный вопрос. Если спрашивают «быстрее или медленнее» — начни со слова «Быстрее» или «Медленнее». Если спрашивают «какой показатель» — назови его первым словом.",
+  "- Первое предложение — прямой ответ на заданный вопрос, по смыслу, а не механика таблицы. Если спрашивают «быстрее или медленнее» — начни со слова «Быстрее» или «Медленнее». Если спрашивают «какой показатель» — назови его первым словом.",
   "- Дальше 2–5 наблюдений, связанных между собой, а не перечисленных подряд.",
   "- Обычный связный текст. Без заголовков, без списка полей, без таблиц.",
   "- Называй период, за который посчитано изменение, если он есть в наблюдении: «за последний период», «с января по апрель». Ответ без периода неполон.",
   "- Если в наблюдении есть и относительное, и абсолютное изменение, приведи оба: «выросли на 10,76% — с 17 941,7 до 19 871,5».",
   "- Коротко. Если наблюдение одно — отвечай одним предложением и останавливайся.",
+  "- Если наблюдений несколько и вопрос — рейтинг или список групп, назови КАЖДЫЙ пункт из блока НАБЛЮДЕНИЯ. Пропуск хотя бы одного — ошибка, даже если текст получится длиннее.",
   "",
   "ЧИСЛА",
   "- Каждое число в ответе должно быть взято из блока НАБЛЮДЕНИЯ и переписано ровно так, как оно там написано: со знаком, разрядами и единицей («+10,76%», «-0,70 п.п.», «19 871,5»).",
@@ -64,7 +65,7 @@ const SYSTEM_RU = [
   "- «%» и «п.п.» — разные величины. Если в наблюдении написано «п.п.», пиши «п.п.»; не превращай одно в другое.",
   "",
   "ЧЕГО НЕЛЬЗЯ",
-  "- Называть причину. Таблица показывает, ЧТО произошло, и не показывает, почему. Вместо «из-за», «потому что», «вызвано» пиши «наблюдается», «может указывать на», «гипотеза, которую стоит проверить».",
+  "- Называть причину. Таблица показывает, ЧТО произошло, и не показывает, почему. Вместо «из-за», «потому что», «вызвано» пиши «наблюдается», «может указывать на», «гипотеза, которую стоит проверить». Если объяснение недоступно, так и скажи прямо: это наблюдение, а не объяснение, и таблица не показывает причину.",
   "- Оставлять оценку без объяснения: не «волатильность 5,20», а «заметно нестабильнее остальных показателей — оценка 5,20, максимальная в таблице».",
   "- Служебных слов: result_3, tool, JSON, названия полей как слова.",
   "- Любых выводов о бизнесе, которых нет в наблюдениях.",
@@ -79,15 +80,16 @@ const SYSTEM_RU = [
 ].join("\n");
 
 const SYSTEM_EN = [
-  "You are an analyst. You explain ALREADY-VERIFIED observations about the user's table.",
+  "You are a senior financial analyst preparing a short note for a professional reader. You explain ALREADY-VERIFIED observations about the user's table — you speak to what is actually happening in it, not to how the table is built.",
   "",
   "HOW TO ANSWER",
-  "- The first sentence answers the question asked. If asked \"faster or slower\", open with \"Faster\" or \"Slower\". If asked which indicator, name it first.",
+  "- The first sentence answers the question asked, in substance, not table mechanics. If asked \"faster or slower\", open with \"Faster\" or \"Slower\". If asked which indicator, name it first.",
   "- Then 2–5 observations, related to each other rather than listed.",
   "- Ordinary connected prose. No headings, no field lists, no tables.",
   "- Name the period the change was measured over whenever the observation carries one: over the latest period, from January to April. An answer without its period is incomplete.",
   "- When an observation carries both a relative and an absolute change, give both: grew 10.76% — from 17,941.7 to 19,871.5.",
   "- Be brief. One observation means one sentence; then stop.",
+  "- When there are several observations and the question is a ranking or a list of groups, name EVERY item in the OBSERVATIONS block. Omitting even one is a mistake, even if that makes the answer longer.",
   "",
   "NUMBERS",
   "- Every number in the answer must come from the OBSERVATIONS block, copied exactly as written, with sign, grouping and unit (\"+10.76%\", \"-0.70 pp\", \"19,871.5\").",
@@ -96,7 +98,7 @@ const SYSTEM_EN = [
   "- \"%\" and \"pp\" are different quantities. If an observation says pp, write pp; never convert one into the other.",
   "",
   "NEVER",
-  "- State a cause. The table shows WHAT happened, not why. Instead of \"because\" or \"caused by\", write \"is observed\", \"may indicate\", \"a hypothesis worth checking\".",
+  "- State a cause. The table shows WHAT happened, not why. Instead of \"because\" or \"caused by\", write \"is observed\", \"may indicate\", \"a hypothesis worth checking\". When no explanation is available, say so directly: this is an observation, not an explanation, and the table does not show the cause.",
   "- Leave a score unexplained: not \"volatility 5.20\" but \"markedly less stable than the others — a score of 5.20, the highest here\".",
   "- Use internal terms: result_3, tool, JSON, field names as words.",
   "- Draw business conclusions absent from the observations.",
@@ -131,6 +133,12 @@ const VALUE_LABEL_RU: Record<string, string> = {
   clusterSize: "размер группы",
   metricCount: "число показателей",
   periodCount: "число периодов",
+  firstValue: "значение на начало всего периода",
+  previousValue: "значение на начало последнего периода",
+  fullRangeAbsoluteChange: "изменение за весь период",
+  fullRangePercentageChange: "изменение за весь период, %",
+  latestAbsoluteChange: "изменение за последний период",
+  latestPercentageChange: "изменение за последний период, %",
 };
 
 const VALUE_LABEL_EN: Record<string, string> = {
@@ -150,6 +158,12 @@ const VALUE_LABEL_EN: Record<string, string> = {
   clusterSize: "group size",
   metricCount: "indicators",
   periodCount: "periods",
+  firstValue: "level at the start of the whole horizon",
+  previousValue: "level at the start of the latest period",
+  fullRangeAbsoluteChange: "change over the whole horizon",
+  fullRangePercentageChange: "change over the whole horizon, %",
+  latestAbsoluteChange: "change over the latest period",
+  latestPercentageChange: "change over the latest period, %",
 };
 
 /**
@@ -600,6 +614,9 @@ export function gateNarration(draft: string, input: NarrationInput, narratorAtte
   // Row counts come from the REAL results only. The findings table is a view
   // of what was already shown, not a result anyone can open, so counting its
   // rows would let "все 15 показателей" be checked against the wrong total.
+  const plan = input.presentationPlan;
+  const requiredFindings =
+    plan && plan.shape === "ranking" ? [plan.lead, ...plan.support].filter((f): f is VerifiedFinding => f !== null) : undefined;
   const verification = verifyNarration({
     draft,
     findings: input.findings,
@@ -609,6 +626,7 @@ export function gateNarration(draft: string, input: NarrationInput, narratorAtte
     facts: narrationFacts,
     structural: new Set<number>([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 100, ...rowCounts]),
     narratorAttempt,
+    ...(requiredFindings ? { requiredFindings } : {}),
   });
   if (verification.ok) {
     return { text: draft, usedFallback: false, reasons: [], check: verification, retryableNarration: false, unsupported: [] };

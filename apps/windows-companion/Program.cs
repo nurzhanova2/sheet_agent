@@ -120,12 +120,12 @@ internal static class Program
             using var body = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
             context.Response.ContentType = "text/event-stream";
             context.Response.Headers.CacheControl = "no-cache";
-            await provider.StreamAsync(body.RootElement, async (delta, cancellationToken) =>
+            var stats = await provider.StreamAsync(body.RootElement, async (delta, cancellationToken) =>
             {
                 await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type = "delta", text = delta })}\n\n", cancellationToken);
                 await context.Response.Body.FlushAsync(cancellationToken);
             }, context.RequestAborted);
-            await context.Response.WriteAsync("data: {\"type\":\"done\"}\n\n", context.RequestAborted);
+            await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(new { type = "done", stats })}\n\n", context.RequestAborted);
         }
         catch (JsonException) { await WriteErrorAsync(context, 400, "INVALID_JSON", "The request body must be valid JSON."); }
         catch (ProviderException error) { await WriteProviderErrorAsync(context, error); }

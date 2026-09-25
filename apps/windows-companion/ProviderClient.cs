@@ -11,6 +11,8 @@ public sealed class ProviderException(string code, string userMessage, HttpStatu
     public HttpStatusCode? StatusCode { get; } = statusCode;
 }
 
+public sealed record StreamStats(int ContentLength, int ReasoningLength, long ElapsedMs, string? FinishReason);
+
 public sealed class ProviderClient
 {
     public const string DefaultApiBase = "https://prod-litellm.nationalbank.kz/";
@@ -31,14 +33,16 @@ public sealed class ProviderClient
         Model = Environment.GetEnvironmentVariable("LLM_MODEL")?.Trim() is { Length: > 0 } model ? model : DefaultModel;
     }
 
-    public async Task StreamAsync(JsonElement requestBody, Func<string, CancellationToken, Task> onDelta, CancellationToken cancellationToken)
+    public async Task<StreamStats> StreamAsync(JsonElement requestBody, Func<string, CancellationToken, Task> onDelta, CancellationToken cancellationToken)
     {
+        var started = DateTimeOffset.UtcNow;
         using var response = await SendAsync(CreateProviderPayload(requestBody, stream: true), HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
         var contentLength = 0;
         var reasoningLength = 0;
+        string? finishReason = null;
         while (await reader.ReadLineAsync(cancellationToken) is { } line)
         {
             if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
@@ -48,6 +52,7 @@ public sealed class ProviderClient
             {
                 using var json = JsonDocument.Parse(data);
                 reasoningLength += ReadReasoningLength(json.RootElement);
+                finishReason = ReadFinishReason(json.RootElement) ?? finishReason;
                 if (TryReadDelta(json.RootElement, out var delta) && delta.Length > 0)
                 {
                     contentLength += delta.Length;
@@ -59,6 +64,8 @@ public sealed class ProviderClient
 
         if (contentLength == 0 && reasoningLength > 0)
             throw new ProviderException("EMPTY_MODEL_OUTPUT", "The AI provider produced reasoning text but no usable content.");
+
+        return new StreamStats(contentLength, reasoningLength, (long)(DateTimeOffset.UtcNow - started).TotalMilliseconds, finishReason);
     }
 
     public async Task<string> CompleteAsync(string systemPrompt, string input, CancellationToken cancellationToken)
@@ -180,6 +187,14 @@ public sealed class ProviderClient
         if (!choice.TryGetProperty("delta", out var deltaObject) || !deltaObject.TryGetProperty("content", out var content)) return false;
         delta = content.GetString() ?? "";
         return true;
+    }
+
+    private static string? ReadFinishReason(JsonElement root)
+    {
+        if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0) return null;
+        var choice = choices[0];
+        if (!choice.TryGetProperty("finish_reason", out var reason) || reason.ValueKind != JsonValueKind.String) return null;
+        return reason.GetString();
     }
 
     private static int ReadReasoningLength(JsonElement root)

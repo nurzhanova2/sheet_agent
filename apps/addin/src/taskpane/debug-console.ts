@@ -4,6 +4,7 @@ import { turnLedger } from "../analytical-engine-v2/production/turn-ledger.js";
 import { summarizeTimings, type ExecutionTimings } from "../analytical-engine-v2/production/execution-progress.js";
 import { getResultActionTraces } from "../app/result-action-trace.js";
 import type { AnalyticalConversationState } from "../analytical-engine-v2/state/conversation-state.js";
+import type { ChatClient } from "../app/chat-client.js";
 import type { SessionMemory } from "../app/session-memory.js";
 
 /**
@@ -21,12 +22,24 @@ export interface DebugConsoleSnapshot {
   readonly analyticalState: AnalyticalConversationState;
   readonly lastTurnTimings: ExecutionTimings | null;
   readonly memory: SessionMemory;
+  readonly chatClient: ChatClient;
 }
 
 const NEWLINE = String.fromCharCode(10);
 
 const ANALYTICAL_ENGINE_RE = /^\/debug[\s-]?analytical(?:[\s-]engine)?\s*$/i;
 const CONTEXT_RE = /^\/debug(?:-context)?\s*$/i;
+
+function diagnosticsLine(snapshot: DebugConsoleSnapshot, role: "planner" | "narrator" | "code"): string {
+  const d = snapshot.chatClient.lastDiagnostics?.(role);
+  if (!d) return `  ${role}: (no completion recorded)`;
+  return (
+    `  ${role}: model=${d.model} content=${d.contentLength}c` +
+    (d.reasoningLength !== undefined ? ` reasoning=${d.reasoningLength}c` : "") +
+    (d.finishReason !== undefined ? ` finish=${d.finishReason}` : "") +
+    ` elapsed=${d.elapsedMs}ms source=${d.source}`
+  );
+}
 
 function analyticalEngineReport(snapshot: DebugConsoleSnapshot): string {
   const traces = getAnalyticalTraces();
@@ -37,6 +50,11 @@ function analyticalEngineReport(snapshot: DebugConsoleSnapshot): string {
     buildInfoLine(),
     "analytical engine: analytical_engine_v2",
     `planner transport: ${snapshot.plannerTransportAvailable ? "available" : "MISSING"}`,
+    "",
+    "LAST MODEL CALLS",
+    diagnosticsLine(snapshot, "planner"),
+    diagnosticsLine(snapshot, "narrator"),
+    diagnosticsLine(snapshot, "code"),
     "",
     "TURN OWNERSHIP (most recent last)",
     ledger.length === 0

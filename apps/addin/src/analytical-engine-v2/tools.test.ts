@@ -46,7 +46,7 @@ const PREVIOUS = (s: ReturnType<typeof session>, of: string): string => s.ok("pe
 describe("Stage 26.2 §3 — the registry is structurally complete", () => {
   it("exposes every tool the stage requires, each with a usable description and a declared return type", () => {
     const required = [
-      "schema.describe", "schema.metrics", "schema.periods",
+      "schema.describe", "schema.overview_evidence", "schema.metrics", "schema.periods",
       "metric.list", "metric.resolve", "metric.resolve_set", "metric.filter",
       "period.list", "period.resolve", "period.latest", "period.previous", "period.next", "period.range",
       "value.at_period", "series.get",

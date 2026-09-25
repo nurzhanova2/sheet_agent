@@ -26,9 +26,9 @@ function subjectOf(finding: VerifiedFinding): string {
 
 const SHAPE_TYPES: Readonly<Record<AnswerIntent["shape"], readonly VerifiedFinding["findingType"][]>> = {
   direct: ["extremum", "change", "value", "trend"], ranking: ["ranking", "extremum", "change"], comparison: ["comparison", "change", "trend"],
-  exploratory: ["anomaly", "relationship", "data_quality", "event", "distribution"], grouping: ["cluster"], overview: ["table_overview"],
+  exploratory: ["anomaly", "relationship", "data_quality", "event", "distribution"], grouping: ["cluster"], overview: ["table_overview", "change", "ranking", "extremum"],
 };
-const SHAPE_LIMITS: Readonly<Record<AnswerIntent["shape"], number>> = { direct: 1, ranking: 3, comparison: 3, exploratory: 5, grouping: 4, overview: 2 };
+const SHAPE_LIMITS: Readonly<Record<AnswerIntent["shape"], number>> = { direct: 1, ranking: 3, comparison: 3, exploratory: 5, grouping: 6, overview: 8 };
 function rankPosition(finding: VerifiedFinding): number | null {
   const rank = finding.materiality.find((signal) => signal.kind === "rank");
   return rank && rank.kind === "rank" ? rank.position : null;

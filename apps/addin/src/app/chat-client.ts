@@ -229,6 +229,7 @@ export interface ChatClient {
     signal: AbortSignal,
     model?: string,
   ): Promise<string>;
+  lastDiagnostics?(role: GenerationRole): CompletionDiagnostics | undefined;
 }
 
 const ACTION_FENCE = /```sheet-agent-actions\s*([\s\S]*?)```/;
@@ -784,6 +785,16 @@ function validateFinalAnswer(
   return { ok: reasons.length === 0, reasons };
 }
 
+export interface CompletionDiagnostics {
+  readonly role: GenerationRole;
+  readonly model: string;
+  readonly contentLength: number;
+  readonly reasoningLength?: number;
+  readonly finishReason?: string;
+  readonly elapsedMs: number;
+  readonly source: "companion_stats" | "client_timed";
+}
+
 export class HttpChatClient implements ChatClient {
   // `fetch` is a method of the global object: invoking it through any other receiver
   // (e.g. `this.fetchImpl(...)` on a class instance) throws
@@ -794,6 +805,12 @@ export class HttpChatClient implements ChatClient {
     private readonly model: string,
     private readonly fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
   ) {}
+
+  #lastDiagnosticsByRole = new Map<GenerationRole, CompletionDiagnostics>();
+
+  lastDiagnostics(role: GenerationRole): CompletionDiagnostics | undefined {
+    return this.#lastDiagnosticsByRole.get(role);
+  }
 
   /**
    * Stage 24.4 §2 — one strict agent decision. Non-streaming from the caller's
@@ -1756,6 +1773,7 @@ export class HttpChatClient implements ChatClient {
     // keeps the exact request body it had before this stage.
     role: GenerationRole = "chat",
   ): Promise<string> {
+    const requestStarted = Date.now();
     const response = await this.fetchImpl(this.endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1790,12 +1808,31 @@ export class HttpChatClient implements ChatClient {
       const frames = buffer.split(/\r?\n\r?\n/);
       buffer = frames.pop() ?? "";
       for (const frame of frames) for (const line of frame.split(/\r?\n/)) if (line.startsWith("data:")) {
-        const event = JSON.parse(line.slice(5).trim()) as { type?: string; text?: string; code?: string; message?: string };
+        const event = JSON.parse(line.slice(5).trim()) as {
+          type?: string;
+          text?: string;
+          code?: string;
+          message?: string;
+          stats?: { contentLength?: number; reasoningLength?: number; elapsedMs?: number; finishReason?: string };
+        };
         if (event.type === "delta" && event.text) {
           full += event.text;
           onDelta(event.text);
         }
         if (event.type === "error") throw new Error(providerErrorMessage(language, event.code, event.message));
+        if (event.type === "done") {
+          this.#lastDiagnosticsByRole.set(role, event.stats
+            ? {
+                role,
+                model: model ?? this.model,
+                contentLength: event.stats.contentLength ?? full.length,
+                ...(event.stats.reasoningLength !== undefined ? { reasoningLength: event.stats.reasoningLength } : {}),
+                ...(event.stats.finishReason !== undefined ? { finishReason: event.stats.finishReason } : {}),
+                elapsedMs: event.stats.elapsedMs ?? Date.now() - requestStarted,
+                source: "companion_stats",
+              }
+            : { role, model: model ?? this.model, contentLength: full.length, elapsedMs: Date.now() - requestStarted, source: "client_timed" });
+        }
       }
       if (chunk.done) break;
     }
