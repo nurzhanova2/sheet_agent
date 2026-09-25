@@ -51,10 +51,11 @@ const referenceRecent: ToolSpec = {
   capability: "references",
   usable: (facts) => facts.references.recent,
   description:
-    'The recent results of this conversation in order, most recent first, each labelled as the answer it was ("primary") or the evidence behind it ("supporting"). Use it when a request points at something other than the immediately previous answer — an earlier step, or a supporting table the last answer rested on. Returns the chosen result restored under a new resultId. Pass n to choose which one; n=1 is the most recent. When you also pass role, n counts only within the results of that role.',
+    'The recent results of this conversation in order, most recent first, each labelled as the answer it was ("primary") or the evidence behind it ("supporting"). Use it when a request points at something other than the immediately previous answer — an earlier step, or a supporting table the last answer rested on. Returns the chosen result restored under a new resultId. Pass n to choose which one; n=1 is the most recent. When you also pass role, n counts only within the results of that role. Pass metricCount when the request names how many metrics the referenced set had ("these three", "тот пятёрка показателей") — n then counts only within results whose metric set has exactly that many metrics, most recent first, so an intervening result of a different size is skipped rather than matched.',
   args: {
     n: { type: "number", describe: "which recent result to restore, 1 = most recent (default 1)" },
     role: { type: "string", describe: 'restrict to "primary" answers or "supporting" evidence; omit for both' },
+    metricCount: { type: "number", describe: "restrict to results whose metric set has exactly this many metrics" },
   },
   returns: "table",
   reads: false,
@@ -64,7 +65,12 @@ const referenceRecent: ToolSpec = {
     if (role !== undefined && role !== "primary" && role !== "supporting") {
       return { ok: false, error: { code: "INVALID_ARGUMENT", message: '"role" must be "primary" or "supporting"', candidates: ["primary", "supporting"] } };
     }
-    const pool = role === undefined ? all : all.filter((r) => (r.role ?? "primary") === role);
+    const metricCountRaw = args["metricCount"];
+    if (metricCountRaw !== undefined && (typeof metricCountRaw !== "number" || !Number.isInteger(metricCountRaw) || metricCountRaw < 1)) {
+      return { ok: false, error: { code: "INVALID_ARGUMENT", message: '"metricCount" must be a positive whole number' } };
+    }
+    const roleFiltered = role === undefined ? all : all.filter((r) => (r.role ?? "primary") === role);
+    const pool = metricCountRaw === undefined ? roleFiltered : roleFiltered.filter((r) => r.metricKeys.length === metricCountRaw);
     const nRaw = args["n"];
     const n = nRaw === undefined ? 1 : nRaw;
     if (typeof n !== "number" || !Number.isInteger(n) || n < 1) {
@@ -75,14 +81,14 @@ const referenceRecent: ToolSpec = {
     // planner into retrying the identical call until the turn died. Say how
     // many there are, and of which kind, so the next call can be right.
     if (!pick && all.length > 0) {
-      const roles = all.map((r, i) => `${i + 1}) ${r.tool} (${r.role ?? "primary"})`).join("; ");
+      const roles = all.map((r, i) => `${i + 1}) ${r.tool} (${r.role ?? "primary"}, ${r.metricKeys.length} metric(s))`).join("; ");
       return {
         ok: false,
         error: {
           code: "INVALID_ARGUMENT",
           message:
-            `n=${n} is past the end: ${pool.length} result(s)${role ? ` with role "${role}"` : ""} are available. ` +
-            `The conversation holds ${all.length}: ${roles}. Note that n counts within the results matching "role" when you pass one.`,
+            `n=${n} is past the end: ${pool.length} result(s)${role ? ` with role "${role}"` : ""}${metricCountRaw !== undefined ? ` with exactly ${metricCountRaw} metric(s)` : ""} are available. ` +
+            `The conversation holds ${all.length}: ${roles}. Note that n counts within the results matching "role"/"metricCount" when you pass them.`,
         },
       };
     }
