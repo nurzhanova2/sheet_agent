@@ -79,30 +79,6 @@ const SANDBOX_RULE_LINES: readonly string[] = [
 
 export const SANDBOX_SYSTEM_RULES = SANDBOX_RULE_LINES.join(String.fromCharCode(10));
 
-/**
- * Stage 27.2A — the same rules, WITHOUT the one-shot RESULT envelope.
- *
- * The iterative path shares every fact above about what is in scope, which
- * view to use, how to name things, and what never to do with a missing value.
- * It must NOT share the "assign a dict to RESULT" contract, and the reason is
- * mechanical rather than stylistic: `result` wraps the RESULT dict that exists
- * when the session opens, so a step that REBINDS `RESULT` to a fresh dict
- * leaves the emitter writing into the old one. The first live run produced
- * exactly that — a script that built a `RESULT` dict and also called
- * `result.emit`, which is two half-recorded analyses rather than one.
- *
- * So the envelope section is cut here and the iterative prompt states its own.
- * Everything else stays shared, which keeps the ACI described in one place.
- */
-export const SANDBOX_INPUT_RULES = ((): string => {
-  const start = SANDBOX_RULE_LINES.findIndex((line) => line.startsWith("WHAT YOU MUST PRODUCE"));
-  const end = SANDBOX_RULE_LINES.findIndex((line) => line.includes("Include only the keys your analysis actually produces"));
-  if (start < 0 || end < 0 || end < start) return SANDBOX_SYSTEM_RULES;
-  return [...SANDBOX_RULE_LINES.slice(0, start), ...SANDBOX_RULE_LINES.slice(end + 1)]
-    .join(String.fromCharCode(10))
-    .replace("NO sentences anywhere in RESULT.", "NO sentences anywhere in what you emit.");
-})();
-
 /** §9 — the schema the script is written against, as compact prose. */
 export function describeDataset(dataset: SandboxDataset): string {
   const lines = dataset.columns.map((c) => {
