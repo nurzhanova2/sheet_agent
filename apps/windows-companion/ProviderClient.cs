@@ -37,6 +37,8 @@ public sealed class ProviderClient
         await EnsureSuccessAsync(response, cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
+        var contentLength = 0;
+        var reasoningLength = 0;
         while (await reader.ReadLineAsync(cancellationToken) is { } line)
         {
             if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
@@ -45,10 +47,18 @@ public sealed class ProviderClient
             try
             {
                 using var json = JsonDocument.Parse(data);
-                if (TryReadDelta(json.RootElement, out var delta) && delta.Length > 0) await onDelta(delta, cancellationToken);
+                reasoningLength += ReadReasoningLength(json.RootElement);
+                if (TryReadDelta(json.RootElement, out var delta) && delta.Length > 0)
+                {
+                    contentLength += delta.Length;
+                    await onDelta(delta, cancellationToken);
+                }
             }
             catch (JsonException) { throw new ProviderException("MALFORMED_RESPONSE", "The AI provider returned an unreadable response."); }
         }
+
+        if (contentLength == 0 && reasoningLength > 0)
+            throw new ProviderException("EMPTY_MODEL_OUTPUT", "The AI provider produced reasoning text but no usable content.");
     }
 
     public async Task<string> CompleteAsync(string systemPrompt, string input, CancellationToken cancellationToken)
@@ -170,5 +180,13 @@ public sealed class ProviderClient
         if (!choice.TryGetProperty("delta", out var deltaObject) || !deltaObject.TryGetProperty("content", out var content)) return false;
         delta = content.GetString() ?? "";
         return true;
+    }
+
+    private static int ReadReasoningLength(JsonElement root)
+    {
+        if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0) return 0;
+        var choice = choices[0];
+        if (!choice.TryGetProperty("delta", out var deltaObject) || !deltaObject.TryGetProperty("reasoning_content", out var reasoning)) return 0;
+        return reasoning.GetString()?.Length ?? 0;
     }
 }

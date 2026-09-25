@@ -259,6 +259,10 @@ const PROVIDER_ERRORS: Record<string, Record<Lang, string>> = {
     en: "The AI provider returned an unreadable response.",
     ru: "AI-провайдер вернул нечитаемый ответ.",
   },
+  EMPTY_MODEL_OUTPUT: {
+    en: "The AI provider produced no usable answer for this request. Try again.",
+    ru: "AI-провайдер не дал пригодного ответа на этот запрос. Повторите попытку.",
+  },
   PROVIDER_ERROR: {
     en: "The AI provider rejected the request.",
     ru: "AI-провайдер отклонил запрос.",

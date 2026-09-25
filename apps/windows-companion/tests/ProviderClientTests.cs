@@ -24,6 +24,37 @@ public sealed class ProviderClientTests
     }
 
     [Fact]
+    public async Task Reports_reasoning_only_output_as_a_distinct_empty_result()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking about it\"}}]}\n\n" +
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"still thinking\"}}]}\n\n" +
+                "data: [DONE]\n\n")
+        });
+        var client = new ProviderClient(new MemoryCredentials("secret"), new HttpClient(handler));
+        using var json = System.Text.Json.JsonDocument.Parse("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}");
+        var error = await Assert.ThrowsAsync<ProviderException>(() =>
+            client.StreamAsync(json.RootElement, (_, _) => Task.CompletedTask, CancellationToken.None));
+        Assert.Equal("EMPTY_MODEL_OUTPUT", error.Code);
+    }
+
+    [Fact]
+    public async Task Does_not_flag_a_genuinely_empty_response_as_reasoning_only()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("data: [DONE]\n\n")
+        });
+        var client = new ProviderClient(new MemoryCredentials("secret"), new HttpClient(handler));
+        var output = "";
+        using var json = System.Text.Json.JsonDocument.Parse("{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}");
+        await client.StreamAsync(json.RootElement, (delta, _) => { output += delta; return Task.CompletedTask; }, CancellationToken.None);
+        Assert.Equal("", output);
+    }
+
+    [Fact]
     public async Task Forwards_generation_parameters_within_bounds_and_drops_the_rest()
     {
         // Stage 27.2 §7. Until this stage the payload was
