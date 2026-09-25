@@ -130,7 +130,8 @@ export type CaveatCode =
   /** Ordering came from a basis the user did not name. */
   | "basis_assumed"
   /** The workbook changed after the analysis was computed (§69). */
-  | "stale_source";
+  | "stale_source"
+  | "ranking_short_of_requested";
 
 export type CaveatProvenance = "engine_verified";
 
@@ -144,7 +145,8 @@ export type CaveatKind =
   | "SPARSE_PERIODS"
   | "MIXED_UNITS"
   | "ASSUMED_BASIS"
-  | "STALE_SOURCE";
+  | "STALE_SOURCE"
+  | "RANKING_SHORT_OF_REQUESTED";
 
 export interface Caveat {
   readonly code: CaveatCode;
@@ -164,6 +166,7 @@ const CAVEAT_KIND: Record<CaveatCode, CaveatKind> = {
   mixed_units: "MIXED_UNITS",
   basis_assumed: "ASSUMED_BASIS",
   stale_source: "STALE_SOURCE",
+  ranking_short_of_requested: "RANKING_SHORT_OF_REQUESTED",
 };
 
 export function caveatKind(code: CaveatCode): CaveatKind {
@@ -264,6 +267,7 @@ const CAVEAT_RU: Record<CaveatCode, string> = {
   mixed_units: "единицы измерения различаются, абсолютные величины несопоставимы",
   basis_assumed: "основание сравнения выбрано анализом, а не задано в вопросе",
   stale_source: "данные в книге изменились после расчёта",
+  ranking_short_of_requested: "показателей, удовлетворяющих условию, меньше, чем было запрошено",
 };
 
 const CAVEAT_EN: Record<CaveatCode, string> = {
@@ -277,6 +281,7 @@ const CAVEAT_EN: Record<CaveatCode, string> = {
   mixed_units: "units differ, so the absolute magnitudes are not comparable",
   basis_assumed: "the comparison basis was chosen by the analysis, not stated in the question",
   stale_source: "the workbook changed after this was computed",
+  ranking_short_of_requested: "fewer indicators met the condition than were requested",
 };
 
 /** §40 — one caveat, in the answer's language. */

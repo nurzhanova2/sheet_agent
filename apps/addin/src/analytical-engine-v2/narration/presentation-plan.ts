@@ -90,9 +90,9 @@ export function suppressRedundantSubjects(findings: readonly VerifiedFinding[]):
   });
 }
 
-function caveatsFor(findings: readonly VerifiedFinding[]): readonly Caveat[] {
-  const out: Caveat[] = [];
-  const seen = new Set<string>();
+function caveatsFor(findings: readonly VerifiedFinding[], shortfall: Caveat | null): readonly Caveat[] {
+  const out: Caveat[] = shortfall ? [shortfall] : [];
+  const seen = new Set<string>(shortfall ? [`${shortfall.code}:${shortfall.detail ?? ""}`] : []);
   for (const finding of findings) {
     for (const caveat of finding.caveats) {
       const key = `${caveat.code}:${caveat.detail ?? ""}`;
@@ -102,6 +102,17 @@ function caveatsFor(findings: readonly VerifiedFinding[]): readonly Caveat[] {
     }
   }
   return out.slice(0, 3);
+}
+
+function rankingShortfall(
+  ordered: readonly VerifiedFinding[],
+  selected: readonly VerifiedFinding[],
+  intent: AnswerIntent,
+): Caveat | null {
+  if (intent.shape !== "ranking" || intent.count === null) return null;
+  const candidates = ordered.filter((finding) => subjectOf(finding) !== "");
+  if (selected.length >= intent.count || candidates.length >= intent.count) return null;
+  return { code: "ranking_short_of_requested", detail: `${candidates.length} / ${intent.count}` };
 }
 
 function evidenceTableFor(analysis: EngineAnalysis, intent: AnswerIntent, selectedCount: number): boolean {
@@ -130,7 +141,7 @@ export function planPresentation(
     shape: answerIntent.shape,
     lead: lead ?? null,
     support,
-    caveats: caveatsFor(selected),
+    caveats: caveatsFor(selected, rankingShortfall(ordered, selected, answerIntent)),
     showEvidenceTable: evidenceTableFor(analysis, answerIntent, selected.length),
     ...(method ? { method } : {}),
   };

@@ -834,9 +834,11 @@ export function buildFindings(
   supporting: readonly EngineResult[],
   rawContext: ExtractContext,
   maxTotal = 8,
+  requestedCount: number | null = null,
 ): readonly VerifiedFinding[] {
   const ctx = withAxis(rawContext);
-  const out: VerifiedFinding[] = [...extractFindings(primary, ctx, { role: "primary" })];
+  const primaryLimit = requestedCount !== null && requestedCount > MAX_ROW_FINDINGS ? requestedCount : MAX_ROW_FINDINGS;
+  const out: VerifiedFinding[] = [...extractFindings(primary, ctx, { role: "primary", maxFindings: primaryLimit })];
   const seen = new Set(out.map((f) => `${f.findingType}:${f.subject}`));
   for (const result of supporting) {
     for (const finding of extractFindings(result, ctx, { role: "supporting", maxFindings: 2 })) {
