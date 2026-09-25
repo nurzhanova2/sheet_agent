@@ -310,10 +310,10 @@ body {
 .term-exec-code-status { color: var(--color-accent-400); white-space: nowrap; }
 .term-exec-code-button { padding: 2px 5px; border: 1px solid var(--term-line); border-radius: 3px; background: transparent; color: var(--term-dim); font: inherit; cursor: pointer; }
 .term-exec-code-button:hover { color: var(--color-accent-100); border-color: var(--color-accent-600); }
-.term-exec-code-body { max-height: 168px; margin: 0; padding: 6px 0; overflow: auto; color: var(--color-neutral-200); font-size: 10.5px; line-height: 1.5; }
-.term-exec-code--expanded .term-exec-code-body { max-height: 480px; }
+.term-exec-code-body { max-height: 168px; margin: 0; padding: 6px 0; overflow: hidden; color: var(--color-neutral-200); font-size: 10.5px; line-height: 1.5; }
+.term-exec-code--expanded .term-exec-code-body { max-height: none; overflow: visible; }
 .term-exec-code-body code { display: block; counter-reset: code-line; }
-.term-exec-code-line { display: grid; grid-template-columns: 31px minmax(max-content, 1fr); min-width: max-content; padding-right: 8px; white-space: pre; }
+.term-exec-code-line { display: grid; grid-template-columns: 31px minmax(0, 1fr); min-width: 0; padding-right: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .term-exec-code-line::before { counter-increment: code-line; content: counter(code-line); padding-right: 8px; color: var(--color-neutral-600); text-align: right; user-select: none; }
 .term-exec-details-head { display: flex; justify-content: space-between; width: 100%; margin-top: 5px; padding: 6px 0 0; border: 0; border-top: 1px solid var(--term-line); background: transparent; color: var(--term-dim); font: inherit; font-size: 11px; text-align: left; cursor: pointer; }
 .term-exec-metrics {

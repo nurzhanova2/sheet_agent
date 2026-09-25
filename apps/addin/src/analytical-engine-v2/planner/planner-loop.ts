@@ -161,12 +161,17 @@ export function errorLine(tool: string, e: ToolError): string {
  * can structurally answer something. A schema or period result as the PRIMARY
  * answer to an analytical question is a protocol slip, not an answer.
  */
-function completionProblem(primary: EngineResult): string | null {
+function completionProblem(primary: EngineResult, answerIntent?: AnswerIntent): string | null {
   // Stage 26.3 §14/§16 — an EMPTY FILTERED SET is a real analytical answer
   // ("no indicator declined"), so it may be the primary result. Every other
   // empty result is still a protocol slip: nothing was actually computed.
   if (primary.rows.length === 0 && primary.type !== "filtered_set") return `"${primary.resultId}" has no rows`;
-  if (primary.type === "schema") return `"${primary.resultId}" describes the table's shape, not an analytical answer`;
+  // A schema result is the deterministic answer for an overview request. It
+  // used to be rejected unconditionally, which made the planner reach for
+  // the general-purpose sandbox merely because the result was descriptive.
+  if (primary.type === "schema" && answerIntent?.shape !== "overview") {
+    return `"${primary.resultId}" describes the table's shape, not an analytical answer`;
+  }
   return null;
 }
 
@@ -210,11 +215,28 @@ function samePlan(a: readonly PlannedOutput[], aPrimary: string | undefined, b: 
   return a.length === b.length && aPrimary === bPrimary;
 }
 
-export function finalCallRefusal(outputs: readonly PlannedOutput[], result: EngineResult): string | null {
+/**
+ * A successful analytical request is identified by its work, not by the
+ * planner's generated output ids or prose descriptions. This is deliberately
+ * structural: a second wording of the same objective must not start another
+ * sandbox lifecycle, while a genuinely different hybrid analysis remains
+ * available to the planner.
+ */
+export function analysisDecisionKey(decision: AnalyzeDecision): string {
+  const normalize = (value: string): string => value.trim().replace(/\s+/gu, " ").toLowerCase();
+  return JSON.stringify({
+    objective: normalize(decision.objective),
+    outputs: decision.requestedOutputs.map((output) => output.shape).sort(),
+    methods: [...(decision.methods ?? [])].map(normalize).sort(),
+    exploration: [...(decision.exploration ?? [])].sort(),
+  });
+}
+
+export function finalCallRefusal(outputs: readonly PlannedOutput[], result: EngineResult, answerIntent?: AnswerIntent): string | null {
   if (outputs.length > 1) {
     return `you declared ${outputs.length} outputs, so this turn ends with a complete decision that binds each one — not with a final tool call`;
   }
-  const structural = completionProblem(result);
+  const structural = completionProblem(result, answerIntent);
   if (structural) return `${structural}, so it cannot be the principal answer — keep working`;
   return null;
 }
@@ -294,6 +316,8 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
   const protocolCounts = new Map<string, number>();
   let planDeclarations = 0;
   let analyses = 0;
+  let duplicateAnalysisRequests = 0;
+  const completedAnalyses = new Set<string>();
 
   let coverageVerdict: CoverageResult | undefined;
   const finish = (outcome: PlannerRunOutcome, kind: AnalyticalTraceV2["outcome"]): PlannerRun => {
@@ -451,7 +475,7 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
       trace.round({ round, decision });
       const primary = store.get(decision.primaryResultRef);
       const missing = [decision.primaryResultRef, ...decision.supportingResultRefs].filter((id) => !store.has(id));
-      const problem = missing.length > 0 ? `unknown result(s): ${missing.join(", ")}` : primary ? completionProblem(primary) : "no primary result";
+      const problem = missing.length > 0 ? `unknown result(s): ${missing.join(", ")}` : primary ? completionProblem(primary, decision.answerIntent) : "no primary result";
       if (problem || !primary) {
         const key = `complete:${decision.primaryResultRef}:${problem}`;
         const seen = (failureCounts.get(key) ?? 0) + 1;
@@ -507,6 +531,15 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
       if (!params.analyze) {
         return fail("analysis_unavailable", "the requested analysis needs the code sandbox, which is not available in this build");
       }
+      const key = analysisDecisionKey(decision);
+      if (completedAnalyses.has(key)) {
+        duplicateAnalysisRequests += 1;
+        if (duplicateAnalysisRequests > bounds.maxIdenticalToolRetry) {
+          return fail("analysis_unavailable", `the turn asked for more than ${bounds.maxAnalyses} separate analyses; the planner kept requesting an already-completed analysis`);
+        }
+        errors.push("This analytical request already has a successful result in RESULTS SO FAR. Do not request the sandbox again; complete and bind the result you already have.");
+        continue;
+      }
       analyses += 1;
       if (analyses > bounds.maxAnalyses) {
         // §38/§67 — the budget is spent. What happens next depends entirely on
@@ -543,6 +576,7 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
         trace.set({ analysisFailure: { code: run.code, message: run.message, attempts: run.attempts, objective: decision.objective } });
         return fail("analysis_unavailable", run.message);
       }
+      completedAnalyses.add(key);
       trace.round({ round, decision, toolResultId: run.primary.resultId });
       trace.set({ analysisMethod: run.method, analysisAttempts: run.attempts, analysisDurationMs: run.durationMs });
       continue;
@@ -598,7 +632,7 @@ export async function runPlannerLoop(params: PlannerRunParams): Promise<PlannerR
 
     if (decision.final === true) {
       budget.finalToolCalls += 1;
-      const refusal = finalCallRefusal(declaredOutputs, outcome.result);
+      const refusal = finalCallRefusal(declaredOutputs, outcome.result, decision.answerIntent);
       if (refusal === null) {
         budget.finalToolCallsHonoured += 1;
         trace.set({

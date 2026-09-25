@@ -220,7 +220,12 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
   // without rerunning a tool; reaching here means N declared outputs are still
   // not all bound, so the whole loop runs once more with a note. The number N
   // is the planner's, never a count of verbs in the request.
-  if (run.outcome.kind === "complete" && run.coverage && !run.coverage.ok) {
+  const alreadyRanAnalysis = run.trace.rounds.some((round) => round.decision?.kind === "analyze" && round.toolResultId !== undefined);
+  if (run.outcome.kind === "complete" && run.coverage && !run.coverage.ok && !alreadyRanAnalysis) {
+    // A sandbox result is an expensive, bounded analytical lifecycle. A
+    // coverage correction may re-bind it inside the planner loop, but must not
+    // start a fresh loop with an empty ResultStore and execute Python again.
+    // Deterministic-only runs retain the bounded coverage retry below.
     params.onProgress?.({ kind: "verifying" });
     const verificationStarted = Date.now();
     const retry = await runPlannerLoop({

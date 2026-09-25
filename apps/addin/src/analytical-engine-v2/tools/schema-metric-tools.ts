@@ -14,7 +14,7 @@ const schemaDescribe: ToolSpec = {
   name: "schema.describe",
   capability: "schema",
   description:
-    "Describe the table itself: sheet, range, layout, how many metrics and how many periods it has. Takes no input and returns a one-row schema result. Use it only when you need to know the shape of the data before planning; the same facts are already summarised in the TABLE block.",
+    "Describe the table itself: sheet, range, layout, how many metrics and how many periods it has. Takes no input and returns a one-row schema result. For a table-overview request this is the deterministic answer; otherwise use it only when you need to know the shape before planning. The same facts are already summarised in the TABLE block.",
   args: {},
   returns: "schema",
   reads: false,
@@ -25,7 +25,7 @@ const schemaDescribe: ToolSpec = {
       type: "schema",
       fields: [text("sheet"), text("range"), text("orientation"), text("metricCount"), text("periodCount")],
       rows: [[env.schema.sheetName, env.schema.sourceRange, env.schema.orientation, env.schema.rowAxis.length, env.periodIndex.points.length]],
-      metricKeys: [],
+      metricKeys: env.schema.rowAxis.map((member) => member.display),
     }),
   }),
 };

@@ -376,6 +376,29 @@ export async function executeAnalysis(params: ExecuteAnalysisParams): Promise<Sa
     lastCode = code;
     params.onProgress?.({ kind: "code_generated", attempt, code });
 
+    // An empty generation is a transport/model failure, not a Python program
+    // that can be repaired. Sending it to the runtime only turns a clear
+    // generator failure into `RESULT was never assigned`, which then enters
+    // the normal repair budget and can stall the turn.
+    if (code.trim() === "") {
+      const error: SandboxError = {
+        code: "CODE_VALIDATION_ERROR",
+        message: "the code generator returned an empty script",
+        repairHint: "Return one complete Python script that assigns the requested result to RESULT.",
+      };
+      const durationMs = Date.now() - generationStarted;
+      params.onAttempt?.({ attempt, code, codeHash: hashCode(code), ok: false, error, durationMs });
+      params.onProgress?.({
+        kind: "code_failed",
+        attempt,
+        durationMs,
+        errorType: errorTypeOf(error),
+        errorMessage: shortErrorMessage(error),
+        retrying: false,
+      });
+      return { ok: false, error, code, attempts: attempt, durationMs: elapsed() };
+    }
+
     const attemptStarted = Date.now();
     const lastAttempt = attempt >= limits.maxAttempts;
     const reportFailure = (error: SandboxError, durationMs: number): void => {

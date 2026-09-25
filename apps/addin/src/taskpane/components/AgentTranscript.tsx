@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { formatSeconds, type ActivityEntry, type TranscriptEntry } from "../../app/agent-session.js";
 import type { ResponseLanguage } from "../../app/language.js";
 import { MarkdownLite } from "./MarkdownLite.js";
@@ -21,10 +21,33 @@ export interface AgentTranscriptProps {
 const STATUS_GLYPH: Record<ActivityEntry["status"], string> = { running: "●", done: "✓", error: "✕" };
 
 export function AgentTranscript({ entries, busy, onApprove, onReject, language = "en", onInsertChart, turnStartedAt = null }: AgentTranscriptProps) {
+  const bodyRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const autoFollowRef = useRef(true);
+
+  const atBottom = (element: HTMLElement): boolean => element.scrollHeight - element.scrollTop - element.clientHeight <= 24;
+
   useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return undefined;
+    const onScroll = (): void => {
+      autoFollowRef.current = atBottom(body);
+    };
+    body.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => body.removeEventListener("scroll", onScroll);
+  }, [entries.length]);
+
+  // Execution details are patched into one existing entry while a turn runs.
+  // Layout effect + the direct parent scroll keeps the newest stage visible
+  // after that patch has actually rendered. The sentinel remains as a fallback
+  // for browser/WebView implementations that do not expose writable scrollTop.
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!body || !autoFollowRef.current) return;
+    body.scrollTop = body.scrollHeight;
     if (typeof endRef.current?.scrollIntoView === "function") endRef.current.scrollIntoView({ block: "end" });
-  }, [entries]);
+  }, [entries, turnStartedAt]);
 
   if (entries.length === 0) {
     return (
@@ -37,7 +60,7 @@ export function AgentTranscript({ entries, busy, onApprove, onReject, language =
   }
 
   return (
-    <div className="term-body" aria-label="Agent transcript">
+    <div ref={bodyRef} className="term-body" aria-label="Agent transcript">
       {entries.map((entry) => {
         switch (entry.kind) {
           case "command":

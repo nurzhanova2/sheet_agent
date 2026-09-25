@@ -100,6 +100,31 @@ describe("Stage 27 §29 — a result must contain what the plan asked for", () =
 });
 
 describe("Stage 27 §66 — bounded repair, driven by the generator", () => {
+  it("fails an empty generated script immediately, without runtime execution or repair", async () => {
+    const runtime = fakeRuntime([]);
+    const generate = vi.fn(async () => "   ");
+    const progress: string[] = [];
+    const outcome = await executeAnalysis({
+      runtime,
+      plan: plan(),
+      dataset: dataset(),
+      generate,
+      currentSourceVersion: () => "v1",
+      onProgress: (event) => {
+        if (event.kind === "code_failed") progress.push(`${event.errorType}:${event.retrying}`);
+      },
+    });
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error.code).toBe("CODE_VALIDATION_ERROR");
+    expect(outcome.error.message).toMatch(/empty script/);
+    expect(outcome.attempts).toBe(1);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(runtime.calls).toHaveLength(0);
+    expect(progress).toEqual(["SyntaxError:false"]);
+  });
+
   it("retries a runtime error and succeeds on the second attempt", async () => {
     const runtime = fakeRuntime([
       err({ code: "SANDBOX_RUNTIME_ERROR", message: "KeyError: 'Feb'", repairHint: "KeyError: 'Feb'" }),

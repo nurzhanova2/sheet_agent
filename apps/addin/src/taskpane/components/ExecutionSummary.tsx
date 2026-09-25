@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatSeconds, type ExecutionDetail, type ExecutionEntry } from "../../app/agent-session.js";
 import type { ResponseLanguage } from "../../app/language.js";
 
@@ -36,6 +36,11 @@ function CodeCard({ detail, language }: { readonly detail: Extract<ExecutionDeta
 export function ExecutionSummary({ entry, language }: ExecutionSummaryProps) {
   const [open, setOpen] = useState(entry.status !== "done");
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const previousStatus = useRef(entry.status);
+  useEffect(() => {
+    if (previousStatus.current !== entry.status && entry.status !== "running") setOpen(false);
+    previousStatus.current = entry.status;
+  }, [entry.status]);
   const locale = language === "ru" ? "ru" : "en";
   const stages = language === "ru" ? "Этапы выполнения" : "Execution stages";
   const detailsLabel = language === "ru" ? "Вывод и дополнительные детали" : "Output and additional details";

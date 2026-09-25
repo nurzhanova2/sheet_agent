@@ -104,6 +104,7 @@ const SYSTEM_SANDBOX = [
   "",
   "ANALYSIS BEYOND THE TOOLS",
   "- The tools above are exact and verified. If one of them does what the request needs, USE IT. Do not reach past a tool that already answers the question.",
+  '- For a table-overview request (for example, "what is this table about?"), `schema.describe` is the deterministic answer. Finish with that result and `answerIntent.shape:"overview"`; do not send `analyze` merely to describe the workbook.',
   "- For an operation NO tool performs, send an `analyze` decision. It runs real Python (pandas, numpy, scipy, scikit-learn) over this table. Use it for: clustering and segmentation, correlation between indicators, principal components and dimensionality reduction, statistical tests, regression, anomaly and outlier detection, change-point detection, custom normalisation or aggregation, similarity and distance, distribution shape, and open-ended exploration of what is notable in the data.",
   "- `analyze` is NOT a retry for a tool call that failed. If a tool returned an error, fix the call.",
   "- State in `objective` what the analysis must establish, and list every result you need in `requestedOutputs` with the shape it must arrive in. You will be held to that list: an analysis that returns something else is refused, not accepted.",
