@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import type { CellValue, ExcelPort, ExcelMutationPort } from "@sheet-agent/application";
+import type { ExcelPort, ExcelMutationPort } from "@sheet-agent/application";
 import type { ChatClient, ChatStreamHandlers } from "../app/chat-client.js";
 import { boundedHistory, type ConversationMessage } from "../app/conversation.js";
 import { readAddressSnapshot, readSelectionSnapshot, type SelectionSnapshot } from "../app/workbook-context.js";
@@ -14,18 +14,11 @@ import { resolveSlashSubmission } from "../app/commands/parse.js";
 import { slashNeedsWorkbookMap, slashPrompt } from "../app/commands/resolve.js";
 import { buildWorkbookMap, type WorkbookMap } from "../app/commands/workbook-map.js";
 import { resolveSheet } from "../app/commands/workbook-resolver.js";
-import { createAgentToolRegistry } from "../agent/tool-registry.js";
-import { runAgentLoop } from "../agent/agent-loop.js";
-import { agentEvidenceFacts, validateAgentAnswer } from "../agent/evidence.js";
-import type { AgentLoopState, AgentObservation, AgentStep } from "../agent/types.js";
-import { createProductionAgentDeps } from "../app/agent-deps.js";
+import type { AgentLoopState } from "../agent/types.js";
 import { classifyAgentEligibility } from "../app/agent-eligibility.js";
 import {
-  buildAgentClarification,
-  buildChartColumnsClarification,
   buildColumnClarification,
   buildDatasetClarification,
-  buildEntityActionClarification,
   buildReferenceClarification,
   clearClarification,
   emptySessionMemory,
@@ -35,53 +28,40 @@ import {
   isUndoPhrase,
   projectMemoryForModel,
   rememberChart,
-  rememberDerivedResult,
   rememberResult,
   rememberRowSet,
   resolveReference,
   setClarification,
 } from "../app/conversation-memory.js";
-import type { PendingClarification, ResultKind, ResultRef, RowSetRef, SessionMemory } from "../app/session-memory.js";
+import type { PendingClarification, ResultRef, SessionMemory } from "../app/session-memory.js";
 import { isExtremeQuestion, isMutationRequest, isTransformRequest, routeTurn } from "../app/conversation-route.js";
-import { revalidateSource, revalidateSources, sourceVersionOf } from "../app/source-freshness.js";
-import { formatDisplayCell } from "../app/format-cell.js";
+import { sourceVersionOf } from "../app/source-freshness.js";
 import { detectResultAction, type ResultActionIntent } from "../app/result-action-intent.js";
 import { groundEntitiesToRows } from "../app/entity-grounding.js";
-import { extractEntitySet, mentionsConversationalReference, resolveActionReference, type EntitySet } from "../app/entity-reference.js";
-import { DEFAULT_HIGHLIGHT_COLOR, parseHighlightColor } from "../app/highlight-color.js";
+import { extractEntitySet, mentionsConversationalReference } from "../app/entity-reference.js";
+import { DEFAULT_HIGHLIGHT_COLOR } from "../app/highlight-color.js";
 import { detectGroupedRanking, planGroupedRanking } from "../app/grouped-ranking.js";
-import { induceTableSchema, type TableSchema } from "../app/schema/schema-induction.js";
+import { induceTableSchema } from "../app/schema/schema-induction.js";
 import { describeSchema } from "../app/schema/describe-schema.js";
-import type { AnalysisGrids } from "../app/schema/matrix-analysis.js";
-import { containsForbiddenLeak } from "../app/answer-leak.js";
-import { BUILD_INFO, buildInfoLine } from "../app/build-info.js";
+import { BUILD_INFO } from "../app/build-info.js";
 // ----- Stage 26.8: the unified analytical engine, in production -------------
-import { runAnalyticalEngine } from "../analytical-engine-v2/engine.js";
-import { analysisCapability } from "./analysis-capability.js";
 import { classifyTurnOwner } from "../analytical-engine-v2/production/turn-owner.js";
 import { buildOwnershipContext } from "../analytical-engine-v2/production/turn-context.js";
-import { beginTurn, finishTurn, recordAnalyticalExecution, turnLedger } from "../analytical-engine-v2/production/turn-ledger.js";
-import {
-  containsInternalLeak,
-  fallbackNote,
-  failureMessage as v2FailureMessage,
-  leakReplacement,
-  provenanceLine,
-  sandboxFailureMessage,
-} from "../analytical-engine-v2/production/answer-ux.js";
+import { beginTurn, recordAnalyticalExecution } from "../analytical-engine-v2/production/turn-ledger.js";
 import { EMPTY_ANALYTICAL_STATE, withoutSuspension, type AnalyticalConversationState } from "../analytical-engine-v2/state/conversation-state.js";
-import { getAnalyticalTraces, renderTrace } from "../analytical-engine-v2/debug/analytical-trace.js";
 import { commitTrace, getResultActionTraces, type MutableResultActionTrace, type ResultActionTrace } from "../app/result-action-trace.js";
+import { renderDebugConsole } from "./debug-console.js";
+import { createTurnHelpers, renderGridMarkdown } from "./turn-helpers.js";
+import { resolveAnalyticalTable, runAnalyticalTurn, type AnalyticalTurnContext } from "./analytical-turn.js";
+import { runResultAction as runResultActionTurn } from "./result-action-turn.js";
+import { guardMutationClaim, runFlatRecordsTurn, type FlatRecordsTurnContext } from "./flat-records-turn.js";
 import { commonNumericColumns, planCrossSheetComparison } from "../app/cross-sheet-compare.js";
 import { buildCompareReport, isCompareError } from "../app/commands/compare.js";
 import { resultToChartData } from "../app/result-to-chart.js";
 import {
-  buildCopyRowSetActions,
   buildHighlightRowSetActions,
-  buildWriteResultActions,
   isCompileError,
 } from "../app/result-actions.js";
-import type { WorkflowStep } from "../app/agent-session.js";
 import {
   applyResultTransform,
   detectResultTransform,
@@ -90,9 +70,8 @@ import {
   type TransformDetection,
 } from "../app/result-transforms.js";
 import type { ChartInsertDims } from "./components/ChartCard.js";
-import { formatSeconds, nextId, type ActivityStatus, type ExecutionDetail, type TranscriptEntry, type UndoableChange } from "../app/agent-session.js";
-import { summarizeTimings, type ExecutionEvent, type ExecutionTimings } from "../analytical-engine-v2/production/execution-progress.js";
-import { completionLabel, executionMetrics, progressStepFor, pythonSummaryLabel, stoppedLabel } from "../analytical-engine-v2/production/progress-labels.js";
+import { nextId, type ActivityStatus, type TranscriptEntry, type UndoableChange } from "../app/agent-session.js";
+import type { ExecutionTimings } from "../analytical-engine-v2/production/execution-progress.js";
 
 export interface UseAgentOptions {
   readonly chatClient: ChatClient;
@@ -112,186 +91,7 @@ export function anchorRightOfSelection(address: string): string {
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/**
- * 24.4 — a compact, plain-text picture of the workbook for the agent decision
- * model. Untrusted DATA (never an instruction). Bounded to 40 sheets.
- */
-export function buildAgentWorkbookContext(map: WorkbookMap | null, selection: SelectionSnapshot | undefined): string {
-  const lines: string[] = [];
-  if (selection) {
-    lines.push(
-      `Current selection: ${selection.address} (${selection.totalRowCount} rows × ${selection.totalColumnCount} cols)` +
-        (selection.headers && selection.headers.length > 0 ? `, headers: ${selection.headers.join(", ")}` : ""),
-    );
-  }
-  if (map) {
-    lines.push(`Workbook has ${map.sheets.length} worksheet(s):`);
-    for (const s of map.sheets.slice(0, 40)) {
-      lines.push(
-        `- "${s.name}": ${s.dataRowCount} data rows × ${s.columnCount} cols` +
-          (s.headers.length > 0 ? `, columns: ${s.headers.join(", ")}` : ", columns not read"),
-      );
-    }
-    if (map.activeSheet) lines.push(`Active sheet: "${map.activeSheet}".`);
-  } else if (!selection) {
-    lines.push("No workbook structure is available.");
-  }
-  return lines.join("\n");
-}
-
-/**
- * 24.4.4 §7/§11 — every leaf worksheet range read in a result's lineage, with
- * its freshness token, so a later mutation on the result can be refused if any
- * source changed. Walks `derivedFrom` over the loop's observations.
- */
-export function collectAgentSourceVersions(
-  primary: AgentObservation,
-  observations: readonly AgentObservation[],
-): { readonly sourceRange: string; readonly version: string }[] {
-  const byId = new Map(observations.filter((o) => o.resultId).map((o) => [o.resultId!, o]));
-  const out = new Map<string, string>();
-  const seen = new Set<string>();
-  const visit = (obs: AgentObservation | undefined): void => {
-    if (!obs) return;
-    if (obs.resultId && seen.has(obs.resultId)) return;
-    if (obs.resultId) seen.add(obs.resultId);
-    if (obs.sourceVersion && obs.source && obs.source.includes("!")) out.set(obs.source, obs.sourceVersion);
-    for (const v of obs.sourceVersions ?? []) out.set(v.sourceRange, v.version);
-    for (const parentId of obs.derivedFrom ?? []) visit(byId.get(parentId));
-  };
-  visit(primary);
-  return [...out].map(([sourceRange, version]) => ({ sourceRange, version }));
-}
-
-/** 24.4 §14 — a concise, user-facing activity line for one agent step. No tool names / ids / JSON / budgets. */
-export function agentActivityLabel(step: AgentStep, language: ResponseLanguage, seen: Set<string>): string | null {
-  if (step.decision.kind !== "tool_call") return null;
-  const ru = language === "ru";
-  let phrase: string;
-  switch (step.decision.tool) {
-    case "workbook_overview":
-    case "list_sheets":
-    case "inspect_table":
-    case "find_column":
-      phrase = ru ? "Изучаю книгу" : "Inspecting workbook";
-      break;
-    case "read_range":
-      phrase = ru ? "Читаю данные" : "Reading data";
-      break;
-    case "group_by":
-      phrase = ru ? "Группирую данные" : "Grouping the data";
-      break;
-    case "compare_aggregates":
-    case "compare_results":
-      phrase = ru ? "Считаю изменения" : "Calculating changes";
-      break;
-    case "derive_metric":
-      phrase = ru ? "Считаю изменения" : "Calculating changes";
-      break;
-    case "top_n":
-    case "sort_rows":
-      phrase = ru ? "Ранжирую" : "Ranking";
-      break;
-    case "filter_rows":
-      phrase = ru ? "Фильтрую строки" : "Filtering rows";
-      break;
-    case "chart_result":
-      phrase = ru ? "Готовлю график" : "Preparing a chart";
-      break;
-    default:
-      phrase = ru ? "Анализирую" : "Analysing";
-      break;
-  }
-  if (seen.has(phrase)) return null;
-  seen.add(phrase);
-  return phrase;
-}
-
-// Stage 24.5.1 §3 — defence-in-depth: a model-only answer must never claim a
-// workbook mutation happened. When a turn had mutation intent but produced no
-// validated action / proposal, any "highlighted / copied / updated / выделил …"
-// wording in the answer is replaced with a fail-closed message.
-const MUTATION_SUCCESS_RE =
-  /(?:вы[дy]елил|выделен[аоы]?\b|выделены|подсветил|закрасил|отмет(?:ил|ил и)|скопирова(?:л|н[аоы]?)|записал|вписал|добавил\s+формул|обновил\s+(?:ячей|диапазон|значени)|изменил\s+диапазон|залил|проставил\s+заливк)|\b(?:highlighted|shaded|marked|filled|colou?red|copied|wrote|written|updated the|inserted the formula|applied the (?:fill|highlight|formula))\b/i;
-
-export function guardMutationClaim(
-  answer: string,
-  language: ResponseLanguage,
-  mutationIntent: boolean,
-  producedAction: boolean,
-): string {
-  if (!mutationIntent || producedAction) return answer;
-  if (!MUTATION_SUCCESS_RE.test(answer)) return answer;
-  return language === "ru"
-    ? "Я не меняю книгу без подтверждённого действия. Скажите, что и где выделить или записать, и я подготовлю изменение с предпросмотром."
-    : "I don't change the workbook without a confirmed action. Tell me exactly what to highlight or write and I'll prepare a change with a Preview.";
-}
-
 /** Compact GitHub-flavoured markdown table for a derived result grid. */
-function renderGridMarkdown(columns: readonly string[], rows: readonly (readonly unknown[])[]): string {
-  const head = `| ${columns.join(" | ")} |`;
-  const sep = `| ${columns.map(() => "---").join(" | ")} |`;
-  const body = rows
-    .slice(0, 50)
-    // 24.4.4 §14 — display formatting only; the ResultRef keeps exact values.
-    .map((row) => `| ${columns.map((_, c) => formatDisplayCell((row[c] ?? null) as CellValue)).join(" | ")} |`)
-    .join("\n");
-  return body ? `${head}\n${sep}\n${body}` : `${head}\n${sep}`;
-}
-
-// Stage 24.5 §22 — a superlative in the SAME turn ("выдели самого проблемного
-// менеджера красным") narrows an entity set to the extreme row(s) BEFORE
-// grounding. Pure; reads only the retained result grid.
-const SUPERLATIVE_MIN_RE =
-  /проблемн|отстающ|худш|наимень|минимальн|слаб|нарушител|\bworst\b|most\s+problematic|under[-\s]?performing|\blowest\b|\bweakest\b/i;
-const SUPERLATIVE_MAX_RE = /\bлучш|наибол|максимальн|сильн|\bbest\b|\bhighest\b|\bstrongest\b/i;
-const SUPERLATIVE_N_RE = /\b(?:top|bottom)\s+(\d{1,3})\b|топ[-\s]?(\d{1,3})/i;
-
-function cellNumber(v: CellValue): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const n = Number(v.replace(/[^0-9eE.,+-]/g, "").replace(",", "."));
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-export function reduceEntitySetBySuperlative(
-  ref: Pick<ResultRef, "columns" | "rows">,
-  entitySet: Extract<EntitySet, { kind: "set" }>,
-  text: string,
-): { readonly column: string; readonly values: readonly CellValue[] } {
-  const min = SUPERLATIVE_MIN_RE.test(text);
-  const max = SUPERLATIVE_MAX_RE.test(text);
-  const nM = SUPERLATIVE_N_RE.exec(text);
-  if (!min && !max && !nM) return { column: entitySet.column, values: entitySet.values };
-  const entIdx = ref.columns.indexOf(entitySet.column);
-  if (entIdx < 0) return { column: entitySet.column, values: entitySet.values };
-  const numericCols = ref.columns
-    .map((_, c) => c)
-    .filter((c) => {
-      let nums = 0;
-      let total = 0;
-      for (const row of ref.rows) {
-        const v = row[c];
-        if (v === null || v === undefined || v === "") continue;
-        total += 1;
-        if (cellNumber(v) !== null) nums += 1;
-      }
-      return total > 0 && nums / total >= 0.6;
-    });
-  const byCol = numericCols[numericCols.length - 1];
-  if (byCol === undefined) return { column: entitySet.column, values: entitySet.values };
-  const sorted = [...ref.rows].sort((a, b) => (cellNumber(a[byCol] ?? null) ?? 0) - (cellNumber(b[byCol] ?? null) ?? 0));
-  const ordered = max && !min ? [...sorted].reverse() : sorted; // "problematic"/"worst" ⇒ ascending
-  const n = nM ? Math.max(1, Number(nM[1] ?? nM[2])) : 1;
-  const picked = ordered
-    .slice(0, n)
-    .map((r) => r[entIdx] ?? null)
-    .filter((v) => v !== null && v !== "");
-  return { column: entitySet.column, values: picked.length > 0 ? picked : entitySet.values };
-}
-
 /**
  * 24.3.2 — a compact, non-user-facing view of the conversational memory after a
  * turn. For tests / dev diagnostics ONLY: it proves the exact `SessionMemory`
@@ -398,6 +198,77 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
     setEntries((current) => current.map((entry) => (entry.id === id && entry.kind === "response" ? { ...entry, text: "" } : entry)));
   }, []);
 
+  /**
+   * Stage 28G §14 — the refs `analytical-turn` is allowed to touch, and only
+   * those. The bridge reads and writes conversation state through these
+   * accessors, so the task pane's own refs stay the single storage.
+   */
+  /** Stage 28G §14 — the refs the flat-records path may touch, and only those. */
+  const flatRecordsContext = useCallback(
+    (lang: ResponseLanguage): FlatRecordsTurnContext => ({
+      lang,
+      port,
+      chatClient,
+      model,
+      append,
+      setActivity,
+      safeBuildMap: async () => {
+        try {
+          return await buildWorkbookMap(port);
+        } catch {
+          return null;
+        }
+      },
+      selection: () => selectionRef.current,
+      history: () => conversationRef.current,
+      memory: () => sessionMemoryRef.current,
+      setMemory: (next) => {
+        sessionMemoryRef.current = next;
+      },
+      recordExchange: (userMessage, assistantMessage) => {
+        conversationRef.current = [...conversationRef.current, { role: "user", content: userMessage }, { role: "assistant", content: assistantMessage }];
+      },
+    }),
+    [append, chatClient, model, port, setActivity],
+  );
+
+  const analyticalTurnContext = useCallback(
+    (text: string, lang: ResponseLanguage): AnalyticalTurnContext => ({
+      text,
+      language: lang === "ru" ? "ru" : "en",
+      port,
+      chatClient,
+      model,
+      append,
+      patchEntries: (map) => setEntries((current) => map(current)),
+      setLanguage: () => setLanguage(lang),
+      setBusy,
+      setTurnStartedAt,
+      nextTurnSeq: () => (turnSeqRef.current += 1),
+      turnSeq: () => turnSeqRef.current,
+      setAbortController: (controller) => {
+        v2AbortRef.current = controller;
+      },
+      selection: () => selectionRef.current,
+      setSelection: (snap) => {
+        selectionRef.current = snap;
+      },
+      analyticalState: () => analyticalStateRef.current,
+      setAnalyticalState: (next) => {
+        analyticalStateRef.current = next;
+      },
+      memory: () => sessionMemoryRef.current,
+      setMemory: (next) => {
+        sessionMemoryRef.current = next;
+      },
+      recordExchange: (userMessage, assistantMessage) => {
+        conversationRef.current = [...conversationRef.current, { role: "user", content: userMessage }, { role: "assistant", content: assistantMessage }];
+      },
+      recordTurnTimings,
+    }),
+    [append, chatClient, model, port, recordTurnTimings],
+  );
+
   const undoLast = useCallback(async () => {
     const last = undoStack[undoStack.length - 1];
     if (!last || busy) return;
@@ -455,80 +326,21 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
       if (!text || busy) return;
       const lang = detectLanguage(text, language);
 
-      // ----- Stage 24.5.2 §1/§18: developer-only build + trace inspector.
-      // Not a registered slash command (kept out of /help); dev/manual-QA only.
-      // §19 — the V2 developer surface. Not registered as a slash command (it
-      // stays out of /help): owner, planner decisions, tools, result ids,
-      // primary/supporting, references, table + freshness identity,
-      // clarification state, serialization recovery and the narrator path —
-      // none of which ever appears in a normal answer (§18).
-      if (/^\/debug[\s-]?analytical(?:[\s-]engine)?\s*$/i.test(text)) {
-        setLanguage(lang);
-        append({ kind: "command", id: nextId("cmd"), text });
-        const traces = getAnalyticalTraces();
-        const ledger = turnLedger();
-        const st = analyticalStateRef.current;
-        const body = [
-          "```",
-          buildInfoLine(),
-          "analytical engine: analytical_engine_v2",
-          `planner transport: ${typeof chatClient.planAnalyticalTurn === "function" ? "available" : "MISSING"}`,
-          "",
-          "TURN OWNERSHIP (most recent last)",
-          ledger.length === 0
-            ? "  (no turns yet)"
-            : ledger
-                .map(
-                  (e) =>
-                    `  ${e.owner === "V2_OWNED" ? "V2 " : "V1 "} ${e.ownerReason.padEnd(24)} engines=[${e.engines.join(", ") || "none"}] outcome=${e.outcome ?? "-"}  ${JSON.stringify(e.request).slice(0, 60)}`,
-                )
-                .join("\n"),
-          "",
-          `V2 CONVERSATION STATE`,
-          `  table: ${st.tableRef ? `${st.tableRef.sheetName}!${st.tableRef.sourceRange} @ ${st.tableRef.sourceVersion}` : "(none)"}`,
-          `  suspended: ${st.suspended ? `"${st.suspended.question}" over ${st.suspended.results.length} result(s)` : "(none)"}`,
-          `  recent: ${(st.recentResults ?? []).map((r) => `${r.tool}(${r.role ?? "primary"})`).join(", ") || "(none)"}`,
-          "",
-          "LAST TURN TIMING",
-          ...(turnTimingsRef.current
-            ? summarizeTimings(turnTimingsRef.current).map((line) => `  ${line}`)
-            : ["  (no analytical turn yet)"]),
-          "",
-          `V2 TRACES (${traces.length}, most recent last)`,
-          traces.length === 0 ? "  (none yet)" : traces.map((t2) => renderTrace(t2)).join("\n\n"),
-          "```",
-        ].join("\n");
-        append({ kind: "response", id: nextId("res"), streaming: false, text: body });
-        return;
-      }
-
-      if (/^\/debug(?:-context)?\s*$/i.test(text)) {
-        setLanguage(lang);
-        append({ kind: "command", id: nextId("cmd"), text });
-        const m = sessionMemoryRef.current;
-        const traces = getResultActionTraces();
-        const body = [
-          "```",
-          buildInfoLine(),
-          `bundle build: ${BUILD_INFO.buildId}   commit: ${BUILD_INFO.gitCommit}`,
-          "analytical engine: analytical_engine_v2",
-          "",
-          `memory: results=${m.recentResults.length} lastResultId=${m.lastResultId ?? "-"} ` +
-            `lastRowSet=${m.lastRowSet?.id ?? "-"} lastChart=${m.lastChart?.id ?? "-"} ` +
-            `pending=${m.pendingClarification?.kind ?? "-"}`,
-          m.recentResults.length > 0
-            ? `last result: kind=${m.recentResults[m.recentResults.length - 1]!.kind} ` +
-              `entityColumn=${m.recentResults[m.recentResults.length - 1]!.entityColumn ?? "-"} ` +
-              `entityValues=${(m.recentResults[m.recentResults.length - 1]!.entityValues ?? []).length} ` +
-              `source=${m.recentResults[m.recentResults.length - 1]!.sourceRange}`
-            : "last result: (none)",
-          "",
-          `result-action traces (${traces.length}):`,
-          traces.length === 0 ? "  (none yet)" : traces.map((t) => "  " + JSON.stringify(t)).join("\n"),
-          "```",
-        ].join("\n");
-        append({ kind: "response", id: nextId("res"), streaming: false, text: body });
-        return;
+      // Stage 24.5.2 §1/§18 — the developer surface, owned by `debug-console`.
+      // Matched before anything else so a `/debug…` form never reaches a route.
+      {
+        const report = renderDebugConsole(text, {
+          plannerTransportAvailable: typeof chatClient.planAnalyticalTurn === "function",
+          analyticalState: analyticalStateRef.current,
+          lastTurnTimings: turnTimingsRef.current,
+          memory: sessionMemoryRef.current,
+        });
+        if (report !== null) {
+          setLanguage(lang);
+          append({ kind: "command", id: nextId("cmd"), text });
+          append({ kind: "response", id: nextId("res"), streaming: false, text: report });
+          return;
+        }
       }
 
       // Set when a clarification resume rewrote `text`: the raw reply was already
@@ -545,465 +357,38 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         commitTrace(raTrace);
       };
 
-      // ----- Stage 24.2B: apply a deterministic transform of an earlier result
-      const emitTransform = (
-        ref: ResultRef,
-        transform: Parameters<typeof applyResultTransform>[1],
-        userMsg: string = text,
-      ): void => {
-        const applied = applyResultTransform(ref, transform);
-        if (isTransformError(applied)) {
-          append({
-            kind: "response",
-            id: nextId("res"),
-            streaming: false,
-            text:
-              lang === "ru"
-                ? `Не удалось преобразовать прошлый результат: ${applied.error}.`
-                : `I couldn't reshape that earlier result — ${applied.error}.`,
-          });
-          return;
-        }
-        sessionMemoryRef.current = rememberDerivedResult(sessionMemoryRef.current, ref, applied);
-        const body = `${applied.answer}\n\n${renderGridMarkdown(applied.columns, applied.rows)}`;
-        append({ kind: "response", id: nextId("res"), text: body, streaming: false });
-        conversationRef.current = [
-          ...conversationRef.current,
-          { role: "user", content: userMsg },
-          { role: "assistant", content: body },
-        ];
-      };
-      const findResult = (id: string | undefined): ResultRef | undefined =>
-        id ? sessionMemoryRef.current.recentResults.find((r) => r.id === id) : undefined;
-      // 24.5.3 — an "N <noun> with the worst/best <metric>" follow-up must reshape
-      // the fullest compatible ancestor, not a 1-row "which is worst" result that
-      // happens to be the most recent. Walk the derivedFrom lineage to the nearest
-      // result with at least `minRows` rows; fall back to `start`.
-      const resolveRankTarget = (start: ResultRef, minRows: number): ResultRef => {
-        const seen = new Set<string>();
-        let cur: ResultRef | undefined = start;
-        while (cur && !seen.has(cur.id)) {
-          if (cur.rows.length >= minRows) return cur;
-          seen.add(cur.id);
-          cur = cur.derivedFromResultId ? findResult(cur.derivedFromResultId) : undefined;
-        }
-        return start;
-      };
-
-      // ----- Stage 24.3A / 24.5 + 24.7–24.12: helpers ---------------------
-      const say = (en: string, ru: string): void => {
-        append({ kind: "response", id: nextId("res"), streaming: false, text: lang === "ru" ? ru : en });
-      };
-      const proposeActions = (n: number): void => {
-        append({ kind: "activity", id: nextId("act"), activity: "waiting_for_approval", title: t(lang, "ua.awaitingApproval", { n }), status: "running" });
-      };
-      const safeBuildMap = async (): Promise<WorkbookMap | null> => {
-        try {
-          return await buildWorkbookMap(port);
-        } catch {
-          return null;
-        }
-      };
-      // 24.4.4 §11 — freshness for a result that may derive from >1 worksheet.
-      const resultIsFresh = async (ref: ResultRef): Promise<boolean> =>
-        ref.sourceVersions && ref.sourceVersions.length > 0
-          ? (await revalidateSources(port, ref.sourceVersions)) === "fresh"
-          : (await revalidateSource(port, ref.sourceRange, ref.sourceVersion)) === "fresh";
-      const overwriteNote = (cells: number): string =>
-        cells > 0
-          ? lang === "ru"
-            ? ` ${cells} непустых ячеек будут перезаписаны.`
-            : ` ${cells} non-empty cell(s) will be overwritten.`
-          : "";
-      const STALE_EN = "The source data has changed since that result was calculated. Please rerun the analysis before applying this change.";
-      const STALE_RU = "Исходные данные изменились с момента расчёта этого результата. Повторите анализ перед применением изменения.";
-
-      const runResultAction = async (action: ResultActionIntent): Promise<void> => {
-        const m = sessionMemoryRef.current;
-        const lastResult = m.recentResults.find((r) => r.id === m.lastResultId) ?? m.recentResults[m.recentResults.length - 1];
-        const ref = resolveReference(text, m);
-        const resolvedResult: ResultRef | undefined =
-          ref.kind === "resolved" && ref.target.kind === "result" ? ref.target.ref : lastResult;
-
-        if (action.kind === "chart") {
-          if (!resolvedResult) {
-            say("There's no active analytical result to chart yet. Run an analysis first.", "Пока нет активного результата анализа для построения графика. Сначала выполните анализ.");
-            return;
-          }
-          // 24.3.2 — a single-value answer ("which one is worst?") is not itself a
-          // useful chart; walk up its lineage to the table it was derived from.
-          let chartRef = resolvedResult;
-          const seenChartIds = new Set<string>();
-          while (chartRef.kind === "scalar" && chartRef.derivedFromResultId && !seenChartIds.has(chartRef.id)) {
-            seenChartIds.add(chartRef.id);
-            const parent = findResult(chartRef.derivedFromResultId);
-            if (!parent) break;
-            chartRef = parent;
-          }
-          const outcome = resultToChartData(chartRef, lang);
-          if (outcome.kind === "error") {
-            say(`I can't chart that — ${outcome.error}.`, `Не получится построить график — ${outcome.error}.`);
-            return;
-          }
-          if (outcome.kind === "clarify") {
-            // 24.3.1 — a typed chart_columns clarification: a short answer resumes
-            // THIS ResultRef → ChartData, never a fresh workbook query.
-            sessionMemoryRef.current = setClarification(
-              m,
-              buildChartColumnsClarification(text, outcome.question, outcome.candidates, chartRef.id, lang),
-            );
-            append({ kind: "response", id: nextId("res"), streaming: false, text: outcome.question });
-            return;
-          }
-          append({ kind: "chart", id: nextId("cht"), data: outcome.chart });
-          sessionMemoryRef.current = rememberChart(sessionMemoryRef.current, { turnId: nextId("turn"), data: outcome.chart, fromResultId: chartRef.id });
-          const line =
-            lang === "ru"
-              ? `Готово — график по результату «${chartRef.title}» показан в панели.`
-              : `Here's a chart of "${chartRef.title}", shown in the panel.`;
-          append({ kind: "response", id: nextId("res"), streaming: false, text: line });
-          conversationRef.current = [...conversationRef.current, { role: "user", content: text }, { role: "assistant", content: line }];
-          return;
-        }
-
-        if (action.kind === "insert_chart") {
-          if (!m.lastChart) {
-            say("There's no chart to insert right now.", "Сейчас нет графика для вставки.");
-            return;
-          }
-          say(
-            'The chart is shown in the panel — use "Insert into Excel" beneath it to place it in the workbook.',
-            "График показан в панели. Нажмите «Вставить в Excel» под ним, чтобы разместить его в книге.",
-          );
-          return;
-        }
-
-        if (action.kind === "highlight" || action.kind === "copy") {
-          const colour = parseHighlightColor(text);
-          const colorHex = colour?.hex ?? DEFAULT_HIGHLIGHT_COLOR;
-          const colourWordEn = colour ? ` ${colour.name}` : " yellow";
-          const colourWordRu = colour
-            ? ` ${({ red: "красным", yellow: "жёлтым", green: "зелёным" } as const)[colour.name]}`
-            : " жёлтым";
-
-          // 24.5 §3/§4 — resolve the conversational reference against COMPATIBLE
-          // memory (a chart is never a highlight target); §5 — the live selection
-          // is not consulted when a prior result exists.
-          const aref = resolveActionReference(text, m, action.kind, lang === "ru" ? "ru" : "en");
-          raTrace.resolvedReference = {
-            kind: aref.kind,
-            ...(aref.kind === "result" ? { resultId: aref.ref.id } : {}),
-            ...(aref.kind === "result" && aref.ref.entityColumn ? { entityColumn: aref.ref.entityColumn } : {}),
-            ...(aref.kind === "result" ? { entityValuesCount: (aref.ref.entityValues ?? []).length } : {}),
-          };
-          // 24.5.3 §14 — record every candidate referent (row set + recent
-          // results) and which one won, so a manual tester can see the recency
-          // decision (a newer compatible result superseding an older row set).
-          {
-            const rowSetOrder = m.lastRowSet?.order ?? -1;
-            type TraceCandidate = NonNullable<ResultActionTrace["candidateReferences"]>[number];
-            const cands: TraceCandidate[] = [];
-            if (m.lastRowSet && m.lastRowSet.sheetRows.length > 0) {
-              cands.push({
-                kind: "rowset",
-                id: m.lastRowSet.id,
-                order: m.lastRowSet.order,
-                entityCount: m.lastRowSet.count,
-                compatible: true,
-                ...(m.lastRowSet.fromResultId ? { fromResultId: m.lastRowSet.fromResultId } : {}),
-              });
-            }
-            for (const r of m.recentResults) {
-              const es = extractEntitySet(r);
-              cands.push({
-                kind: "result",
-                id: r.id,
-                order: r.order,
-                ...(es.kind === "set" ? { entityCount: es.values.length } : {}),
-                ...(r.derivedFromResultId ? { fromResultId: r.derivedFromResultId } : {}),
-                compatible: es.kind === "set",
-                ...(m.lastRowSet && r.order > rowSetOrder && es.kind === "set" ? { note: "newer-than-rowset" } : {}),
-              });
-            }
-            if (m.lastChart) {
-              cands.push({ kind: "chart", id: m.lastChart.id, order: m.lastChart.order, compatible: false, note: "incompatible-with-highlight" });
-            }
-            raTrace.candidateReferences = cands.sort((a, b) => a.order - b.order);
-            raTrace.chosenReference =
-              aref.kind === "result"
-                ? `result:${aref.ref.id}`
-                : aref.kind === "rowset"
-                  ? `rowset:${aref.ref.id}`
-                  : aref.kind === "chart"
-                    ? `chart:${aref.ref.id}`
-                    : aref.kind;
-          }
-          if (aref.kind === "none") {
-            raTrace.outcome = `no_object:${aref.reason}`;
-            if (aref.reason === "evicted") {
-              say(
-                "I don't have that earlier result in view any more. Re-run the analysis, then ask again.",
-                "У меня больше нет того результата под рукой. Повторите анализ и спросите снова.",
-              );
-              return;
-            }
-            say(
-              'There\'s no active set of rows for that. Find or compute the rows first — for example "show the 3 managers with the worst Variance".',
-              "Сейчас нет активного набора строк. Сначала найдите или вычислите нужные строки — например «покажи 3 менеджеров с худшим Variance».",
-            );
-            return;
-          }
-          if (aref.kind === "clarify") {
-            raTrace.outcome = "clarify_entity_column";
-            if (aref.candidates.length === 0) {
-              say(aref.question, aref.question);
-              return;
-            }
-            sessionMemoryRef.current = setClarification(
-              m,
-              buildEntityActionClarification(
-                text,
-                aref.question,
-                aref.candidates,
-                aref.resultId ?? "",
-                {
-                  action: action.kind,
-                  ...(colour ? { colorHex } : {}),
-                  ...(action.sheetName ? { sheetName: action.sheetName } : {}),
-                },
-                lang,
-              ),
-            );
-            append({ kind: "response", id: nextId("res"), streaming: false, text: aref.question });
-            return;
-          }
-
-          let rowSet: RowSetRef | undefined;
-          let groundedValues: readonly CellValue[] | undefined;
-          if (aref.kind === "rowset") {
-            rowSet = aref.ref;
-            raTrace.source = { sheet: rowSet.sourceSheet, sourceRange: rowSet.sourceRange, sourceVersion: rowSet.sourceVersion };
-            if ((await revalidateSource(port, rowSet.sourceRange, rowSet.sourceVersion)) !== "fresh") {
-              raTrace.outcome = "stale_source";
-              say(STALE_EN, STALE_RU);
-              return;
-            }
-          } else if (aref.kind === "result") {
-            // 24.5 §5–§8 — ground the result's entities to source rows using the
-            // RESULT's own provenance (never the live selection).
-            const targetRef = aref.ref;
-            raTrace.source = { sheet: targetRef.sourceSheet, sourceRange: targetRef.sourceRange, sourceVersion: targetRef.sourceVersion };
-            if (!(await resultIsFresh(targetRef))) {
-              raTrace.outcome = "stale_source";
-              say(STALE_EN, STALE_RU);
-              return;
-            }
-            const es0 = aref.entitySet && aref.entitySet.kind === "set" ? aref.entitySet : extractEntitySet(targetRef);
-            if (es0.kind !== "set") {
-              say(
-                "I couldn't tell which rows to act on from that result. Could you say which column identifies them?",
-                "Не понял, какие строки выделить по этому результату. Уточните, какой столбец их определяет.",
-              );
-              return;
-            }
-            const reduced = reduceEntitySetBySuperlative(targetRef, es0, text);
-            const grounded = await groundEntitiesToRows(port, {
-              sourceRange: targetRef.sourceRange,
-              sourceVersion: targetRef.sourceVersion,
-              entityColumn: reduced.column,
-              entityValues: reduced.values,
-            });
-            if (!grounded.ok) {
-              raTrace.outcome = `grounding_failed:${grounded.kind}`;
-              if (grounded.kind === "stale_source") {
-                say(STALE_EN, STALE_RU);
-                return;
-              }
-              say(
-                `I can't work out which rows to ${action.kind === "highlight" ? "highlight" : "copy"} — ${grounded.message}.`,
-                `Не могу определить, какие строки ${action.kind === "highlight" ? "выделить" : "скопировать"} — ${grounded.message}.`,
-              );
-              return;
-            }
-            raTrace.grounding = {
-              matchedCount: grounded.matchedValues.length,
-              unmatchedCount: grounded.unmatchedValues.length,
-              sheetRowsCount: grounded.sheetRows.length,
-              sheetRowsMin: grounded.sheetRows[0] ?? null,
-              sheetRowsMax: grounded.sheetRows[grounded.sheetRows.length - 1] ?? null,
-            };
-            if (grounded.sheetRows.length === 0) {
-              raTrace.outcome = "no_matching_rows";
-              say(
-                `No rows in the source data match ${reduced.column} = ${reduced.values.map(String).join(", ")}.`,
-                `В исходных данных нет строк, где ${reduced.column} = ${reduced.values.map(String).join(", ")}.`,
-              );
-              return;
-            }
-            // §16 — never silently apply a partial mutation.
-            if (grounded.unmatchedValues.length > 0) {
-              raTrace.outcome = "partial_resolution";
-              say(
-                `I matched ${grounded.matchedValues.join(", ")} to source rows, but couldn't find ${grounded.unmatchedValues.join(", ")}. Nothing has been changed — say "continue" to proceed with just the matched ${grounded.matchedValues.length === 1 ? "one" : "ones"}.`,
-                `Сопоставил со строками: ${grounded.matchedValues.join(", ")}, но не нашёл: ${grounded.unmatchedValues.join(", ")}. Ничего не изменено — напишите «продолжай», чтобы применить только к найденным.`,
-              );
-              return;
-            }
-            groundedValues = reduced.values;
-            sessionMemoryRef.current = rememberRowSet(sessionMemoryRef.current, {
-              turnId: nextId("turn"),
-              sourceSheet: grounded.sourceSheet,
-              sourceRange: grounded.sourceRange,
-              sourceVersion: grounded.sourceVersion,
-              sheetRows: grounded.sheetRows.slice(0, 500),
-              describe: `${grounded.entityColumn} IN (${reduced.values.map(String).join(", ")})`,
-              count: grounded.sheetRows.length,
-              truncated: grounded.sheetRows.length > 500,
-              columns: grounded.columns,
-              rows: grounded.rows.slice(0, 200),
-              conditionSpec: { entityColumn: grounded.entityColumn, entityValues: reduced.values.map(String), mode: "in" },
-              fromResultId: targetRef.id,
-            });
-            rowSet = sessionMemoryRef.current.lastRowSet;
-          } else {
-            say(
-              "That refers to a chart, which can't be highlighted. Point me at an analytical result or a set of rows.",
-              "Это относится к графику — его нельзя выделить. Укажите результат анализа или набор строк.",
-            );
-            return;
-          }
-
-          if (!rowSet) {
-            say("There's no active set of rows for that.", "Сейчас нет активного набора строк.");
-            return;
-          }
-
-          if (action.kind === "highlight") {
-            const built = buildHighlightRowSetActions(rowSet, colorHex);
-            if (isCompileError(built)) {
-              raTrace.outcome = `action_build_failed:${built.error}`;
-              raTrace.actionBuild = {
-                sourceWidth: 0,
-                contiguousRuns: 0,
-                chunkedRuns: (built.rejected ?? []).length,
-                actionsBuilt: 0,
-                rejectedActions: (built.rejected ?? []).length,
-                rejectReasons: (built.rejected ?? []).map((r) => `${r.address} (${r.cells}): ${r.reason}`),
-              };
-              say(`I can't highlight those rows — ${built.error}.`, `Не получится выделить эти строки — ${built.error}.`);
-              return;
-            }
-            raTrace.actionBuild = {
-              sourceWidth: built.width,
-              contiguousRuns: built.actions.length + built.rejected.length,
-              chunkedRuns: built.actions.length + built.rejected.length,
-              actionsBuilt: built.actions.length,
-              rejectedActions: built.rejected.length,
-              rejectReasons: built.rejected.map((r) => `${r.address} (${r.cells}): ${r.reason}`),
-            };
-            const forWhomEn = groundedValues && groundedValues.length > 0 ? ` for ${groundedValues.map(String).join(", ")}` : "";
-            const forWhomRu = groundedValues && groundedValues.length > 0 ? ` для ${groundedValues.map(String).join(", ")}` : "";
-            say(
-              `Found ${rowSet.count} row(s)${forWhomEn}. They will be highlighted${colourWordEn}. Approve the change to apply it.`,
-              `Найдено ${rowSet.count} строк${forWhomRu}. Они будут выделены${colourWordRu}. Подтвердите изменение, чтобы применить.`,
-            );
-            append({ kind: "proposal", id: nextId("prop"), actions: built.actions, state: "pending" });
-            proposeActions(built.actions.length);
-            raTrace.proposalCreated = true;
-            raTrace.outcome = "highlight_proposed";
-            return;
-          }
-          if (!action.sheetName) {
-            say("Which worksheet should I copy those rows to?", "На какой лист скопировать эти строки?");
-            return;
-          }
-          const map = await safeBuildMap();
-          const res = map ? resolveSheet(map, action.sheetName, { strict: true }) : ({ kind: "not_found" } as const);
-          if (res.kind === "ambiguous") {
-            say(
-              `"${action.sheetName}" matches more than one worksheet: ${res.candidates.map((c) => `"${c}"`).join(", ")}. Use the exact name.`,
-              `«${action.sheetName}» подходит под несколько листов: ${res.candidates.map((c) => `«${c}»`).join(", ")}. Уточните название.`,
-            );
-            return;
-          }
-          if (res.kind !== "ok") {
-            say(`I couldn't find a worksheet named "${action.sheetName}".`, `Не нашёл лист с названием «${action.sheetName}».`);
-            return;
-          }
-          const anchor = action.anchor ?? "A1";
-          const existing = anchor === "A1" && res.sheet.usedAddress ? await readAddressSnapshot(port, res.sheet.usedAddress).catch(() => null) : null;
-          const built = buildCopyRowSetActions(rowSet, { sheetName: res.sheet.name, anchor }, existing?.values);
-          if (isCompileError(built)) {
-            say(`I can't copy those rows — ${built.error}.`, `Не получится скопировать эти строки — ${built.error}.`);
-            return;
-          }
-          say(
-            `I'll copy ${rowSet.count} row(s) to ${res.sheet.name}!${built.destRange}.${overwriteNote(built.overwriteCells)} Approve the change to apply it.`,
-            `Скопирую ${rowSet.count} строк в ${res.sheet.name}!${built.destRange}.${overwriteNote(built.overwriteCells)} Подтвердите изменение, чтобы применить.`,
-          );
-          append({ kind: "proposal", id: nextId("prop"), actions: [built.action], state: "pending" });
-          proposeActions(1);
-          return;
-        }
-
-        // action.kind === "write"
-        if (!resolvedResult) {
-          say("There's no active analytical result to write yet. Run an analysis first.", "Пока нет активного результата анализа для записи. Сначала выполните анализ.");
-          return;
-        }
-        if (!action.sheetName) {
-          say("Which worksheet should I write that table to?", "На какой лист записать эту таблицу?");
-          return;
-        }
-        if (!(await resultIsFresh(resolvedResult))) {
-          say(STALE_EN, STALE_RU);
-          return;
-        }
-        const map = await safeBuildMap();
-        const res = map ? resolveSheet(map, action.sheetName, { strict: true }) : ({ kind: "not_found" } as const);
-        const anchor = action.anchor ?? "A1";
-        if (res.kind === "ambiguous") {
-          say(
-            `"${action.sheetName}" matches more than one worksheet: ${res.candidates.map((c) => `"${c}"`).join(", ")}. Use the exact name.`,
-            `«${action.sheetName}» подходит под несколько листов: ${res.candidates.map((c) => `«${c}»`).join(", ")}. Уточните название.`,
-          );
-          return;
-        }
-
-        if (action.newSheet || res.kind === "not_found") {
-          const target = action.sheetName;
-          const written = buildWriteResultActions(resolvedResult, { sheetName: target, anchor });
-          if (isCompileError(written)) {
-            say(`I can't write that table — ${written.error}.`, `Не получится записать таблицу — ${written.error}.`);
-            return;
-          }
-          const workflow: WorkflowStep[] = [
-            { kind: "create_sheet", name: target },
-            { kind: "cells", actions: [written.action], label: `write "${resolvedResult.title}"` },
-          ];
-          say(
-            `I'll create a "${target}" sheet and write "${resolvedResult.title}" (${written.rowsWritten}×${written.colsWritten}) to ${target}!${written.destRange}. Approve to run both as one change; one undo reverts the whole thing.`,
-            `Создам лист «${target}» и запишу «${resolvedResult.title}» (${written.rowsWritten}×${written.colsWritten}) в ${target}!${written.destRange}. Подтвердите — всё выполнится одним действием, одна отмена вернёт всё назад.`,
-          );
-          append({ kind: "proposal", id: nextId("prop"), actions: [], workflow, state: "pending" });
-          proposeActions(2);
-          return;
-        }
-
-        // res.kind === "ok" → plain write into an existing sheet
-        const existing = anchor === "A1" && res.sheet.usedAddress ? await readAddressSnapshot(port, res.sheet.usedAddress).catch(() => null) : null;
-        const written = buildWriteResultActions(resolvedResult, { sheetName: res.sheet.name, anchor }, existing?.values);
-        if (isCompileError(written)) {
-          say(`I can't write that table — ${written.error}.`, `Не получится записать таблицу — ${written.error}.`);
-          return;
-        }
-        say(
-          `I'll write "${resolvedResult.title}" (${written.rowsWritten}×${written.colsWritten}) to ${res.sheet.name}!${written.destRange}.${overwriteNote(written.overwriteCells)} Approve the change to apply it.`,
-          `Запишу «${resolvedResult.title}» (${written.rowsWritten}×${written.colsWritten}) в ${res.sheet.name}!${written.destRange}.${overwriteNote(written.overwriteCells)} Подтвердите изменение, чтобы применить.`,
-        );
-        append({ kind: "proposal", id: nextId("prop"), actions: [written.action], state: "pending" });
-        proposeActions(1);
-      };
+      // Stage 28G §14 — the per-turn primitives every route below shares, and
+      // the result-action turn, both owned by their own modules.
+      const helpers = createTurnHelpers({
+        text,
+        lang,
+        port,
+        append,
+        memory: () => sessionMemoryRef.current,
+        setMemory: (next) => {
+          sessionMemoryRef.current = next;
+        },
+        recordExchange: (userMessage, assistantMessage) => {
+          conversationRef.current = [...conversationRef.current, { role: "user", content: userMessage }, { role: "assistant", content: assistantMessage }];
+        },
+      });
+      const { say, emitTransform, findResult, resolveRankTarget, safeBuildMap, resultIsFresh } = helpers;
+      const runResultAction = (action: ResultActionIntent): Promise<void> =>
+        runResultActionTurn(action, {
+          text,
+          lang,
+          port,
+          append,
+          memory: () => sessionMemoryRef.current,
+          setMemory: (next) => {
+            sessionMemoryRef.current = next;
+          },
+          recordExchange: (userMessage, assistantMessage) => {
+            conversationRef.current = [...conversationRef.current, { role: "user", content: userMessage }, { role: "assistant", content: assistantMessage }];
+          },
+          trace: raTrace,
+          helpers,
+        });
 
       // ----- Stage 24.3A / 24.5: autonomous bounded cross-sheet comparison -
       const numericHeadersOf = (snap: SelectionSnapshot): Set<string> => {
@@ -1023,177 +408,9 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         return out;
       };
 
-      // ----- Stage 24.4: bounded agentic analysis (fallback) ---------------
-      const finalizeAgentRun = (state: AgentLoopState, userRequest: string, sourceIdentity?: string): void => {
-        if (state.status === "awaiting_clarification" && state.pendingClarification) {
-          const pc = state.pendingClarification;
-          // Stage 25.1.2 §8/§10 — the model's own clarifying question, never
-          // shown raw.
-          const question = containsForbiddenLeak(pc.question)
-            ? lang === "ru"
-              ? "Уточните, пожалуйста, запрос."
-              : "Could you clarify the request?"
-            : pc.question;
-          sessionMemoryRef.current = setClarification(
-            sessionMemoryRef.current,
-            buildAgentClarification(userRequest, question, pc.candidates, state, sourceIdentity),
-          );
-          append({ kind: "response", id: nextId("res"), streaming: false, text: question });
-          conversationRef.current = [
-            ...conversationRef.current,
-            { role: "user", content: userRequest },
-            { role: "assistant", content: question },
-          ];
-          return;
-        }
-
-        if (state.status === "done" && state.finalAnswer) {
-          // §10 — persist the primary tabular observation as a canonical
-          // ResultRef in the EXISTING store (no `agentResults`); §5 lineage.
-          const primary = [...state.observations]
-            .reverse()
-            .find((o) => o.ok && o.kind === "table" && o.columns && o.columns.length > 0 && o.rows && o.resultId);
-          if (primary && primary.columns && primary.rows) {
-            const op = primary.operation ?? "";
-            const kind: ResultKind =
-              op.startsWith("group_by")
-                ? "grouped_table"
-                : primary.tool === "compare_aggregates" || primary.tool === "compare_results"
-                  ? "comparison"
-                  : "table";
-            const src = primary.source ?? selectionRef.current?.sheetName ?? "workbook";
-            const sheet = src.includes("!") ? src.slice(0, src.indexOf("!")) : src.includes(" vs ") ? src.slice(0, src.indexOf(" vs ")) : src;
-            const parents = primary.derivedFrom ?? [];
-            // §7/§11 (24.4) — collect the freshness token of EVERY leaf worksheet
-            // read in this result's lineage, so a later mutation on the result
-            // can be refused if any source changed.
-            const versions = collectAgentSourceVersions(primary, state.observations);
-            const firstV = versions[0];
-            sessionMemoryRef.current = rememberResult(sessionMemoryRef.current, {
-              turnId: nextId("turn"),
-              kind,
-              title: primary.operation ?? userRequest.slice(0, 100),
-              spec: { agent: true, operation: primary.operation ?? primary.tool },
-              columns: primary.columns,
-              rows: primary.rows,
-              rowsTruncated: primary.truncated ?? false,
-              sourceSheet: firstV ? firstV.sourceRange.split("!")[0] ?? sheet : sheet,
-              sourceRange: firstV ? firstV.sourceRange : primary.source ?? sheet,
-              sourceVersion: firstV ? firstV.version : `agent:${primary.source ?? sheet}:${primary.rowCount ?? primary.rows.length}`,
-              ...(versions.length > 0 ? { sourceVersions: versions } : {}),
-              ...(parents.length === 1 ? { derivedFromResultId: parents[0]! } : {}),
-              ...(parents.length >= 2 ? { derivedFromResultIds: [...parents] } : {}),
-            });
-          }
-
-          // §11 — every workbook-derived number in the final answer must be
-          // supported by evidence from the observations. If not, fail closed:
-          // present the verified canonical table instead of the model's prose.
-          const evidence = agentEvidenceFacts(state.observations);
-          const rowCounts = state.observations.filter((o) => o.ok && o.rows).map((o) => o.rowCount ?? o.rows!.length);
-          const check = validateAgentAnswer(state.finalAnswer, evidence, rowCounts);
-          // §15/Stage 25.1.2 §7/§8 — a final answer must never leak internal
-          // terminology, legacy-engine execution strings, or raw planner JSON.
-          const leaked =
-            /\b(ResultRef|RowSetRef|AgentLoop|tool_call|AgentDecision|VerifiedFact|sourceVersion|derivedFrom|model_error|maxAgentSteps|maxWorkbookReads|op#\d)\b/i.test(
-              state.finalAnswer,
-            ) || containsForbiddenLeak(state.finalAnswer);
-          let answer = state.finalAnswer;
-          if (!check.ok || leaked) {
-            const grid =
-              primary && primary.columns && primary.rows
-                ? `\n\n${renderGridMarkdown(primary.columns, primary.rows)}`
-                : "";
-            answer =
-              (lang === "ru"
-                ? "Я выполнил анализ, но не смог подтвердить все числа в сводке по результатам инструментов. Ниже — проверенная таблица."
-                : "I ran the analysis but couldn't verify every figure in the summary against the tool results. Here is the verified table.") + grid;
-          }
-          append({ kind: "response", id: nextId("res"), streaming: false, text: answer });
-          conversationRef.current = [
-            ...conversationRef.current,
-            { role: "user", content: userRequest },
-            { role: "assistant", content: answer },
-          ];
-          append({ kind: "activity", id: nextId("act"), activity: "completed", title: uiText(lang, "done"), status: "done" });
-          return;
-        }
-
-        // terminated — a safe, bounded message; never unconstrained prose, never a proposal.
-        const reason = state.terminationReason;
-        const en =
-          reason === "model_error" || reason === "repeated_tool_call"
-            ? "I couldn't work out a reliable way to answer that. Could you rephrase it or narrow it down?"
-            : reason === "read_budget" || reason === "step_budget"
-              ? "I couldn't finish investigating this within the limits for one turn. Try narrowing the question to a specific sheet or metric."
-              : "I wasn't able to complete that analysis.";
-        const ru =
-          reason === "model_error" || reason === "repeated_tool_call"
-            ? "Не удалось составить надёжный план ответа. Переформулируйте запрос или сузьте его."
-            : reason === "read_budget" || reason === "step_budget"
-              ? "Не удалось завершить анализ в пределах лимитов за один ход. Уточните вопрос — конкретный лист или показатель."
-              : "Не удалось выполнить этот анализ.";
-        const body = lang === "ru" ? ru : en;
-        append({ kind: "response", id: nextId("res"), streaming: false, text: body });
-        conversationRef.current = [
-          ...conversationRef.current,
-          { role: "user", content: userRequest },
-          { role: "assistant", content: body },
-        ];
-      };
-
-      const runAgentTask = async (
-        userRequest: string,
-        resume?: { readonly state: AgentLoopState; readonly answer: string },
-      ): Promise<void> => {
-        recordAnalyticalExecution("stage24_agent");
-        const registry = createAgentToolRegistry(); // read-only tools only (no mutation tool exists)
-        const deps = createProductionAgentDeps(port, { language: lang === "ru" ? "ru" : "en" });
-        const map = await safeBuildMap();
-        const workbookContext = buildAgentWorkbookContext(map, selectionRef.current);
-        const controller = new AbortController();
-        const actId = nextId("act");
-        append({ kind: "activity", id: actId, activity: "analyzing", title: uiText(lang, "analyzing"), status: "running" });
-        const seenActivity = new Set<string>();
-        let state: AgentLoopState;
-        try {
-          state = await runAgentLoop({
-            taskId: nextId("agt"),
-            request: userRequest,
-            language: lang === "ru" ? "ru" : "en",
-            registry,
-            deps,
-            workbookContext,
-            ...(resume ? { resume } : {}),
-            decide: (dctx) =>
-              chatClient.decideAgentStep!(
-                {
-                  originalUserRequest: dctx.originalUserRequest,
-                  language: dctx.language,
-                  history: boundedHistory(conversationRef.current).map((m) => ({ role: m.role, content: m.content })),
-                  workbookContext: dctx.workbookContext,
-                  toolSchemas: dctx.toolSchemas,
-                  observations: dctx.observations,
-                  iteration: dctx.iteration,
-                  remainingSteps: dctx.remainingSteps,
-                  remainingReads: dctx.remainingReads,
-                  ...(model ? { model } : {}),
-                },
-                controller.signal,
-              ),
-            onStep: (step) => {
-              const label = agentActivityLabel(step, lang, seenActivity);
-              if (label) append({ kind: "activity", id: nextId("act"), activity: "calculating", title: label, status: "done" });
-            },
-          });
-        } catch (error) {
-          setActivity(actId, "error");
-          append({ kind: "notice", id: nextId("ntc"), tone: "error", text: error instanceof Error ? error.message : "The analysis agent could not run." });
-          return;
-        }
-        setActivity(actId, "done");
-        finalizeAgentRun(state, userRequest, map?.sourceIdentity);
-      };
+      // Stage 24.4 — the flat-records capability path, owned by its module.
+      const runAgentTask = (userRequest: string, resume?: { readonly state: AgentLoopState; readonly answer: string }): Promise<void> =>
+        runFlatRecordsTurn(userRequest, flatRecordsContext(lang), resume);
 
       const runCrossSheetComparison = async (forcedFamily?: string): Promise<void> => {
         const map = await safeBuildMap();
@@ -1325,7 +542,7 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
             return true;
           }
           if (!(await resultIsFresh(ref))) {
-            append({ kind: "response", id: nextId("res"), streaming: false, text: lang === "ru" ? STALE_RU : STALE_EN });
+            helpers.sayStaleSource();
             return true;
           }
           const es = extractEntitySet({ columns: [ref.columns[colIdx]!], rows: ref.rows.map((r) => [r[colIdx] ?? null]) });
@@ -1467,325 +684,14 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
       // ----- Stage 26.8 §4–§21: THE UNIFIED ANALYTICAL ENGINE (V2) ---------
       //
       // One decision, in front of every analytical route this file contains.
-      // The §3 audit counted eleven branches below that can answer a question
-      // about a table; §4 says exactly one engine may own a turn, so V2 is not
-      // inserted among them — it is asked FIRST, and when it answers "mine",
-      // none of them runs at all.
+      // §4 says exactly one engine may own a turn, so V2 is not inserted among
+      // the branches below — it is asked FIRST, and when it answers "mine",
+      // none of them runs at all. §11 — and it does not hand a turn back:
+      // `runAnalyticalTurn` ends the turn inside itself, so a V2 defect is
+      // always visible as a V2 answer.
       //
-      // §11 — and it does not hand a turn back. Once V2 owns a turn its
-      // failures are V2's failures and the user sees a V2 message; sending the
-      // same request on to Stage 24/25 would make every V2 defect invisible,
-      // which is the one thing human testing cannot afford.
-
-      /** Set when the live selection is a table V2 does not analyse (§6/§39). */
-      let v2SelectionIsForeign = false;
-
-      /** §14 — the table identity V2 analyses: the live selection, or its own memory. */
-      const resolveV2Table = async (): Promise<{ readonly schema: TableSchema; readonly grids: AnalysisGrids; readonly snap: SelectionSnapshot } | null> => {
-        const induce = (snap: SelectionSnapshot): TableSchema => {
-          let startsBelowRow1 = false;
-          try {
-            const { localAddress } = splitSheetAddress(snap.address);
-            startsBelowRow1 = parseLocalRange(localAddress || snap.address).start.row > 0;
-          } catch {
-            /* keep false */
-          }
-          return induceTableSchema({
-            values: snap.values,
-            numberFormats: snap.numberFormats,
-            formulas: snap.formulas,
-            sheetName: snap.sheetName,
-            // §14 — the canonical RANGE identity, never the active cell.
-            sourceRange: snap.address,
-            sourceVersion: sourceVersionOf(snap),
-            startsBelowRow1,
-          });
-        };
-        const usable = (snap: SelectionSnapshot | undefined, schema: TableSchema | undefined): schema is TableSchema =>
-          Boolean(snap && schema && schema.orientation !== "row_records" && schema.confidence >= 0.5);
-
-        let snap: SelectionSnapshot | undefined;
-        try {
-          snap = await readSelectionSnapshot(port);
-        } catch {
-          snap = undefined;
-        }
-        let schema = snap ? induce(snap) : undefined;
-        // A flat records list under the cursor is Stage 24's, not V2's — and
-        // saying so here is what stops V2's own remembered table from pulling
-        // the turn back below.
-        v2SelectionIsForeign = Boolean(
-          schema &&
-            schema.orientation === "row_records" &&
-            schema.confidence >= 0.5 &&
-            // …and it is an actual TABLE. A single cell inside the table under
-            // discussion also induces "records", and treating that as a
-            // different table breaks the drift fallback two lines below.
-            schema.rowAxis.length >= 3 &&
-            (snap?.columnCount ?? 0) >= 2,
-        );
-        // §15 — SELECTION DRIFT. One cell inside the analysed table does not
-        // induce a table of its own; fall back to the range this conversation is
-        // already about, which is what keeps the analytical context intact.
-        // …and it is also the reason not to reach for the remembered table
-        // below: the fallback is for a cell inside the table under discussion,
-        // not for a different table the person deliberately selected.
-        const known = analyticalStateRef.current.tableRef;
-        if (!usable(snap, schema) && !v2SelectionIsForeign && known) {
-          const knownSnap = await readAddressSnapshot(port, known.sourceRange).catch(() => undefined);
-          if (knownSnap) {
-            const knownSchema = induce(knownSnap);
-            if (usable(knownSnap, knownSchema)) {
-              snap = knownSnap;
-              schema = knownSchema;
-            }
-          }
-        }
-        if (!usable(snap, schema)) return null;
-        return { schema, grids: { values: snap!.values, numberFormats: snap!.numberFormats }, snap: snap! };
-      };
-
-      const runUnifiedEngineV2 = async (
-        v2Text: string,
-        table: { readonly schema: TableSchema; readonly grids: AnalysisGrids; readonly snap: SelectionSnapshot } | null,
-      ): Promise<void> => {
-        setLanguage(lang);
-        setBusy(true);
-        append({ kind: "command", id: nextId("cmd"), text: v2Text });
-        recordAnalyticalExecution("analytical_engine_v2");
-        const seq = (turnSeqRef.current += 1);
-        const language: ResponseLanguage = lang === "ru" ? "ru" : "en";
-        const say = (body: string, outcome: "answered" | "clarify" | "failed", v2TurnId?: string): void => {
-          append({ kind: "response", id: nextId("res"), streaming: false, text: body });
-          conversationRef.current = [...conversationRef.current, { role: "user", content: v2Text }, { role: "assistant", content: body }];
-          finishTurn(outcome, v2TurnId);
-        };
-
-        try {
-          if (!table) {
-            // §11/§14 — V2 owns this turn (the conversation is analytical and has
-            // a table behind it) but this message could not be tied to one. That
-            // is a V2 answer, not a reason to restart the cascade.
-            say(
-              language === "ru"
-                ? "Не удалось определить таблицу для анализа — выделите диапазон с данными и повторите вопрос."
-                : "I couldn't work out which table to analyse — select the data range and ask again.",
-              "failed",
-            );
-            return;
-          }
-          selectionRef.current = table.snap;
-
-          const turnStarted = Date.now();
-          setTurnStartedAt(turnStarted);
-          let openStep: { readonly id: string; readonly title: string } | null = null;
-          const timeline: { readonly id: string; detail: ExecutionDetail }[] = [];
-          const liveExecutionId = nextId("exec");
-          const liveTitle = language === "ru" ? "Выполняю анализ" : "Running analysis";
-          const refreshExecution = (status: "running" | "done" | "error", title = liveTitle, timings: ExecutionTimings | null = null): void => {
-            setEntries((current) =>
-              current.map((entry) =>
-                entry.id === liveExecutionId && entry.kind === "execution"
-                  ? {
-                      ...entry,
-                      status,
-                      title,
-                      details: timeline.map((item) => item.detail),
-                      metrics: timings ? executionMetrics(timings, language) : entry.metrics,
-                    }
-                  : entry,
-              ),
-            );
-          };
-          append({ kind: "execution", id: liveExecutionId, title: liveTitle, status: "running", details: [], metrics: [] });
-          const recordStep = (id: string, detail: ExecutionDetail): void => {
-            timeline.push({ id, detail });
-            refreshExecution("running");
-          };
-          const closeOpenStep = (): void => {
-            if (openStep) {
-              const id = openStep.id;
-              const record = timeline.find((t) => t.id === id);
-              if (record && record.detail.kind === "step") record.detail = { ...record.detail, status: "done" };
-              refreshExecution("running");
-            }
-            openStep = null;
-          };
-          const onProgress = (event: ExecutionEvent): void => {
-            if (seq !== turnSeqRef.current) return;
-            const step = progressStepFor(event, language);
-            if (!step) return;
-            if (step.kind === "code") {
-              closeOpenStep();
-              const codeId = nextId("code");
-              recordStep(codeId, { kind: "code", title: step.title, code: step.code, attempt: step.attempt });
-              return;
-            }
-            if (step.status === "running" && openStep?.title === step.title) return;
-            closeOpenStep();
-            const id = nextId("act");
-            recordStep(id, {
-              kind: "step",
-              title: step.title,
-              status: step.status,
-              ...(step.detail !== undefined ? { detail: step.detail } : {}),
-              ...(step.durationMs !== undefined ? { durationMs: step.durationMs } : {}),
-              ...(step.diagnostics !== undefined ? { diagnostics: step.diagnostics } : {}),
-            });
-            if (step.status === "running") openStep = { id, title: step.title };
-          };
-          const collapseTurn = (status: "done" | "error", timings: ExecutionTimings | null): void => {
-            closeOpenStep();
-            const elapsed = formatSeconds(Date.now() - turnStarted, language);
-            const runs = timings?.pythonExecutionCount ?? 0;
-            setEntries((current) => current.map((entry) => entry.id === liveExecutionId && entry.kind === "execution" ? {
-              ...entry,
-              title: status === "error" ? stoppedLabel(elapsed, language) : completionLabel(elapsed, language),
-              ...(runs > 0 ? { subtitle: pythonSummaryLabel(runs, language) } : {}),
-              status,
-              details: timeline.map((item) => item.detail),
-              metrics: timings ? executionMetrics(timings, language) : [],
-            } : entry));
-          };
-          onProgress({ kind: "workbook_read", sheet: table.schema.sheetName, range: splitSheetAddress(table.schema.sourceRange).localAddress });
-
-          const controller = new AbortController();
-          v2AbortRef.current = controller;
-          const turnId = nextId("turn");
-          const turn = await runAnalyticalEngine({
-            turnId,
-            request: v2Text,
-            schema: table.schema,
-            grids: table.grids,
-            language,
-            state: analyticalStateRef.current,
-            onProgress,
-            decide: (messages) => chatClient.planAnalyticalTurn!(messages, controller.signal, model),
-            narrate: async (messages) => (typeof chatClient.narrate === "function" ? chatClient.narrate(messages, controller.signal, model) : ""),
-            // Stage 27 §4 — the code sandbox, when this host can bound it.
-            //
-            // `undefined` here is not a degraded mode, it is the honest one:
-            // the planner is never told the sandbox exists, and a request that
-            // needs one is refused with a capability error rather than
-            // answered with a different operation (§5).
-            //
-            // §69 — the workbook version is read through this callback at the
-            // moment the executor needs it, never captured once, so an edit
-            // made while an analysis runs is still detected.
-            ...(typeof chatClient.generateAnalysisCode === "function"
-              ? (() => {
-                  const analysis = analysisCapability({
-                    generateCode: (messages) => chatClient.generateAnalysisCode!(messages, controller.signal, model),
-                    currentSourceVersion: () =>
-                      selectionRef.current ? sourceVersionOf(selectionRef.current) : table.schema.sourceVersion,
-                  });
-                  return analysis ? { analysis } : {};
-                })()
-              : {}),
-          });
-
-          // §21 — a cancelled turn appends nothing. `reset` bumps the sequence and
-          // aborts the transport; whatever arrives afterwards belongs to a chat
-          // that no longer exists, and the state it computed is dropped with it.
-          if (seq !== turnSeqRef.current) return;
-          closeOpenStep();
-          recordTurnTimings(turn.timings);
-
-          if (turn.kind === "answered") {
-            // §12/§17 — the conversation's state is whatever the ENGINE committed
-            // from its verified execution. The task pane stores it; never edits it.
-            analyticalStateRef.current = turn.state;
-            // §18 — the last gate. A body carrying a result id, a decision key or
-            // a typed error code was built from an internal string somewhere, and
-            // is replaced rather than shown.
-            const clean = containsInternalLeak(turn.body) ? leakReplacement(turn.analysis, language) : turn.body;
-            const body = [clean, turn.usedFallback ? fallbackNote(language) : "", provenanceLine(table.schema.sheetName, table.schema.sourceRange, language)]
-              .filter((p) => p !== "")
-              .join("\n\n");
-            // §36/§37 — the ONE typed handoff between the two worlds.
-            //
-            // V2 is read-only, and a mutation stays on the deterministic
-            // Preview → Approve → Execute → Undo path. So the bridge is the
-            // shape Stage 24 already acts on: the verified primary result,
-            // committed as a ResultRef, so a FOLLOW-UP mutation ("выдели их
-            // красным") has something real to act on. No Office.js call is ever
-            // constructed by the model, and nothing about this turn mutated the
-            // workbook — the next turn asks for that, explicitly, and gets a
-            // Preview it must approve.
-            sessionMemoryRef.current = rememberResult(sessionMemoryRef.current, {
-              turnId,
-              kind: "temporal_analysis",
-              title: turn.analysis.primary.tool,
-              spec: { op: "analytical_engine_v2", tool: turn.analysis.primary.tool },
-              columns: turn.analysis.primary.fields.map((f) => f.name),
-              rows: turn.analysis.primary.rows.map((r) => r.map((c) => c as CellValue)),
-              rowsTruncated: false,
-              sourceSheet: table.schema.sheetName,
-              sourceRange: table.schema.sourceRange,
-              sourceVersion: table.schema.sourceVersion,
-            });
-            collapseTurn("done", turn.timings);
-            say(body, "answered", turnId);
-            return;
-          }
-
-          if (turn.kind === "clarify") {
-            // §29 — an exhausted clarification loop still returns the state, but
-            // the engine has already declined to suspend anything: the next
-            // message starts clean instead of feeding the loop again.
-            analyticalStateRef.current = turn.state;
-            const question = containsInternalLeak(turn.question)
-              ? language === "ru"
-                ? "Уточните, пожалуйста, какой показатель и за какой период вас интересует."
-                : "Could you say which indicator and which period you mean?"
-              : turn.question;
-            collapseTurn("done", turn.timings);
-            say(question, "clarify", turnId);
-            return;
-          }
-
-          // §11/§32 — a clean bounded failure, phrased for a person. The
-          // conversation state is untouched, so the next turn still has whatever
-          // the last successful one established.
-          const analysisFailure = turn.trace.analysisFailure;
-          collapseTurn("error", turn.timings);
-          say(
-            turn.reason === "analysis_unavailable" && analysisFailure
-              ? sandboxFailureMessage(
-                  {
-                    attempts: analysisFailure.attempts,
-                    ...(analysisFailure.objective !== undefined ? { objective: analysisFailure.objective } : {}),
-                    code: analysisFailure.code,
-                  },
-                  language,
-                )
-              : v2FailureMessage(turn.reason, language),
-            "failed",
-            turnId,
-          );
-        } catch (error) {
-          if (seq !== turnSeqRef.current) return;
-          say(
-            error instanceof Error && error.name === "AbortError"
-              ? language === "ru"
-                ? "Запрос отменён."
-                : "Request cancelled."
-              : v2FailureMessage("model_error", language),
-            "failed",
-          );
-        } finally {
-          if (seq === turnSeqRef.current) {
-            v2AbortRef.current = null;
-            setBusy(false);
-            setTurnStartedAt(null);
-          }
-        }
-      };
-
-      // §4 — the ownership decision itself. Cheap checks first; the table is
-      // resolved only for a turn that has already passed every one of them, and
-      // a turn that resolves no table AND has no analytical table behind it was
-      // never accepted, so continuing the cascade is not a §11 fallback.
+      // Cheap checks first; the table is resolved only for a turn that has
+      // already passed every one of them.
       {
         const mem0 = sessionMemoryRef.current;
         const ownerCtx = buildOwnershipContext(text, {
@@ -1800,12 +706,12 @@ export function useAgent({ chatClient, port, model }: UseAgentOptions): AgentCon
         });
         const provisional = classifyTurnOwner({ ...ownerCtx, hasTable: true, selectionIsForeign: false });
         if (provisional.owner === "V2_OWNED") {
-          const v2Table = await resolveV2Table();
-          const decision = classifyTurnOwner({ ...ownerCtx, hasTable: v2Table !== null, selectionIsForeign: v2SelectionIsForeign });
+          const resolved = await resolveAnalyticalTable(port, analyticalStateRef.current.tableRef?.sourceRange);
+          const decision = classifyTurnOwner({ ...ownerCtx, hasTable: resolved.table !== null, selectionIsForeign: resolved.selectionIsForeign });
           if (decision.dropSuspension) analyticalStateRef.current = withoutSuspension(analyticalStateRef.current);
           if (decision.owner === "V2_OWNED") {
             beginTurn(nextId("uturn"), text, decision.owner, decision.reason);
-            await runUnifiedEngineV2(text, v2Table);
+            await runAnalyticalTurn(resolved.table, analyticalTurnContext(text, lang));
             return;
           }
           beginTurn(nextId("uturn"), text, decision.owner, decision.reason);
