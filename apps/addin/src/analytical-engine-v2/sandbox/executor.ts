@@ -299,6 +299,40 @@ export function validateClusterMembership(dataset: SandboxDataset, result: Sandb
   const problems: string[] = [];
   if (notEntities.length > 0) problems.push(`group members must be the clustered entities, not something else: ${notEntities.join("; ")}`);
   if (duplicates.size > 0) problems.push(`these entities appear in more than one group: ${[...duplicates].map((d) => `"${d}"`).join(", ")}`);
+  if (notEntities.length === 0) {
+    const excluded = new Set((result.excludedEntities ?? []).map((e) => e.entity.trim()));
+    const uncovered = [...entities].filter((e) => !covered.has(e) && !excluded.has(e));
+    if (uncovered.length > 0) {
+      problems.push(
+        `every entity must belong to exactly one group unless explicitly excluded with a reason; not grouped and not excluded: ${uncovered.map((e) => `"${e}"`).join(", ")}`,
+      );
+    }
+    const unknownExclusions = [...excluded].filter((e) => !entities.has(e));
+    if (unknownExclusions.length > 0) {
+      problems.push(`excludedEntities names entities not in the table: ${unknownExclusions.map((e) => `"${e}"`).join(", ")}`);
+    }
+  }
+  return problems;
+}
+
+export function validateClusterKSelection(result: SandboxResult): readonly string[] {
+  if (result.groups.length < 2) return [];
+  const params = result.method?.parameters ?? {};
+  const problems: string[] = [];
+  const selectionMethod = params["selectionMethod"];
+  if (typeof selectionMethod !== "string" || selectionMethod.trim() === "") {
+    problems.push('a clustering result must record method.parameters.selectionMethod naming how the number of groups was chosen, not a fixed n_clusters with no selection evidence');
+  }
+  const candidateK = params["candidateK"];
+  const kScores = params["kScores"];
+  const hasCandidates = Array.isArray(candidateK) && candidateK.length >= 2;
+  const hasScores = typeof kScores === "object" && kScores !== null && Object.keys(kScores).length >= 2;
+  if (!hasCandidates && !hasScores) {
+    problems.push("a clustering result must record method.parameters.candidateK or method.parameters.kScores showing more than one candidate number of groups was evaluated");
+  }
+  if (typeof params["n_clusters"] !== "number" && typeof params["selectedK"] !== "number") {
+    problems.push("a clustering result must record the selected number of groups as method.parameters.n_clusters or selectedK");
+  }
   return problems;
 }
 
@@ -530,7 +564,8 @@ export async function executeAnalysis(params: ExecuteAnalysisParams): Promise<Sa
     const explored = validateExplorationCoverage(params.plan.explorationDimensions ?? [], committed);
     const labels = validateSubjectLabels(params.plan, params.dataset, committed);
     const clusterAxis = validateClusterMembership(params.dataset, committed);
-    const problems = [...normalized.ambiguous, ...structural, ...coverage, ...methodChoice, ...explored, ...labels, ...clusterAxis];
+    const clusterK = validateClusterKSelection(committed);
+    const problems = [...normalized.ambiguous, ...structural, ...coverage, ...methodChoice, ...explored, ...labels, ...clusterAxis, ...clusterK];
     if (problems.length > 0) {
       // Stage 27.x.1 §12 — repair the smallest failed layer.
       //

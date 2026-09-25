@@ -267,6 +267,7 @@ export interface SandboxResult {
   /** §32 — which dataset, at which freshness, produced this. */
   readonly sourceLineage: SourceLineage;
   readonly artifacts: readonly SandboxArtifact[];
+  readonly excludedEntities?: readonly { readonly entity: string; readonly reason: string }[];
 }
 
 export interface SourceLineage {

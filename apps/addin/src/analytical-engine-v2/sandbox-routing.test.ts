@@ -20,7 +20,7 @@ function sandboxResult(overrides: Partial<SandboxResult> = {}): SandboxResult {
   return {
     executionId: "exec_1",
     status: "ok",
-    method: { name: "kmeans", parameters: { n_clusters: 2 }, randomState: 0 },
+    method: { name: "kmeans", parameters: { n_clusters: 2, selectionMethod: "silhouette", candidateK: [2, 3, 4] }, randomState: 0 },
     // §19 — the shared decision below commits to two methods, so the result
     // has to carry two that actually ran. A fixture that promised a comparison
     // and delivered one method would be testing the engine against exactly the
@@ -41,6 +41,7 @@ function sandboxResult(overrides: Partial<SandboxResult> = {}): SandboxResult {
       { label: "steady", members: ["Throughput index", "Queue depth"], profile: { mean_change: 0.01 } },
       { label: "volatile", members: ["Defect ratio"], profile: { mean_change: -0.14 } },
     ],
+    excludedEntities: [{ entity: "Handling cost", reason: "did not converge into either cluster at this k" }],
     models: [],
     diagnostics: { silhouette: 0.62 },
     findingsCandidates: [],

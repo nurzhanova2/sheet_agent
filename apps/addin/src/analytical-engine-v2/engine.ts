@@ -317,12 +317,16 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
   // measured against the data (§39/§52/§53). Narration is driven by these, not
   // by the raw tables, which is what §41 asks for.
   const requestedRankingCount =
-    run.outcome.answerIntent?.shape === "ranking" ? (run.outcome.answerIntent.count ?? null) : null;
+    run.outcome.answerIntent?.shape === "ranking"
+      ? (run.outcome.answerIntent.count ?? null)
+      : analysis.primary.metadata["overviewEvidence"] === true || analysis.primary.metadata["outputName"] === "groups"
+        ? analysis.primary.rows.length
+        : null;
   const findings = buildFindings(
     analysis.primary,
     analysis.supporting,
     { schema: params.schema, grids: params.grids, locale: params.language },
-    8,
+    Math.max(8, requestedRankingCount ?? 0),
     requestedRankingCount,
   );
   const grounded = groundFindings(findings, groundingContextOf(params.schema, params.grids));

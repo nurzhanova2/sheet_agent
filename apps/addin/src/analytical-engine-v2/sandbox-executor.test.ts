@@ -75,7 +75,7 @@ const err = (error: SandboxError): ExecuteOutcome => ({ ok: false, error, durati
 
 describe("Stage 27 §29 — a result must contain what the plan asked for", () => {
   it("accepts a result carrying the requested shape", () => {
-    const result = emptyResult({ groups: [{ label: "A", members: ["a"] }] });
+    const result = emptyResult({ groups: [{ label: "A", members: ["a", "b"] }] });
     expect(validateAgainstPlan(plan("groups"), result)).toHaveLength(0);
   });
 
@@ -128,7 +128,7 @@ describe("Stage 27 §66 — bounded repair, driven by the generator", () => {
   it("retries a runtime error and succeeds on the second attempt", async () => {
     const runtime = fakeRuntime([
       err({ code: "SANDBOX_RUNTIME_ERROR", message: "KeyError: 'Feb'", repairHint: "KeyError: 'Feb'" }),
-      ok(emptyResult({ groups: [{ label: "A", members: ["a"] }] })),
+      ok(emptyResult({ groups: [{ label: "A", members: ["a", "b"] }] })),
     ]);
     const generate = vi.fn(async (req: CodeRequest) => `code_v${req.attempt}`);
     const outcome = await executeAnalysis({ runtime, plan: plan(), dataset: dataset(), generate, currentSourceVersion: () => "v1" });
@@ -142,7 +142,7 @@ describe("Stage 27 §66 — bounded repair, driven by the generator", () => {
   it("treats a plan-coverage miss as repairable and says what was missing", async () => {
     const runtime = fakeRuntime([
       ok(emptyResult({ tables: [{ name: "t", columns: ["m"], rows: [["a"]] }] })),
-      ok(emptyResult({ groups: [{ label: "A", members: ["a"] }] })),
+      ok(emptyResult({ groups: [{ label: "A", members: ["a", "b"] }] })),
     ]);
     const generate = vi.fn(async (req: CodeRequest) => `code_v${req.attempt}`);
     const outcome = await executeAnalysis({ runtime, plan: plan("groups"), dataset: dataset(), generate, currentSourceVersion: () => "v1" });
@@ -164,7 +164,7 @@ describe("Stage 27 §66 — bounded repair, driven by the generator", () => {
     // §12's cheap repair is only safe because it is gated on evidence that a
     // number was produced. An empty envelope did not get that far, and telling
     // it to keep a method that never ran would be advice about nothing.
-    const runtime = fakeRuntime([ok(emptyResult({})), ok(emptyResult({ groups: [{ label: "A", members: ["a"] }] }))]);
+    const runtime = fakeRuntime([ok(emptyResult({})), ok(emptyResult({ groups: [{ label: "A", members: ["a", "b"] }] }))]);
     const generate = vi.fn(async (req: CodeRequest) => `code_v${req.attempt}`);
     const outcome = await executeAnalysis({ runtime, plan: plan("groups"), dataset: dataset(), generate, currentSourceVersion: () => "v1" });
 
@@ -201,7 +201,7 @@ describe("Stage 27 §66 — bounded repair, driven by the generator", () => {
 
 describe("Stage 27 §69 — freshness is checked twice", () => {
   it("refuses to start when the workbook has already moved", async () => {
-    const runtime = fakeRuntime([ok(emptyResult({ groups: [{ label: "A", members: ["a"] }] }))]);
+    const runtime = fakeRuntime([ok(emptyResult({ groups: [{ label: "A", members: ["a", "b"] }] }))]);
     const outcome = await executeAnalysis({ runtime, plan: plan(), dataset: dataset("v1"), generate: async () => "code", currentSourceVersion: () => "v2" });
 
     expect(outcome.ok).toBe(false);
@@ -212,7 +212,7 @@ describe("Stage 27 §69 — freshness is checked twice", () => {
   });
 
   it("refuses to commit a result whose data moved while it ran", async () => {
-    const runtime = fakeRuntime([ok(emptyResult({ groups: [{ label: "A", members: ["a"] }] }))]);
+    const runtime = fakeRuntime([ok(emptyResult({ groups: [{ label: "A", members: ["a", "b"] }] }))]);
     let version = "v1";
     const outcome = await executeAnalysis({
       runtime,
@@ -261,7 +261,7 @@ describe("Stage 27 §70/§62 — cancellation and identity", () => {
   });
 
   it("reports every attempt to the observer (§71)", async () => {
-    const runtime = fakeRuntime([err({ code: "SANDBOX_RUNTIME_ERROR", message: "boom" }), ok(emptyResult({ groups: [{ label: "A", members: ["a"] }] }))]);
+    const runtime = fakeRuntime([err({ code: "SANDBOX_RUNTIME_ERROR", message: "boom" }), ok(emptyResult({ groups: [{ label: "A", members: ["a", "b"] }] }))]);
     const seen: { attempt: number; ok: boolean }[] = [];
     await executeAnalysis({
       runtime,
