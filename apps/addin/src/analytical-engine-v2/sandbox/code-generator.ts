@@ -91,11 +91,19 @@ export function describeDataset(dataset: SandboxDataset): string {
     return `  - ${bits.join(", ")}`;
   });
   const sample = dataset.rows.slice(0, 3).map((row) => `  ${JSON.stringify(row)}`);
+  const hasEntityAxis = dataset.columns.some((c) => c.semanticType === "metric_label");
+  const hasTimeAxis = (dataset.periods?.length ?? 0) > 0;
   return [
     `Sheet "${dataset.sheet}", ${dataset.rows.length} rows × ${dataset.columns.length} columns.`,
     "Columns:",
     ...lines,
     ...(dataset.periods && dataset.periods.length > 0 ? [`Periods, in order: ${dataset.periods.join(", ")}`] : []),
+    ...(hasEntityAxis && hasTimeAxis
+      ? [
+          `Each of the ${dataset.rows.length} ROWS is one entity to analyze on its own — cluster, compare or rank ROWS, never the period columns.`,
+          `The ${dataset.periods!.length} numeric COLUMNS are points in time, not separate entities: numeric_data.index (or entity_data's label column) names the entities, numeric_data.columns names the periods.`,
+        ]
+      : []),
     "First rows:",
     ...sample,
   ].join("\n");

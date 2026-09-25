@@ -262,6 +262,46 @@ export function validateSubjectLabels(plan: SandboxPlan, dataset: SandboxDataset
   ];
 }
 
+function entityLabelsOf(dataset: SandboxDataset): ReadonlySet<string> {
+  const labelColumns = dataset.columns
+    .map((c, i) => ({ semanticType: c.semanticType, index: i }))
+    .filter((c) => c.semanticType === "metric_label" || c.semanticType === "category" || c.semanticType === "entity_id");
+  const labels = new Set<string>();
+  for (const row of dataset.rows) {
+    for (const { index } of labelColumns) {
+      const value = row[index];
+      if (typeof value === "string" && value.trim() !== "") labels.add(value.trim());
+    }
+  }
+  return labels;
+}
+
+export function validateClusterMembership(dataset: SandboxDataset, result: SandboxResult): readonly string[] {
+  if (result.groups.length === 0) return [];
+  const entities = entityLabelsOf(dataset);
+  if (entities.size === 0) return [];
+  const periods = new Set((dataset.periods ?? []).map((p) => p.trim()));
+  const notEntities: string[] = [];
+  const duplicates = new Set<string>();
+  const covered = new Set<string>();
+  for (const group of result.groups) {
+    for (const raw of group.members) {
+      const member = raw.trim();
+      if (member === "") continue;
+      if (!entities.has(member)) {
+        notEntities.push(periods.has(member) ? `"${member}" is a period, not one of the clustered entities` : `"${member}" is not one of the table's entities`);
+        continue;
+      }
+      if (covered.has(member)) duplicates.add(member);
+      else covered.add(member);
+    }
+  }
+  const problems: string[] = [];
+  if (notEntities.length > 0) problems.push(`group members must be the clustered entities, not something else: ${notEntities.join("; ")}`);
+  if (duplicates.size > 0) problems.push(`these entities appear in more than one group: ${[...duplicates].map((d) => `"${d}"`).join(", ")}`);
+  return problems;
+}
+
 /**
  * §29 — structural sanity of the envelope itself, independent of the plan.
  *
@@ -489,7 +529,8 @@ export async function executeAnalysis(params: ExecuteAnalysisParams): Promise<Sa
     const methodChoice = validateMethodChoice(params.plan, committed);
     const explored = validateExplorationCoverage(params.plan.explorationDimensions ?? [], committed);
     const labels = validateSubjectLabels(params.plan, params.dataset, committed);
-    const problems = [...normalized.ambiguous, ...structural, ...coverage, ...methodChoice, ...explored, ...labels];
+    const clusterAxis = validateClusterMembership(params.dataset, committed);
+    const problems = [...normalized.ambiguous, ...structural, ...coverage, ...methodChoice, ...explored, ...labels, ...clusterAxis];
     if (problems.length > 0) {
       // Stage 27.x.1 §12 — repair the smallest failed layer.
       //
