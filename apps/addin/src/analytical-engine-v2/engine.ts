@@ -1,23 +1,15 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §2/§9/§23/§44 — the unified analytical engine's entry point.
-//
-//   context → planner loop → explicit completion → coverage check
-//           → STATE COMMIT → narrator → narration check → answer
-//
-// The ordering is the whole point. State is committed from the VERIFIED
-// EXECUTION (§9), strictly before narration runs and regardless of what
-// narration then does — so a deterministic fallback can never cost the next
-// turn its continuity, and a narrator can never move the conversation's focus
-// (§36).
-// ---------------------------------------------------------------------------
-
 import type { AnalysisGrids } from "../app/schema/matrix-analysis.js";
 import type { TableSchema } from "../app/schema/schema-induction.js";
 import { runPlannerLoop } from "./planner/planner-loop.js";
 import type { PlannerMessage } from "./planner/planner-prompt.js";
 import { methodNoteFor } from "./narration/method-note.js";
-import { buildNarratorMessages, gateNarration, type NarrationInput, type NarratorMessage } from "./narration/narrator.js";
+import { buildNarratorMessages, buildNarratorRetryMessages, deterministicRenderEligibility, gateNarration, renderDeterministic, type NarrationInput, type NarratorMessage } from "./narration/narrator.js";
 import { buildFindings } from "./insight/extract-findings.js";
+import { groundFindings, groundingContextOf, groundingStats } from "./insight/finding-subject.js";
+import { evaluateAnswer, type AnswerEvaluation } from "./narration/answer-evaluator.js";
+import { scanPresented } from "./narration/presented-claims.js";
+import { answerIntentFromResult } from "./narration/answer-shape.js";
+import { planPresentation } from "./narration/presentation-plan.js";
 import { createAnalysisRunner, type AnalysisCapability } from "./sandbox/analysis-runner.js";
 import { commitState } from "./state/state-commit.js";
 import { storeResult, type AnalyticalConversationState, type SuspendedPlannerState } from "./state/conversation-state.js";
@@ -30,7 +22,7 @@ import {
 } from "./state/clarification-loop.js";
 import { sameTable } from "./state/state-refs.js";
 import type { ResumeContext } from "./planner/planner-loop.js";
-import { verifyCoverage } from "./verification/coverage-verifier.js";
+import { TimingRecorder, type ExecutionProgress, type ExecutionTimings } from "./production/execution-progress.js";
 import type { AnalyticalTraceV2 } from "./debug/analytical-trace.js";
 import { ENGINE_BOUNDS, type EngineAnalysis, type EngineBounds, type EngineTerminationReason } from "./types.js";
 import type { VerifiedFinding } from "./insight/verified-finding.js";
@@ -56,6 +48,7 @@ export interface EngineRunParams {
   readonly analysis?: AnalysisCapability;
   /** Stage 27 §70 — cancels planning, analysis and narration together. */
   readonly signal?: AbortSignal;
+  readonly onProgress?: ExecutionProgress;
 }
 
 export type EngineTurn =
@@ -69,6 +62,7 @@ export type EngineTurn =
       readonly findings: readonly VerifiedFinding[];
       readonly state: AnalyticalConversationState;
       readonly trace: AnalyticalTraceV2;
+      readonly timings: ExecutionTimings;
     }
   | {
       readonly kind: "clarify";
@@ -84,8 +78,15 @@ export type EngineTurn =
        */
       readonly exhausted?: boolean;
       readonly trace: AnalyticalTraceV2;
+      readonly timings: ExecutionTimings;
     }
-  | { readonly kind: "failed"; readonly reason: EngineTerminationReason; readonly detail: string; readonly trace: AnalyticalTraceV2 };
+  | {
+      readonly kind: "failed";
+      readonly reason: EngineTerminationReason;
+      readonly detail: string;
+      readonly trace: AnalyticalTraceV2;
+      readonly timings: ExecutionTimings;
+    };
 
 /**
  * §23 — one bounded coverage retry. The retry re-enters the SAME planner loop
@@ -134,6 +135,7 @@ function tableTerms(schema: TableSchema, grids: AnalysisGrids): readonly string[
 
 export async function runAnalyticalEngine(params: EngineRunParams): Promise<EngineTurn> {
   const bounds = params.bounds ?? ENGINE_BOUNDS;
+  const timings = new TimingRecorder();
 
   // §30/§31 — a short answer like "20%" means something only inside the task
   // that asked for it. When one is waiting and still valid, the planner sees
@@ -178,9 +180,8 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
 
   // §4 — built once per turn, so two analyses in one turn cannot disagree
   // about the data they were given.
-  const analyze = params.analysis
-    ? createAnalysisRunner({ capability: params.analysis, schema: params.schema, grids: params.grids })
-    : undefined;
+  const capability = params.analysis ? { ...params.analysis, ...(params.onProgress ? { onProgress: params.onProgress } : {}), timings } : params.analysis;
+  const analyze = capability ? createAnalysisRunner({ capability, schema: params.schema, grids: params.grids }) : undefined;
 
   const plan = (notes?: readonly string[]) =>
     runPlannerLoop({
@@ -194,6 +195,8 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
       ...(notes && notes.length > 0 ? { notes } : {}),
       ...(analyze ? { analyze } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+      timings,
       bounds,
     });
 
@@ -212,25 +215,35 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
     run = await plan([repeatedClarificationFeedback(prior, params.language)]);
   }
 
-  if (run.outcome.kind === "complete") {
-    const coverage = verifyCoverage(params.request, { primary: run.outcome.primary, supporting: run.outcome.supporting, answerStyle: run.outcome.answerStyle });
-    if (!coverage.ok) {
-      const retry = await runPlannerLoop({
-        turnId: params.turnId,
-        request: coverageNote(params.request, coverage.detail ?? "", params.language),
-        schema: params.schema,
-        grids: params.grids,
-        state: params.state,
-        decide: params.decide,
-        ...(analyze ? { analyze } : {}),
-        ...(params.signal ? { signal: params.signal } : {}),
-        bounds,
-      });
-      // Keep the retry only when it genuinely covers more; never regress.
-      if (retry.outcome.kind === "complete" && verifyCoverage(params.request, { primary: retry.outcome.primary, supporting: retry.outcome.supporting, answerStyle: retry.outcome.answerStyle }).ok) {
-        run = retry;
-      }
-    }
+  // §23 · Stage 28G §11/§12 — one bounded coverage retry, on the PLANNER's own
+  // declaration. The loop has already spent its in-loop correction re-binding
+  // without rerunning a tool; reaching here means N declared outputs are still
+  // not all bound, so the whole loop runs once more with a note. The number N
+  // is the planner's, never a count of verbs in the request.
+  const alreadyRanAnalysis = run.trace.rounds.some((round) => round.decision?.kind === "analyze" && round.toolResultId !== undefined);
+  if (run.outcome.kind === "complete" && run.coverage && !run.coverage.ok && !alreadyRanAnalysis) {
+    // A sandbox result is an expensive, bounded analytical lifecycle. A
+    // coverage correction may re-bind it inside the planner loop, but must not
+    // start a fresh loop with an empty ResultStore and execute Python again.
+    // Deterministic-only runs retain the bounded coverage retry below.
+    params.onProgress?.({ kind: "verifying" });
+    const verificationStarted = Date.now();
+    const retry = await runPlannerLoop({
+      turnId: params.turnId,
+      request: coverageNote(params.request, run.coverage.detail ?? "", params.language),
+      schema: params.schema,
+      grids: params.grids,
+      state: params.state,
+      decide: params.decide,
+      ...(analyze ? { analyze } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+      timings,
+      bounds,
+    });
+    // Keep the retry only when it genuinely covers more; never regress.
+    if (retry.outcome.kind === "complete" && (retry.coverage?.ok ?? true)) run = retry;
+    timings.addVerification(Date.now() - verificationStarted);
   }
 
   if (run.outcome.kind === "clarify") {
@@ -246,6 +259,7 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
         exhausted: true,
         state: cleared,
         trace: run.traceBuilder.current(),
+        timings: timings.snapshot(),
       };
     }
     // §29 — the turn stops, but the work does not evaporate. Everything the
@@ -278,12 +292,13 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
         suspended,
       },
       trace: run.trace,
+      timings: timings.snapshot(),
     };
   }
   if (run.outcome.kind === "failed") {
     // §44 — a clean bounded failure. No legacy fallback, no general chat
     // pretending to answer workbook analytics.
-    return { kind: "failed", reason: run.outcome.reason, detail: run.outcome.detail, trace: run.trace };
+    return { kind: "failed", reason: run.outcome.reason, detail: run.outcome.detail, trace: run.trace, timings: timings.snapshot() };
   }
 
   const analysis: EngineAnalysis = { primary: run.outcome.primary, supporting: run.outcome.supporting, answerStyle: run.outcome.answerStyle };
@@ -301,29 +316,208 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
   // layer: what those rows OBSERVE, with units resolved and materiality
   // measured against the data (§39/§52/§53). Narration is driven by these, not
   // by the raw tables, which is what §41 asks for.
-  const findings = buildFindings(analysis.primary, analysis.supporting, {
-    schema: params.schema,
-    grids: params.grids,
-    locale: params.language,
-  });
+  const requestedRankingCount =
+    run.outcome.answerIntent?.shape === "ranking"
+      ? (run.outcome.answerIntent.count ?? null)
+      : analysis.primary.metadata["overviewEvidence"] === true || analysis.primary.metadata["outputName"] === "groups"
+        ? analysis.primary.rows.length
+        : null;
+  const findings = buildFindings(
+    analysis.primary,
+    analysis.supporting,
+    { schema: params.schema, grids: params.grids, locale: params.language },
+    Math.max(8, requestedRankingCount ?? 0),
+    requestedRankingCount,
+  );
+  const grounded = groundFindings(findings, groundingContextOf(params.schema, params.grids));
+  const stats = groundingStats(grounded);
+  const answerIntent = run.outcome.answerIntent ?? answerIntentFromResult(analysis, grounded.visible);
+
   // §60 — and, for a sandbox analysis only, how it was computed: the method,
   // what it did to the data first, and (§19/§21) which other methods were
   // tried and on what measured grounds this one was kept.
   const method = methodNoteFor(analysis.primary);
-  const narration: NarrationInput = { request: params.request, analysis, findings, locale: params.language, ...(method ? { method } : {}) };
+  const narration: NarrationInput = {
+    request: params.request,
+    analysis,
+    answerIntent,
+    findings: grounded.visible,
+    locale: params.language,
+    heldFindings: grounded.held.length,
+    ...(method ? { method } : {}),
+  };
+  const presentationPlan = planPresentation(analysis, grounded.visible, answerIntent, method);
+  const narratedInput: NarrationInput = { ...narration, presentationPlan };
 
-  // §35/§37 — narrate, then verify. Either way the state above already stands.
+  const evaluate = (text: string): AnswerEvaluation =>
+    evaluateAnswer({
+      answer: text,
+      findings: grounded.visible,
+      request: params.request,
+      locale: params.language,
+      hasResults: analysis.primary.rows.length > 0,
+    });
+
+  let narratorLatencyMs = 0;
+  let evaluatorLatencyMs = 0;
+  let rewriteLatencyMs = 0;
+
   let draft = "";
-  try {
-    draft = await params.narrate(buildNarratorMessages(narration));
-  } catch {
-    draft = "";
+  params.onProgress?.({ kind: "composing" });
+
+  let deterministicFirst = false;
+  const deterministicPlan = deterministicRenderEligibility(narratedInput);
+  if (deterministicPlan !== null) {
+    const rendered = renderDeterministic(narratedInput);
+    const renderedEvaluation = evaluate(rendered);
+    if (rendered.trim() !== "" && renderedEvaluation.accept) {
+      deterministicFirst = true;
+      draft = rendered;
+    }
   }
-  const narrated = gateNarration(draft, narration);
+
+  let narrated: ReturnType<typeof gateNarration>;
+  let evaluation: AnswerEvaluation;
+
+  if (deterministicFirst) {
+    narrated = { text: draft, usedFallback: false, reasons: [], retryableNarration: false, unsupported: [] };
+    const evaluationStarted = Date.now();
+    evaluation = evaluate(draft);
+    evaluatorLatencyMs = Date.now() - evaluationStarted;
+  } else {
+    const narratorStarted = Date.now();
+    try {
+      draft = await params.narrate(buildNarratorMessages(narratedInput));
+    } catch {
+      draft = "";
+    }
+    narratorLatencyMs = Date.now() - narratorStarted;
+    timings.addNarration(narratorLatencyMs);
+
+    narrated = gateNarration(draft, narratedInput);
+    const evaluationStarted = Date.now();
+    evaluation = evaluate(draft);
+    evaluatorLatencyMs = Date.now() - evaluationStarted;
+  }
+
+  let narratorDrafts = deterministicFirst || draft.trim() === "" ? 0 : 1;
+  let narrationGateRejects = narrated.usedFallback ? 1 : 0;
+  let answerEvaluatorRejects = evaluation.accept ? 0 : 1;
+  let answerRewriteAttempts = 0;
+  let answerRewriteSuccesses = 0;
+  let usedMinimalFallback = false;
+  let rewriteFailureReasons: readonly string[] = [];
+  const rejectedDrafts: { stage: "draft" | "rewrite"; text: string; gateReasons: readonly string[]; evaluatorIssues: readonly string[] }[] = [];
+
+  if (!deterministicFirst && draft.trim() !== "" && (narrated.usedFallback || !evaluation.accept)) {
+    rejectedDrafts.push({ stage: "draft", text: draft, gateReasons: narrated.reasons, evaluatorIssues: evaluation.issues });
+    answerRewriteAttempts = 1;
+    let second = "";
+    params.onProgress?.({ kind: "rewriting" });
+    const rewriteStarted = Date.now();
+    try {
+      second = await params.narrate(buildNarratorRetryMessages(narratedInput, draft, narrated.unsupported, evaluation.rewriteGuidance));
+    } catch {
+      second = "";
+    }
+    rewriteLatencyMs = Date.now() - rewriteStarted;
+    timings.addNarration(rewriteLatencyMs);
+
+    if (second.trim() !== "") {
+      narratorDrafts += 1;
+      const retried = gateNarration(second, narratedInput, 2);
+      const reEvaluationStarted = Date.now();
+      const reEvaluated = evaluate(second);
+      evaluatorLatencyMs += Date.now() - reEvaluationStarted;
+      if (retried.usedFallback) narrationGateRejects += 1;
+      if (!reEvaluated.accept) answerEvaluatorRejects += 1;
+
+      if (!retried.usedFallback && reEvaluated.accept) {
+        narrated = retried;
+        evaluation = reEvaluated;
+        answerRewriteSuccesses = 1;
+      } else {
+        rewriteFailureReasons = [...reEvaluated.issues, ...(retried.usedFallback ? ["NARRATION_GATE"] : [])];
+        rejectedDrafts.push({ stage: "rewrite", text: second, gateReasons: retried.reasons, evaluatorIssues: reEvaluated.issues });
+        narrated = {
+          text: renderDeterministic(narratedInput),
+          usedFallback: true,
+          reasons: [
+            ...narrated.reasons,
+            ...retried.reasons.map((r) => `retry: ${r}`),
+            ...reEvaluated.issues.map((i) => `retry: answer quality ${i}`),
+          ],
+          retryableNarration: false,
+          unsupported: retried.unsupported,
+          ...(retried.check ? { check: retried.check } : {}),
+        };
+        evaluation = reEvaluated;
+      }
+    }
+  }
+
+  if (narrated.usedFallback) {
+    const fallbackEvaluation = evaluate(narrated.text);
+    if (!fallbackEvaluation.accept) {
+      const minimal = renderDeterministic(narratedInput, { minimal: true });
+      narrated = { ...narrated, text: minimal, reasons: [...narrated.reasons, `fallback: ${fallbackEvaluation.issues.join(", ")}`] };
+      usedMinimalFallback = true;
+    }
+  }
+
+  const presented = scanPresented({
+    text: narrated.text,
+    findings: grounded.visible,
+    request: params.request,
+    locale: params.language,
+    hasResults: analysis.primary.rows.length > 0,
+  });
+  const causalClaimsRejected = narrated.reasons.filter((r) => /asserts a cause/iu.test(r)).length;
+  const numericClaimsRejected = narrated.reasons.filter((r) => /unsupported numeric claim/iu.test(r)).length;
+
   run.traceBuilder.set({
-    narratorStatus: narrated.usedFallback ? "fallback" : "verified",
+    narratorStatus: deterministicFirst ? "deterministic" : narrated.usedFallback ? "fallback" : "verified",
     ...(narrated.reasons.length > 0 ? { narratorReasons: narrated.reasons } : {}),
+    ...(narrated.unsupported.length > 0 ? { unsupportedClaims: narrated.unsupported } : {}),
     findings,
+    answerQuality: {
+      extractedFindings: stats.extractedFindings,
+      visibleGroundedFindings: stats.visibleGroundedFindings,
+      heldFindings: stats.heldFindings,
+      unnamedSubjectFindingsHeld: stats.unnamedSubjectFindingsHeld,
+      heldByFindingType: stats.heldByFindingType,
+      heldByReason: stats.heldByReason,
+      held: grounded.held.map((entry) => ({
+        id: entry.finding.id,
+        findingType: entry.finding.findingType,
+        subject: entry.finding.subject,
+        reason: entry.reason,
+      })),
+      answerShape: answerIntent.shape,
+      ...(run.outcome.answerIntent ? {} : { answerIntentOmitted: true }),
+      deterministicFirstAnswers: deterministicFirst ? 1 : 0,
+      narratorDrafts,
+      narrationGateRejects,
+      answerEvaluatorRejects,
+      answerEvaluatorIssues: evaluation.issues,
+      rewriteFailureReasons,
+      rejectedDrafts: rejectedDrafts.map((d) => ({ ...d })),
+      answerRewriteAttempts,
+      answerRewriteSuccesses,
+      deterministicFallbacks: narrated.usedFallback ? 1 : 0,
+      minimalFallbacks: usedMinimalFallback ? 1 : 0,
+      causalClaimsRejected,
+      numericClaimsRejected,
+      unnamedSubjectClaimsPresented: presented.unnamedSubjectClaimsPresented,
+      unsupportedCausalClaimsPresented: presented.unsupportedCausalClaimsPresented,
+      unsupportedRecommendationsPresented: presented.unsupportedRecommendationsPresented,
+      rawEvidenceDumpsPresented: presented.rawEvidenceDumpsPresented,
+      unsupportedNumericClaims: narrated.unsupported.length,
+      unsupportedNumericClaimsPresented: narrated.usedFallback ? 0 : narrated.unsupported.length,
+      narratorLatencyMs,
+      evaluatorLatencyMs,
+      rewriteLatencyMs,
+    },
   });
 
   return {
@@ -332,8 +526,9 @@ export async function runAnalyticalEngine(params: EngineRunParams): Promise<Engi
     usedFallback: narrated.usedFallback,
     fallbackReasons: narrated.reasons,
     analysis,
-    findings,
+    findings: grounded.visible,
     state,
     trace: run.traceBuilder.current(),
+    timings: timings.snapshot(),
   };
 }

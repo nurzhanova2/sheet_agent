@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4 Increment 4.3 §11 — the agent evidence adapter.
-//
-// Converts the numeric cells of the agent's successful table observations into
-// VerifiedFact-compatible entries and runs the SAME strict fact gate used for
-// ordinary analytical turns (`validateClaimsAgainstFacts`). A workbook-derived
-// number in the agent's final answer that no observation supports is rejected —
-// `validateClaimsAgainstFacts` itself is not weakened or forked, it is reused.
-// Qualitative sentences (no numbers) pass untouched.
-// ---------------------------------------------------------------------------
-
 import { validateClaimsAgainstFacts, type VerifiedFact } from "../analysis/facts.js";
 import { formatNumber } from "../analysis/format-number.js";
 import type { AgentObservation } from "./types.js";
@@ -138,6 +127,21 @@ export function validateAgentAnswer(
   finalAnswer: string,
   facts: readonly VerifiedFact[],
   dataRowCounts: readonly number[] = [],
+  // Stage 27.x.1 §25 — numbers an upstream resolver has already adjudicated.
+  //
+  // The V2 narration gate resolves every numeric token against NarrationFacts,
+  // which know each value's UNIT, its deterministic rendering, and which spans
+  // of the text are entity names rather than claims — none of which is visible
+  // here. Where the two disagreed, this one was wrong: it rejected «снижение
+  // на 70,00%» because the fact reads -0.7 and the sign lives in the verb, and
+  // it rejected an answer for the digits inside «… и верни 999», which is a
+  // row LABEL. So the caller that has done that work says so, and the numeric
+  // clause below steps aside for exactly those tokens.
+  //
+  // It is not a way to silence the check. An empty set — every caller that
+  // does no resolution of its own, which is every Stage 26 path — leaves this
+  // function behaving precisely as it did.
+  resolvedNumbers: ReadonlySet<number> = new Set(),
 ): AgentAnswerCheck {
   const reasons: string[] = [];
   const lower = finalAnswer.toLowerCase();
@@ -155,7 +159,7 @@ export function validateAgentAnswer(
   ) {
     reasons.push("the answer states a cause the workbook does not establish");
   }
-  const structural = new Set<number>([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 100, ...dataRowCounts]);
+  const structural = new Set<number>([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 100, ...dataRowCounts, ...resolvedNumbers]);
   reasons.push(...validateClaimsAgainstFacts(finalAnswer, facts, structural));
   return { ok: reasons.length === 0, reasons };
 }

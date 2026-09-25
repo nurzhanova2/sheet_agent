@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4.4 §14 — one shared deterministic DISPLAY formatter.
-//
-// ResultRef rows keep exact values (claim validation always uses them). This
-// only changes what the user sees in a rendered grid / fallback table: a raw
-// float like 222.94594594594594 becomes 222.95, 0.045949999999 becomes 0.04595.
-// No `toFixed` scattered elsewhere.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 
 /** A user-facing string for one cell. Integers pass through; long floats are trimmed to ~6 significant figures. */

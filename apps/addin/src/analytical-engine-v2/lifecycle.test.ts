@@ -1,15 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.7 §43–§54 — conversation & reference lifecycle.
-//
-// THE CURRENT USER MESSAGE DEFINES THE NEW INTENT. Structured state provides
-// verified context. The planner decides how the two relate; the engine only
-// validates that a reference is the right kind, about the right table, and
-// still true (§72).
-//
-// Every test here drives the REAL engine with a scripted planner, so what is
-// asserted is the lifecycle, not a mock of it.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it } from "vitest";
 import { runAnalyticalEngine, resumableSuspension, type EngineTurn } from "./engine.js";
 import { buildEngineContext } from "./context/build-context.js";
@@ -95,7 +83,7 @@ describe("Stage 26.7 §43/§22/§52 — a five-turn chain keeps its lineage", ()
       const cmp = idOf(prompt, "change.compare_periods");
       if (!latest) return call("period.latest");
       if (!prev) return call("period.previous", { ofRef: latest });
-      if (!cmp) return call("change.compare_periods", { startPeriodRef: prev, endPeriodRef: latest });
+      if (!cmp) return call("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
       return complete(cmp);
     });
     const s1 = stateOf(t1);
@@ -177,7 +165,7 @@ describe("Stage 26.7 §44/§35/§36 — a narrator failure cannot cost the next 
     });
     expect(withFailure.kind).toBe("answered");
     if (withFailure.kind !== "answered") return;
-    expect(withFailure.usedFallback).toBe(true);
+    expect(withFailure.trace.narratorStatus).toBe("deterministic");
     const s = withFailure.state;
     expect(s.lastMetric?.metricKey).toBeTruthy();
 
@@ -352,8 +340,8 @@ describe("Stage 26.7 §50/§15 — with nothing to refer to, the engine does not
       refusal = prompt.slice(prompt.indexOf("=== ERRORS FROM YOUR PREVIOUS CALLS"));
       return JSON.stringify({ kind: "clarify", question: "Which indicator do you mean?", options: [] });
     }, { request: "Show its history." });
-    expect(refusal).toContain("NO_PREVIOUS_RESULT");
-    expect(refusal).toContain("no single metric");
+    expect(refusal).toContain("CAPABILITY_UNAVAILABLE");
+    expect(refusal).toContain("references");
   });
 
   it("a clarification question carries no engine vocabulary", async () => {
@@ -391,7 +379,7 @@ describe("Stage 26.7 §51/§21 — memory never outranks an explicit current req
       const cmp = idOf(prompt, "change.compare_periods");
       if (!latest) return call("period.latest");
       if (!prev) return call("period.previous", { ofRef: latest });
-      if (!cmp) return call("change.compare_periods", { startPeriodRef: prev, endPeriodRef: latest });
+      if (!cmp) return call("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
       return complete(cmp);
     }));
     const remembered = s1.lastPeriodRange!;
@@ -400,7 +388,7 @@ describe("Stage 26.7 §51/§21 — memory never outranks an explicit current req
     // turn 2 NAMES the first two periods explicitly
     const t2 = await turn((_r, prompt) => {
       const cmp = idOf(prompt, "change.compare_periods");
-      if (!cmp) return call("change.compare_periods", { startPeriod: first, endPeriod: second });
+      if (!cmp) return call("change.compare_periods", { startPeriod: first, endPeriod: second, periodIntent: { kind: "named_pair", start: first, end: second } });
       return complete(cmp);
     }, { state: s1, request: "Now compare the two earliest dates instead." });
 

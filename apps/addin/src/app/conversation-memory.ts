@@ -1,47 +1,20 @@
-// ---------------------------------------------------------------------------
-// Stage 24 — the SessionMemory container plus the deterministic conversational
-// reference resolver.
-//
-//  • remember* : bounded, immutable updates to SessionMemory.
-//  • resolveReference : maps "that" / "those rows" / "the chart" / "the new
-//    sheet" (EN + RU) to a structured object in memory — NEVER by scraping
-//    assistant prose. Returns `ambiguous` (never guesses) and `evicted`
-//    (the object existed but aged out) as first-class outcomes.
-//  • isUndoPhrase : "undo that" / "отмени это" → the existing undoLast path.
-//  • interpretClarificationAnswer : short replies ("Portfolio", "both",
-//    "the first one") answered against a PendingClarification.
-//  • projectMemoryForModel : the compact PRIOR RESULTS context block.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ResponseLanguage } from "./language.js";
 import { nextId } from "./agent-session.js";
 import { extractEntitySet } from "./entity-reference.js";
 import {
   MEMORY_LIMITS,
-  type AnalyticalResultSetRef,
-  type AnalyticalTableContextRef,
   type ChartRef,
-  type CompositeAnalysisRef,
   type ConversationRoute,
-  type DirectionChangeAnalysisRef,
-  type EventRef,
-  type MetricFocusRef,
-  type MetricSetRef,
   type PendingClarification,
-  type PeriodRef,
-  type RankingAnalysisRef,
-  type ResolvedWorkbookRef,
   type ResultKind,
   type ResultRef,
-  type ResultSetRef,
   type RowSetRef,
   type SessionMemory,
-  type SheetRef,
 } from "./session-memory.js";
 
 export function emptySessionMemory(): SessionMemory {
-  return { recentResults: [], resolvedEntities: [], seq: 0, knownIds: [] };
+  return { recentResults: [], seq: 0, knownIds: [] };
 }
 
 function pushKnownId(ids: readonly string[], id: string): readonly string[] {
@@ -51,7 +24,6 @@ function pushKnownId(ids: readonly string[], id: string): readonly string[] {
 type ResultInput = Omit<ResultRef, "id" | "order" | "createdAt">;
 type RowSetInput = Omit<RowSetRef, "id" | "order" | "createdAt">;
 type ChartInput = Omit<ChartRef, "id" | "order" | "createdAt">;
-type SheetInput = Omit<SheetRef, "id" | "order" | "createdAt">;
 
 /** Persists a structured analytical result, clamped to the row/column caps, evicting the oldest. */
 export function rememberResult(memory: SessionMemory, input: ResultInput): SessionMemory {
@@ -78,7 +50,6 @@ export function rememberResult(memory: SessionMemory, input: ResultInput): Sessi
     ...memory,
     recentResults,
     lastResultId: id,
-    resolvedEntities: mergeResolved(memory.resolvedEntities, input.resolved),
     seq,
     knownIds: pushKnownId(memory.knownIds, id),
   };
@@ -104,11 +75,9 @@ export function rememberDerivedResult(
     columns: derived.columns,
     rows: derived.rows,
     rowsTruncated: false,
-    facts: parent.facts,
     sourceSheet: parent.sourceSheet,
     sourceRange: parent.sourceRange,
     sourceVersion: parent.sourceVersion,
-    resolved: parent.resolved,
     derivedFromResultId: parent.id,
     transform: derived.transform,
   });
@@ -126,162 +95,6 @@ export function rememberChart(memory: SessionMemory, input: ChartInput): Session
   const id = nextId("cht");
   const ref: ChartRef = { ...input, id, order: seq, createdAt: Date.now() };
   return { ...memory, lastChart: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
-}
-
-export function rememberSheet(memory: SessionMemory, input: SheetInput): SessionMemory {
-  const seq = memory.seq + 1;
-  const id = nextId("sht");
-  const ref: SheetRef = { ...input, id, order: seq, createdAt: Date.now() };
-  return { ...memory, lastCreatedSheet: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
-}
-
-type PeriodInput = Omit<PeriodRef, "id" | "order" | "createdAt">;
-
-/** Stage 24.7 — persists the conversational period reference ("за этот же период"). */
-export function rememberPeriod(memory: SessionMemory, input: PeriodInput): SessionMemory {
-  const seq = memory.seq + 1;
-  const id = nextId("per");
-  const ref: PeriodRef = { ...input, id, order: seq, createdAt: Date.now() };
-  return { ...memory, lastPeriodRef: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
-}
-
-type CompositeInput = Omit<CompositeAnalysisRef, "id" | "order" | "createdAt">;
-
-/** Stage 24.8 §12–§14 — persists the two-interval reference ("в первом
- *  интервале… во втором…"). */
-export function rememberComposite(memory: SessionMemory, input: CompositeInput): SessionMemory {
-  const seq = memory.seq + 1;
-  const id = nextId("cmp");
-  const ref: CompositeAnalysisRef = { ...input, id, order: seq, createdAt: Date.now() };
-  return { ...memory, lastCompositeRef: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
-}
-
-type RankingInput = Omit<RankingAnalysisRef, "id" | "order" | "createdAt">;
-
-/** Stage 24.8 §11/§30/§31 — persists the explicit-interval ranking reference
- *  ("те же 5, но по абсолютному изменению"). */
-export function rememberRanking(memory: SessionMemory, input: RankingInput): SessionMemory {
-  const seq = memory.seq + 1;
-  const id = nextId("rnk");
-  const ref: RankingAnalysisRef = { ...input, id, order: seq, createdAt: Date.now() };
-  return { ...memory, lastRankingRef: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
-}
-
-type EventInput = Omit<EventRef, "id" | "order" | "createdAt">;
-
-/** Stage 24.8 §17–§21 — persists the winning adjacent-period-change event;
- *  also updates the shared metric-focus pronoun target (Stage 24.9 §29). */
-export function rememberEvent(memory: SessionMemory, input: EventInput): SessionMemory {
-  const seq = memory.seq + 1;
-  const id = nextId("evt");
-  const ref: EventRef = { ...input, id, order: seq, createdAt: Date.now() };
-  return {
-    ...memory,
-    lastEventRef: ref,
-    lastMetricFocusRef: { metricKey: input.metricKey, order: seq, sourceRange: input.sourceRange, sourceVersion: input.sourceVersion },
-    seq,
-    knownIds: pushKnownId(memory.knownIds, id),
-  };
-}
-
-/** Stage 24.8 §27–§29 — remembers the last table an analytical query ran
- *  against, so a later single-cell click inside it doesn't shrink the
- *  analytical universe to one cell. Not a "known id" — purely a hint. */
-export function rememberAnalyticalTable(memory: SessionMemory, ref: AnalyticalTableContextRef): SessionMemory {
-  return { ...memory, lastAnalyticalTable: ref };
-}
-
-/** Stage 24.9 §29/§37 — the single metric currently in focus for a bare
- *  pronoun ("его"/"он"). One shared authority updated by every producer that
- *  pins down one metric — never a per-operation special case. */
-export function rememberMetricFocus(memory: SessionMemory, ref: Omit<MetricFocusRef, "order">): SessionMemory {
-  const seq = memory.seq + 1;
-  return { ...memory, lastMetricFocusRef: { ...ref, order: seq }, seq };
-}
-
-type DirectionChangeInput = Omit<DirectionChangeAnalysisRef, "id" | "order" | "createdAt">;
-
-/** Stage 24.9 §17/§18 — persists the superlative direction-change winner;
- *  also updates the shared metric-focus pronoun target. */
-export function rememberDirectionChange(memory: SessionMemory, input: DirectionChangeInput): SessionMemory {
-  const seq = memory.seq + 1;
-  const id = nextId("dcr");
-  const ref: DirectionChangeAnalysisRef = { ...input, id, order: seq, createdAt: Date.now() };
-  return {
-    ...memory,
-    lastDirectionChangeRef: ref,
-    lastMetricFocusRef: { metricKey: input.metricKey, order: seq, sourceRange: input.sourceRange, sourceVersion: input.sourceVersion },
-    seq,
-    knownIds: pushKnownId(memory.knownIds, id),
-  };
-}
-
-type MetricSetInput = Omit<MetricSetRef, "id" | "order" | "createdAt">;
-
-/** Stage 24.9 §4/§8–§10 — persists the explicit/reused multi-metric candidate set. */
-export function rememberMetricSet(memory: SessionMemory, input: MetricSetInput): SessionMemory {
-  const seq = memory.seq + 1;
-  const id = nextId("mst");
-  const ref: MetricSetRef = { ...input, id, order: seq, createdAt: Date.now() };
-  return { ...memory, lastMetricSetRef: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
-}
-
-type ResultSetInput = Omit<ResultSetRef, "id" | "order" | "createdAt">;
-
-/** Stage 24.9 §5–§7/§35/§39 — persists the ordered ranking-shaped result. */
-export function rememberResultSet(memory: SessionMemory, input: ResultSetInput): SessionMemory {
-  const seq = memory.seq + 1;
-  const id = nextId("rst");
-  const ref: ResultSetRef = { ...input, id, order: seq, createdAt: Date.now() };
-  return { ...memory, lastResultSetRef: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
-}
-
-type AnalyticalResultSetInput = Omit<AnalyticalResultSetRef, "id" | "order" | "createdAt">;
-
-/**
- * Stage 25.1.3f §3/§5 — persists the FULL structured result of a successful
- * analytical turn as the continuation universe for the next compatible
- * follow-up. Bounded by the SAME `MEMORY_LIMITS` the generic ResultRef uses,
- * so a wide workbook can never grow session memory without limit.
- *
- * Committed on ANALYTICAL SUCCESS, never on narration success: a turn whose
- * narrator fell back to the deterministic table still executed its analysis
- * and still owns its result (§5 — deterministic fallback is a presentation
- * outcome, not an analytical execution failure).
- */
-export function rememberAnalyticalResultSet(memory: SessionMemory, input: AnalyticalResultSetInput): SessionMemory {
-  const seq = memory.seq + 1;
-  const id = nextId("ars");
-  const columns = input.columns.slice(0, MEMORY_LIMITS.maxColumnsPerResult);
-  const rows = input.rows.slice(0, MEMORY_LIMITS.maxRowsPerResult).map((r) => r.slice(0, MEMORY_LIMITS.maxColumnsPerResult));
-  const ref: AnalyticalResultSetRef = {
-    ...input,
-    columns,
-    rows,
-    metricKeys: input.metricKeys.slice(0, MEMORY_LIMITS.maxRowsPerResult),
-    id,
-    order: seq,
-    createdAt: Date.now(),
-  };
-  return { ...memory, lastAnalyticalResultSetRef: ref, seq, knownIds: pushKnownId(memory.knownIds, id) };
-}
-
-function keyOf(ref: ResolvedWorkbookRef): string {
-  return `${ref.kind}:${(ref.sheetName ?? "").toLowerCase()}:${ref.name.toLowerCase()}`;
-}
-
-function mergeResolved(
-  existing: readonly ResolvedWorkbookRef[],
-  incoming: readonly ResolvedWorkbookRef[],
-): readonly ResolvedWorkbookRef[] {
-  if (incoming.length === 0) return existing;
-  const seen = new Map<string, ResolvedWorkbookRef>();
-  for (const ref of [...existing, ...incoming]) seen.set(keyOf(ref), ref);
-  return [...seen.values()].slice(-MEMORY_LIMITS.maxResolvedEntities);
-}
-
-export function rememberResolved(memory: SessionMemory, refs: readonly ResolvedWorkbookRef[]): SessionMemory {
-  return { ...memory, resolvedEntities: mergeResolved(memory.resolvedEntities, refs) };
 }
 
 /** Returns a shallow copy of `obj` with the given keys removed (respects exactOptionalPropertyTypes). */
@@ -305,11 +118,7 @@ export function forgetSheet(memory: SessionMemory, sheetName: string): SessionMe
   let next: SessionMemory = {
     ...memory,
     recentResults: memory.recentResults.filter((r) => r.sourceSheet.toLowerCase() !== lc),
-    resolvedEntities: memory.resolvedEntities.filter((r) => (r.sheetName ?? r.name).toLowerCase() !== lc),
   };
-  if (next.lastCreatedSheet && next.lastCreatedSheet.name.toLowerCase() === lc) {
-    next = withoutKeys(next, ["lastCreatedSheet"]);
-  }
   if (next.lastResultId && !next.recentResults.some((r) => r.id === next.lastResultId)) {
     next = withoutKeys(next, ["lastResultId"]);
   }
@@ -327,10 +136,9 @@ export function forgetChartPlacement(memory: SessionMemory, shapeName: string): 
 export type ReferenceTarget =
   | { readonly kind: "result"; readonly ref: ResultRef }
   | { readonly kind: "rowset"; readonly ref: RowSetRef }
-  | { readonly kind: "chart"; readonly ref: ChartRef }
-  | { readonly kind: "sheet"; readonly ref: SheetRef };
+  | { readonly kind: "chart"; readonly ref: ChartRef };
 
-export type ReferenceWhat = "result" | "rowset" | "chart" | "sheet";
+export type ReferenceWhat = "result" | "rowset" | "chart";
 
 export type ReferenceResolution =
   | { readonly kind: "resolved"; readonly phrase: string; readonly target: ReferenceTarget }
@@ -375,11 +183,11 @@ export function resolveReference(text: string, memory: SessionMemory): Reference
     return hadKind(memory, "rows") ? { kind: "evicted", phrase: rowsPhrase, what: "rowset" } : { kind: "none" };
   }
 
-  const sheetPhrase = firstMatch(text, SHEET_RE);
-  if (sheetPhrase) {
-    if (memory.lastCreatedSheet) return { kind: "resolved", phrase: sheetPhrase, target: { kind: "sheet", ref: memory.lastCreatedSheet } };
-    return hadKind(memory, "sht") ? { kind: "evicted", phrase: sheetPhrase, what: "sheet" } : { kind: "none" };
-  }
+  // A worksheet is not something this store holds a reference to, and a
+  // sheet-shaped phrase must not fall through to the generic branch and come
+  // back as "the last result": «положи это туда» names a destination, not a
+  // table. The phrase ends reference resolution with nothing resolved.
+  if (firstMatch(text, SHEET_RE)) return { kind: "none" };
 
   const genericPhrase = firstMatch(text, GENERIC_RE);
   if (genericPhrase) {
@@ -408,8 +216,7 @@ export function resolveReference(text: string, memory: SessionMemory): Reference
 export function describeReferenceTarget(target: ReferenceTarget): string {
   if (target.kind === "result") return `"${target.ref.title}"`;
   if (target.kind === "rowset") return target.ref.describe ? `the rows where ${target.ref.describe}` : "those rows";
-  if (target.kind === "chart") return `the chart "${target.ref.data.title}"`;
-  return `the sheet "${target.ref.name}"`;
+  return `the chart "${target.ref.data.title}"`;
 }
 
 /** Builds a PendingClarification for an ambiguous conversational reference ("show the top 3 from that"). */
@@ -428,7 +235,6 @@ export function buildReferenceClarification(
     originalPrompt,
     route: "workbook_analysis",
     kind: "reference_ambiguous",
-    resolved: [],
     observations: [],
     candidates: labels,
     targetIds: candidates.map((c) => c.ref.id),
@@ -456,7 +262,6 @@ export function buildColumnClarification(
     originalPrompt,
     route: opts.route ?? "workbook_analysis",
     kind: "column_ambiguous",
-    resolved: [],
     observations: [],
     candidates: [...candidates],
     ...(opts.resultId ? { targetIds: [opts.resultId] } : {}),
@@ -487,7 +292,6 @@ export function buildChartColumnsClarification(
     originalPrompt,
     route: "workbook_analysis",
     kind: "chart_columns",
-    resolved: [],
     observations: [],
     candidates: [...candidates],
     targetIds: [resultId],
@@ -508,10 +312,6 @@ export function buildAgentClarification(
   candidates: readonly string[],
   agentContinuation: unknown,
   sourceIdentity: string | undefined,
-  // Stage 25.1.3 §15/§16 — "agent" (flat legacy bounded agent) or
-  // "analytical_agent" (Stage 25 analytical planner) — never resumed through
-  // the WRONG tool registry.
-  kind: "agent" | "analytical_agent" = "agent",
 ): PendingClarification {
   return {
     id: nextId("clr"),
@@ -519,8 +319,7 @@ export function buildAgentClarification(
     createdAt: Date.now(),
     originalPrompt,
     route: "workbook_analysis",
-    kind,
-    resolved: [],
+    kind: "agent",
     observations: [],
     candidates: [...candidates],
     question,
@@ -550,7 +349,6 @@ export function buildEntityActionClarification(
     originalPrompt,
     route: "workbook_analysis",
     kind: "entity_action",
-    resolved: [],
     observations: [],
     candidates: [...entityColumns],
     targetIds: [resultId],
@@ -558,127 +356,6 @@ export function buildEntityActionClarification(
     question,
     answerShape: "one_of",
     entityAction,
-  };
-}
-
-/**
- * Stage 24.6 §28/§29 — "норма" without a definition. The maxima / minima / peaks
- * were already computed; the resume re-runs the SAME request with the chosen
- * outlier interpretation. A generic "да / yes / ok" does NOT resolve it
- * (Stage 24.6.1) — see `interpretClarificationAnswer`.
- */
-export function buildSchemaNormClarification(
-  originalPrompt: string,
-  sourceRange: string,
-  sourceVersion: string,
-  language: ResponseLanguage,
-): PendingClarification {
-  const ru = language === "ru";
-  return {
-    id: nextId("clr"),
-    turnId: nextId("turn"),
-    createdAt: Date.now(),
-    originalPrompt,
-    route: "workbook_analysis",
-    kind: "schema_norm",
-    resolved: [],
-    observations: [{ label: "sourceRange", text: sourceRange }, { label: "sourceVersion", text: sourceVersion }],
-    candidates: ru ? ["статистический выброс", "заданный порог"] : ["statistical outlier", "fixed threshold"],
-    term: ru ? "норма" : "normal range",
-    question: ru
-      ? "Что считать выходом за пределы нормы: статистический выброс относительно значений в таблице или заданный/регуляторный порог?"
-      : "What counts as out of range — a statistical outlier relative to the table's values, or a fixed / regulatory threshold?",
-    answerShape: "one_of",
-  };
-}
-
-/** Stage 24.6.1 §4 — the threshold branch was chosen with no number; ask for it. */
-export function buildSchemaThresholdClarification(
-  originalPrompt: string,
-  sourceRange: string,
-  sourceVersion: string,
-  language: ResponseLanguage,
-): PendingClarification {
-  const ru = language === "ru";
-  return {
-    id: nextId("clr"),
-    turnId: nextId("turn"),
-    createdAt: Date.now(),
-    originalPrompt,
-    route: "workbook_analysis",
-    kind: "schema_threshold",
-    resolved: [],
-    observations: [{ label: "sourceRange", text: sourceRange }, { label: "sourceVersion", text: sourceVersion }],
-    candidates: [],
-    term: ru ? "порог" : "threshold",
-    question: ru
-      ? "Какое значение порога использовать? Укажите число, например «0.2» или «20%»."
-      : "What threshold value should I use? Give a number, e.g. \"0.2\" or \"20%\".",
-    answerShape: "free",
-  };
-}
-
-/**
- * Stage 24.7 §45 — the analytical compiler found more than one candidate for
- * the subject / metric. The answer picks one; the resume re-compiles the SAME
- * request with the choice appended. Never falls through to another planner.
- */
-export function buildAnalysisSubjectClarification(
-  originalPrompt: string,
-  needle: string,
-  candidates: readonly string[],
-  sourceRange: string,
-  sourceVersion: string,
-  question: string,
-): PendingClarification {
-  return {
-    id: nextId("clr"),
-    turnId: nextId("turn"),
-    createdAt: Date.now(),
-    originalPrompt,
-    route: "workbook_analysis",
-    kind: "analysis_subject",
-    resolved: [],
-    observations: [
-      { label: "sourceRange", text: sourceRange },
-      { label: "sourceVersion", text: sourceVersion },
-    ],
-    candidates: [...candidates],
-    term: needle,
-    question,
-    answerShape: "one_of",
-  };
-}
-
-/**
- * Stage 24.7.1 §21 — a threshold / signed filter has no explicit period and no
- * active PeriodRef to inherit. The answer picks a horizon; the resume
- * re-compiles the SAME request with that horizon phrase appended. Never
- * silently choose one arbitrary change column.
- */
-export function buildAnalysisPeriodClarification(
-  originalPrompt: string,
-  candidates: readonly string[],
-  sourceRange: string,
-  sourceVersion: string,
-  question: string,
-): PendingClarification {
-  return {
-    id: nextId("clr"),
-    turnId: nextId("turn"),
-    createdAt: Date.now(),
-    originalPrompt,
-    route: "workbook_analysis",
-    kind: "analysis_period",
-    resolved: [],
-    observations: [
-      { label: "sourceRange", text: sourceRange },
-      { label: "sourceVersion", text: sourceVersion },
-    ],
-    candidates: [...candidates],
-    term: "период",
-    question,
-    answerShape: "one_of",
   };
 }
 
@@ -696,7 +373,6 @@ export function buildDatasetClarification(
     originalPrompt,
     route: "workbook_analysis",
     kind: "dataset_ambiguous",
-    resolved: [],
     observations: [],
     candidates: [...candidates],
     question: ru
@@ -774,50 +450,12 @@ export function interpretClarificationAnswer(text: string, pending: PendingClari
   // 24.4 §7 — an agent clarification resumes the SAME task. Match a listed
   // candidate when the reply names one; otherwise pass the raw reply through as
   // the answer (the agent handles a free-form clarification answer).
-  if (pending.kind === "agent" || pending.kind === "analytical_agent") {
+  if (pending.kind === "agent") {
     const lc = trimmed.toLowerCase().replace(/[.!?]+$/, "");
     if (lc === "") return { kind: "unclear" };
     const hit = candidates.find((c) => c.toLowerCase() === lc)
       ?? candidates.find((c) => c.toLowerCase().includes(lc) || lc.includes(c.toLowerCase()));
     return { kind: "choice", choices: [hit ?? trimmed] };
-  }
-
-  // 24.6.1 — a norm clarification is a semantic choice. A generic acknowledgement
-  // ("да", "yes", "ok") does NOT pick a branch; only an explicit answer does.
-  if (pending.kind === "schema_norm" || pending.kind === "schema_threshold") {
-    const lc = trimmed.toLowerCase().replace(/[.!?]+$/, "").trim();
-    const numMatch = /(?:^|\D)(\d+(?:[.,]\d+)?)\s*(%?)(?:\D|$)/.exec(lc);
-    const asThreshold = (): ClarificationAnswer => {
-      if (numMatch) {
-        const raw = Number(numMatch[1]!.replace(",", "."));
-        const v = numMatch[2] === "%" ? raw / 100 : raw;
-        return Number.isFinite(v) && v > 0 ? { kind: "choice", choices: [`threshold:${v}`] } : { kind: "unclear" };
-      }
-      return { kind: "choice", choices: ["threshold"] };
-    };
-    if (pending.kind === "schema_threshold") {
-      // only a numeric value resolves this; anything else re-asks.
-      return numMatch ? asThreshold() : { kind: "unclear" };
-    }
-    // generic yes / no / acknowledgement — do NOT choose a branch.
-    if (/^(?:да|ага|угу|окей|ок|хорошо|давай(?:те)?|конечно|ясно|понятно|верно|yes|yeah|yep|yup|sure|okay|ok|got\s*it|fine)\b/i.test(lc)) {
-      return { kind: "unclear" };
-    }
-    if (/^(?:нет|не|no|nope|nah)\b/i.test(lc)) return { kind: "unclear" };
-    // explicit ordinals (schema_norm has exactly two visible choices: statistical, threshold).
-    if (/^(?:перв(?:ое|ый|ая)|вариант\s*1|1|first(?:\s+one)?)$/i.test(lc)) return { kind: "choice", choices: ["statistical"] };
-    if (/^(?:втор(?:ое|ой|ая)|вариант\s*2|2|second(?:\s+one)?)$/i.test(lc)) return { kind: "choice", choices: ["threshold"] };
-    // explicit statistical branch
-    if (/статистическ|выброс|\biqr\b|межквартиль|стандартн[а-яё]*\s+отклонени|z-?score|относительно\s+(?:значен|табл)|statistical|by\s+iqr/i.test(lc)) {
-      return { kind: "choice", choices: ["statistical"] };
-    }
-    // explicit threshold branch (with or without a number)
-    if (/порог|threshold|норматив|заданн[а-яё]*\s+(?:знач|велич)|fixed\s+(?:value|threshold)|регулятор/i.test(lc)) {
-      return asThreshold();
-    }
-    // a bare number / percent with no branch word → the threshold value
-    if (/^\s*\d+(?:[.,]\d+)?\s*%?\s*$/.test(lc)) return asThreshold();
-    return { kind: "unclear" };
   }
 
   if (candidates.length === 0) return { kind: "unclear" };
@@ -849,7 +487,7 @@ export function projectMemoryForModel(memory: SessionMemory, language: ResponseL
   const ru = language === "ru";
   const lines: string[] = [];
 
-  if (memory.recentResults.length > 0 || memory.lastRowSet || memory.lastChart || memory.lastCreatedSheet) {
+  if (memory.recentResults.length > 0 || memory.lastRowSet || memory.lastChart) {
     lines.push(
       ru
         ? "ПРЕДЫДУЩИЕ РЕЗУЛЬТАТЫ (этого диалога — ссылайся по фразе, не повторяй числа заново):"
@@ -866,9 +504,6 @@ export function projectMemoryForModel(memory: SessionMemory, language: ResponseL
     }
     if (memory.lastChart) {
       lines.push(`[${memory.lastChart.id}] ${ru ? "график" : "chart"} "${memory.lastChart.data.title}" (${memory.lastChart.data.type})`);
-    }
-    if (memory.lastCreatedSheet) {
-      lines.push(`${ru ? "последний созданный лист" : "last created sheet"}: "${memory.lastCreatedSheet.name}"`);
     }
   }
 

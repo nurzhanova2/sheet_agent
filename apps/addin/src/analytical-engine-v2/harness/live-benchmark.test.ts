@@ -1,34 +1,4 @@
 // @vitest-environment node
-// ---------------------------------------------------------------------------
-// Stage 26.2 §48/§49–§56/§65 — the LIVE planner benchmark.
-//
-// NOTE (26.2L): this file runs in the NODE environment, not the project-wide
-// jsdom one. jsdom installs its own AbortController/AbortSignal, and Node's
-// undici `fetch` rejects a foreign signal with "Expected signal to be an
-// instance of AbortSignal" — every turn would fail in ~1ms without ever
-// reaching the model. The harness needs no DOM.
-//
-// SKIPPED BY DEFAULT. It talks to the real configured model, so it only runs
-// when a developer points it at one:
-//
-//   SHEET_AGENT_LIVE_ENDPOINT=http://127.0.0.1:4000/v1/chat \
-//   SHEET_AGENT_LIVE_MODEL="<model id>" \
-//   npx vitest run src/analytical-engine-v2/harness/live-benchmark.test.ts
-//
-//   optional: SHEET_AGENT_LIVE_SUITE=chain|english|paraphrase|compound|
-//                                    temporal|opaque|injection|all   (default all)
-//             SHEET_AGENT_LIVE_TRACES=1     print every turn's full trace
-//             SHEET_AGENT_LIVE_OUT=<file>   also write the report to a file
-//
-// It runs through the SAME HttpChatClient the add-in uses and the SAME V2
-// engine, so what it measures is the real thing. It is a vitest file rather
-// than a plain node script only because the engine is TypeScript; nothing here
-// is part of the add-in bundle, and it cannot become a production route (§1).
-//
-// It asserts NOTHING about model quality — it reports (§67: report actual
-// results honestly; never patch prompts to hit a target).
-// ---------------------------------------------------------------------------
-
 import { describe, it } from "vitest";
 import { writeFileSync } from "node:fs";
 import { HttpChatClient } from "../../app/chat-client.js";

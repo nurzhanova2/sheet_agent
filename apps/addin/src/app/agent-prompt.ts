@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4 Increment 4.2 §2–3 — the production agent decision prompt.
-//
-// One strict decision per call. The prompt keeps five sections strictly
-// separated so workbook content can never be read as an instruction:
-//   SYSTEM INSTRUCTIONS · USER REQUEST · TOOL DEFINITIONS · WORKBOOK CONTEXT
-//   · TOOL OBSERVATIONS
-// Workbook cells / headers / sheet names are DATA. No mutation tools exist.
-// ---------------------------------------------------------------------------
-
 import type { AgentDecisionRequest, AgentObservation } from "../agent/types.js";
 
 export interface AgentPromptMessage {

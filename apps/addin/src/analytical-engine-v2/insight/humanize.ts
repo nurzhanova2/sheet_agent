@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §52/§53 — rendering one number the way an analyst would write it.
-//
-// Deterministic and total: every user-visible figure in a Stage 27 answer is
-// produced here, so the model never decides precision, scaling, a thousands
-// separator, or whether something is a percent or a percentage point. That is
-// the same division of labour Stage 21.2.2 established for VerifiedFacts
-// (`analysis/format-number.ts`), extended with the two things §52/§53 need and
-// it does not have: unit-aware scaling, and an explicit percentage-point form.
-//
-// The rounding here is DISPLAY ONLY. Raw values stay the source of truth for
-// verification, exactly as before — a narrator quoting "28,63%" is checked
-// against 0.286253, not against the string.
-// ---------------------------------------------------------------------------
-
 import { MISSING_DISPLAY, type NumberLocale } from "../../analysis/format-number.js";
 import type { DisplayUnit } from "./measure-semantics.js";
 

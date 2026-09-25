@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4 — the bounded agentic analysis loop.
-//
-//   USER → AGENT (decide) → TOOL_CALL → deterministic tool → structured
-//   observation → AGENT → … → CLARIFY | FINAL
-//
-// The loop is the ONLY place a model decision becomes an action. It:
-//   • hard-bounds steps and cumulative workbook reads (`AgentBounds`);
-//   • validates every decision (`parseAgentDecision`) and fails closed;
-//   • detects a repeated identical tool call / repeated malformed decision and
-//     stops instead of spinning;
-//   • clamps every observation before the model sees it;
-//   • never lets the model author an Office.js call, a range, or a mutation.
-// ---------------------------------------------------------------------------
-
 import { stableStringify } from "../analysis/index.js";
 import { AGENT_BOUNDS, type AgentBounds, type AgentTerminationReason } from "./bounds.js";
 import { parseAgentDecision } from "./decision-schema.js";

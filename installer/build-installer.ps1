@@ -19,6 +19,11 @@ if (-not (Test-Path $dotnet)) { $dotnet = 'dotnet' }
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must use major.minor.patch format: $Version" }
 function Invoke-Checked {
   param([scriptblock]$Command, [string]$Description)
+  # Windows PowerShell wraps every stderr line from a native executable in an
+  # ErrorRecord, which under $ErrorActionPreference='Stop' aborts the build on a
+  # tool's WARNING. The exit code is the contract, so it is the only thing that
+  # decides here.
+  $ErrorActionPreference = 'Continue'
   & $Command
   if ($LASTEXITCODE -ne 0) { throw "$Description failed with exit code $LASTEXITCODE" }
 }
@@ -53,7 +58,20 @@ try {
   foreach ($required in @("$stage\app\SheetAgent.exe", "$stage\wwwroot\taskpane.html", "$stage\wwwroot\assets\customFunctions.js", "$stage\wwwroot\custom-functions.json", "$stage\manifest\manifest.windows.xml")) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Required installer payload is missing: $required" }
   }
+  foreach ($runtimeAsset in @('pyodide.asm.wasm', 'pyodide.asm.mjs', 'pyodide.mjs', 'pyodide-lock.json', 'python_stdlib.zip')) {
+    $assetPath = Join-Path "$stage\wwwroot\pyodide" $runtimeAsset
+    if (-not (Test-Path -LiteralPath $assetPath)) { throw "Analytical sandbox runtime is missing from the payload: $assetPath" }
+  }
+  foreach ($wheelPrefix in @('numpy-', 'pandas-', 'scikit_learn-', 'scipy-')) {
+    if (-not (Get-ChildItem -LiteralPath "$stage\wwwroot\pyodide" -Filter "$wheelPrefix*.whl" -ErrorAction SilentlyContinue)) {
+      throw "Analytical sandbox wheel is missing from the payload: $wheelPrefix*.whl"
+    }
+  }
+  if (-not (Get-ChildItem -LiteralPath "$stage\wwwroot\assets" -Filter 'sandbox-worker-*.js' -ErrorAction SilentlyContinue)) {
+    throw "Analytical sandbox worker chunk is missing from the payload: the code sandbox would not start in Excel"
+  }
   & "$PSScriptRoot\tests\Assert-CompanionHttps.ps1" -CompanionExe "$stage\app\SheetAgent.exe"
+  & "$PSScriptRoot\tests\Assert-SandboxAssetsServable.ps1" -AppDir "$stage\app" -WwwRoot "$stage\wwwroot"
   if (-not (Test-Path $InnoCompiler)) { throw "Inno Setup compiler not found: $InnoCompiler" }
   if ($RequireSigning -or $SigningCertificatePath) {
     & "$PSScriptRoot\sign-artifact.ps1" -Path "$stage\app\SheetAgent.exe" -CertificatePath $SigningCertificatePath -TimestampUrl $TimestampUrl -RequireSigning:$RequireSigning

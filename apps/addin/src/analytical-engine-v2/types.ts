@@ -1,17 +1,28 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §13/§15/§17/§18/§19/§34 — the V2 engine's value types.
-//
-// One principle runs through all of them: the LLM names an OPERATION and
-// points at STRUCTURED REFERENCES; it never carries a workbook number, a
-// workbook address, or a row of data across a decision boundary. Everything
-// the planner can refer to later is a `ResultId` minted by the engine.
-// ---------------------------------------------------------------------------
-
 import type { ExplorationDimension } from "./sandbox/exploration.js";
 import type { CellValue } from "@sheet-agent/application";
 
 /** An engine-minted handle. The planner may pass these back, never invent them. */
 export type ResultId = string;
+
+/** Semantic period scope; PeriodIndex alone resolves it to workbook periods. */
+export type PeriodIntent =
+  | { readonly kind: "latest_vs_previous" }
+  | { readonly kind: "named_pair"; readonly start: string; readonly end: string }
+  | { readonly kind: "full_range" }
+  | { readonly kind: "single"; readonly at: string };
+
+/** The planner's semantic decision about the answer it is producing. */
+export interface AnswerIntent {
+  readonly shape: "direct" | "ranking" | "comparison" | "exploratory" | "grouping" | "overview";
+  readonly count: number | null;
+  readonly direction: "up" | "down" | null;
+  readonly subjects: readonly string[];
+  /** Semantic period scope, retained independently from the resolved periods. */
+  readonly periodIntent: PeriodIntent;
+  readonly wantsTable: boolean;
+  readonly wantsRecommendation: boolean;
+  readonly answerStyle: "concise" | "explanatory";
+}
 
 /**
  * §17 — what a result IS, so downstream consumers (state commit, renderer,
@@ -100,6 +111,7 @@ export interface EngineResult {
 
 export type ToolErrorCode =
   | "UNKNOWN_TOOL"
+  | "CAPABILITY_UNAVAILABLE"
   | "INVALID_ARGUMENT"
   | "UNKNOWN_REFERENCE"
   | "AMBIGUOUS_METRIC"
@@ -149,6 +161,9 @@ export interface ToolCallDecision {
   readonly kind: "tool_call";
   readonly tool: string;
   readonly arguments: Readonly<Record<string, unknown>>;
+  readonly final?: boolean;
+  /** Required semantic payload when this call itself finishes the answer. */
+  readonly answerIntent?: AnswerIntent;
 }
 
 export interface ClarifyDecision {
@@ -167,6 +182,8 @@ export interface CompleteDecision {
   readonly primaryResultRef: ResultId;
   readonly supportingResultRefs: readonly ResultId[];
   readonly answerStyle?: "concise" | "explanatory";
+  /** The semantic answer decision made by the planner, never reconstructed downstream. */
+  readonly answerIntent?: AnswerIntent;
   /**
    * Stage 26.4 §12 — which result answers which declared output. Present only
    * when the planner declared outputs with a `plan` decision. It lets the
@@ -246,6 +263,18 @@ export interface AnalyzeDecision {
    * what was planned, and the plan is visible in the trace.
    */
   readonly exploration?: readonly ExplorationDimension[];
+  /**
+   * §19/§36/§71 — the planner asked for a method comparison AND an
+   * exploration, and the exploration was dropped.
+   *
+   * Recorded rather than silent, because the engine changed what the planner
+   * said. The objective and the requested outputs are exactly as sent; only
+   * the redundant second specification of HOW went. See the normalisation in
+   * `parsePlannerDecision` for why it is not refused instead.
+   */
+  readonly explorationDropped?: readonly ExplorationDimension[];
+  /** §19/§71 — methods named past the comparison ceiling, trimmed and recorded. */
+  readonly methodsDropped?: readonly string[];
   readonly assumptions?: readonly string[];
   readonly necessity?: AnalysisNecessity;
 }
@@ -359,10 +388,18 @@ export interface EngineBounds {
    * Stage 27 §38 — how many separate code analyses one turn may run.
    *
    * Small on purpose. A multi-method comparison (§19) is ONE analysis that
-   * executes several methods, not several analyses, so two is enough for the
-   * hybrid shape §34 describes — analyse, then analyse again over what the
-   * deterministic tools narrowed. It is also the bound that stops §36's "find
-   * something interesting" from becoming an open-ended research budget.
+   * executes several methods, not several analyses, so this is not the budget
+   * for §19 — it is the budget for the hybrid shape §34 describes: analyse,
+   * then analyse again over what the deterministic tools narrowed. It is also
+   * the bound that stops §36's "find something interesting" from becoming an
+   * open-ended research budget.
+   *
+   * Three rather than two, because the live run showed two is short of one
+   * legitimate shape rather than generous with it. A principal-components
+   * request splits the way an analyst would split it — compute the components,
+   * then establish what separates them — and a second analysis over the first
+   * one's output is exactly what §34 is for. Two left no room for the turn to
+   * recover from a first analysis that came back thinner than asked.
    */
   readonly maxAnalyses: number;
 }
@@ -382,7 +419,7 @@ export const ENGINE_BOUNDS: EngineBounds = {
   maxPrimaryCorrections: 1,
   maxPlanDeclarations: 3,
   maxRepeatedClarifications: 1,
-  maxAnalyses: 2,
+  maxAnalyses: 3,
 };
 
 /**

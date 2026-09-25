@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4 — value types for the bounded agentic analysis loop.
-//
-// The model is the PLANNER / REASONER. It never executes Office.js, never
-// invents a range / sheet / column, never mutates state. Each iteration it
-// returns exactly ONE typed decision (below); the runtime validates it, runs a
-// deterministic tool if it is a TOOL_CALL, converts the output into a bounded
-// structured observation, and loops.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { AnalysisRequest } from "../analysis/types.js";
 import type { AnalysisBatchOutcome } from "../analysis/index.js";

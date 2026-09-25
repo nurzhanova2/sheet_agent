@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4 — the agent tool registry.
-//
-// ONE typed place for every tool the agent may call. Tools WRAP existing
-// deterministic capabilities (Workbook Map, analysis engine, ResultRef→Chart) —
-// they never duplicate an analysis algorithm and are never mutating. The model
-// proposes `{ tool, input }`; the tool's `validate` fails closed (unknown key,
-// missing field, oversized read, bad shape) and `execute` resolves references
-// deterministically before acting.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import { parseLocalRange, splitSheetAddress } from "../app/a1.js";
 import { gridFromGroupOutcome, groupMetricLabel } from "../analysis/group-grid.js";

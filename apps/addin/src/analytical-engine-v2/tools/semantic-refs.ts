@@ -1,33 +1,8 @@
-// ---------------------------------------------------------------------------
-// Stage 26.3 §3/§4/§5/§11 — the canonical semantic-reference layer.
-//
-// Stage 26.2L's dominant failure was structural, not cognitive: the planner
-// picked the right tool and then could not hand it the previous tool's result.
-// 58 of 87 tool errors were a reference pushed into a slot that only accepted
-// a literal string, across 36 of 50 turns.
-//
-// The fix is ONE shared dereferencer, not per-tool special cases (§5). Every
-// semantic scalar input now has two spellings:
-//
-//     series.get { metric: "Доля брака" }        — a literal, still valid (§10)
-//     series.get { metricRef: "result_1" }       — a typed reference (§3)
-//
-// The `<arg>Ref` sibling is the single canonical representation (§8): a flat
-// resultId string, which structured generation emits reliably, and which can
-// never be confused with a label the way an overloaded slot could.
-//
-// Coercion stays STRONGLY TYPED (§4). There is deliberately no
-// `resolveAnyResultRefToString`. A result qualifies as a metric only if it
-// NAMES exactly one metric, and as a period only if it names exactly one
-// period — so a period result can never satisfy a metric slot, a comparison
-// (two periods) can never satisfy a single-period slot, and a multi-metric set
-// is refused with its members listed rather than silently taking the first.
-// ---------------------------------------------------------------------------
-
 import type { RowAxisMember } from "../../app/schema/schema-induction.js";
 import type { CanonicalPeriod } from "../../app/schema/analytical/types.js";
-import { toolError, type EngineResult } from "../types.js";
-import { isErr, memberFor, periodFor, sortedPoints, type Resolved, type ToolEnv } from "./contracts.js";
+import type { PeriodIndex } from "../../app/schema/analytical/period-index.js";
+import { toolError, type EngineResult, type PeriodIntent } from "../types.js";
+import { isErr, memberFor, periodFor, sortedPoints, unknownReference, type Resolved, type ToolEnv } from "./contracts.js";
 
 /** A resultId as the planner spells it. Used to catch one pushed into a literal slot. */
 export const RESULT_ID_RE = /^result_\d+$/;
@@ -47,7 +22,7 @@ function storedResult(ref: unknown, env: ToolEnv, argName: string): Resolved<Eng
     return { error: toolError("INVALID_ARGUMENT", `"${argName}" must be the resultId of an earlier tool result`) };
   }
   const r = env.store.get(ref);
-  if (!r) return { error: toolError("UNKNOWN_REFERENCE", `no result "${ref}" in this analysis`, env.store.ids()) };
+  if (!r) return { error: unknownReference(ref, env) };
   if (r.sourceVersion !== env.schema.sourceVersion) {
     return { error: toolError("STALE_REFERENCE", `"${ref}" was computed before the table changed — recompute it`) };
   }
@@ -159,3 +134,64 @@ export const PERIOD_REF_DESCRIBE =
 
 /** All period labels, for a recoverable error (§5). */
 export const allPeriodCanonicals = (env: ToolEnv): readonly string[] => sortedPoints(env).map((p) => p.canonical);
+
+export interface ResolvedPeriodIntent {
+  readonly intent: PeriodIntent;
+  readonly periods: readonly CanonicalPeriod[];
+}
+
+export type PeriodIntentResolution =
+  | { readonly ok: true; readonly value: ResolvedPeriodIntent }
+  | { readonly ok: false; readonly message: string };
+
+/** The sole V2 authority that turns a semantic intent into canonical periods. */
+export function resolvePeriodIntent(intent: PeriodIntent, periodIndex: PeriodIndex): PeriodIntentResolution {
+  const points = [...periodIndex.points].sort((a, b) => a.orderKey - b.orderKey);
+  const named = (canonical: string): CanonicalPeriod | undefined => points.find((point) => point.canonical === canonical);
+  switch (intent.kind) {
+    case "latest_vs_previous":
+      return points.length >= 2
+        ? { ok: true, value: { intent, periods: [points[points.length - 2]!, points[points.length - 1]!] } }
+        : { ok: false, message: "the table has fewer than two periods, so latest_vs_previous cannot be resolved" };
+    case "named_pair": {
+      const start = named(intent.start);
+      const end = named(intent.end);
+      return start && end
+        ? { ok: true, value: { intent, periods: [start, end] } }
+        : { ok: false, message: "named_pair must use canonical periods from this table" };
+    }
+    case "full_range":
+      return points.length > 0 ? { ok: true, value: { intent, periods: points } } : { ok: false, message: "the table has no dated periods" };
+    case "single": {
+      const at = named(intent.at);
+      return at ? { ok: true, value: { intent, periods: [at] } } : { ok: false, message: "single must use a canonical period from this table" };
+    }
+  }
+}
+
+function readPeriodIntent(value: unknown): PeriodIntent | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record["kind"] === "latest_vs_previous" || record["kind"] === "full_range") return { kind: record["kind"] };
+  if (record["kind"] === "named_pair" && typeof record["start"] === "string" && typeof record["end"] === "string") return { kind: "named_pair", start: record["start"], end: record["end"] };
+  if (record["kind"] === "single" && typeof record["at"] === "string") return { kind: "single", at: record["at"] };
+  return null;
+}
+
+/** Adapts the central resolver for change tools; endpoint pairs need named_pair. */
+export function resolveComparisonPeriodIntent(args: Readonly<Record<string, unknown>>, env: ToolEnv): Resolved<Readonly<Record<string, unknown>>> {
+  const intent = readPeriodIntent(args["periodIntent"]);
+  if (!intent) return { error: toolError("INVALID_ARGUMENT", '"periodIntent" is required: use latest_vs_previous, named_pair, or full_range', allPeriodCanonicals(env)) };
+  const hasEndpoint = args["startPeriod"] !== undefined || args["startPeriodRef"] !== undefined || args["endPeriod"] !== undefined || args["endPeriodRef"] !== undefined;
+  if (hasEndpoint && intent.kind !== "named_pair") {
+    return { error: toolError("INVALID_ARGUMENT", 'period endpoints require periodIntent.kind "named_pair"; use latest_vs_previous without endpoints for the current comparison', allPeriodCanonicals(env)) };
+  }
+  if (intent.kind === "named_pair" && (args["startPeriod"] !== undefined || args["endPeriod"] !== undefined) && (args["startPeriod"] !== intent.start || args["endPeriod"] !== intent.end)) {
+    return { error: toolError("INVALID_ARGUMENT", 'startPeriod and endPeriod must exactly match periodIntent named_pair', allPeriodCanonicals(env)) };
+  }
+  const resolved = resolvePeriodIntent(intent, env.periodIndex);
+  if (!resolved.ok) return { error: toolError("INVALID_ARGUMENT", resolved.message, allPeriodCanonicals(env)) };
+  if (resolved.value.periods.length < 2) return { error: toolError("INVALID_ARGUMENT", `${intent.kind} resolves to one period and cannot be used by a change comparison`, allPeriodCanonicals(env)) };
+  const periods = resolved.value.periods;
+  return { ...args, startPeriod: periods[0]!.canonical, endPeriod: periods[periods.length - 1]!.canonical, periodIntent: resolved.value.intent };
+}

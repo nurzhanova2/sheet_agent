@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.6 §18–§26 — planner protocol serialization.
-//
-// ONE PLANNER ROUND PRODUCES ONE DECISION. When the model violates that, the
-// engine must name the violation, preserve every bit of state, and ask again —
-// without guessing which decision was meant and without speculatively running
-// any of them (§45).
-//
-// The shapes exercised here are the ones the Stage 26.5 forensics actually
-// recorded: newline-separated tool calls, a plan followed by the whole route
-// the model intended, and one response with a code fence around a second
-// object. Metric labels are generic — what is under test is structure.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it } from "vitest";
 import { runAnalyticalEngine, type EngineTurn } from "./engine.js";
 import { parsePlannerDecision } from "./planner/planner-prompt.js";

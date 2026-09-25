@@ -1,31 +1,8 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §11/§12/§70 — the runtime that ships: Pyodide inside a Worker.
-//
-// Three properties make the Worker non-optional rather than a nicety.
-//
-// 1. §12, the timeout. `runPython` is synchronous; while WASM runs, the
-//    JavaScript event loop on that thread does not. An in-process runtime
-//    therefore cannot bound `while True: pass` — a measured fact, not a
-//    theoretical one. From another thread the bound is real: write the
-//    interrupt buffer, and failing that call `terminate()`, measured to kill a
-//    runaway WASM loop in about a second.
-//
-// 2. §70, cancellation. "No late result may commit after cancellation" is
-//    trivially satisfied when the thread that would have produced it no longer
-//    exists.
-//
-// 3. The task pane. A 30-second analysis on the UI thread freezes the pane for
-//    30 seconds, including the progress states §88 asks for — which would then
-//    be a spinner that cannot spin.
-//
-// A terminated worker is DISCARDED, never reused: whatever state a killed
-// analysis left behind dies with it, which is also how §11's ephemeral
-// workspace is enforced at the coarsest possible granularity.
-// ---------------------------------------------------------------------------
-
 import type { SandboxDataset, SandboxError, SandboxLimits, SandboxResult, SourceLineage } from "./types.js";
 import { SANDBOX_LIMITS } from "./types.js";
 import type { CodeViolation, ExecuteOutcome } from "./pyodide-runtime.js";
+import { repairHintFor } from "./failure-classes.js";
+import type { SandboxDiagnostic } from "../production/execution-progress.js";
 
 /**
  * The worker surface, narrowed to what this host needs and widened to cover
@@ -60,11 +37,67 @@ interface Pending {
   readonly reject: (error: Error) => void;
 }
 
+export interface SandboxEnvironment {
+  readonly indexURL: string;
+  readonly moduleURL: string;
+  readonly origin: string;
+  readonly baseURI: string;
+  readonly workerType: string;
+}
+
 export interface WorkerRuntimeOptions {
   readonly factory: SandboxWorkerFactory;
   readonly indexURL?: string;
   readonly packages?: readonly string[];
   readonly limits?: SandboxLimits;
+  readonly environment?: SandboxEnvironment;
+  readonly bootTimeoutMs?: number;
+}
+
+export type StartupStage = "worker_construction" | "worker_load" | "runtime_boot" | "boot_timeout";
+
+export interface StartupFailure {
+  readonly stage: StartupStage;
+  readonly message: string;
+  readonly asset: string | null;
+}
+
+const BOOT_TIMEOUT_MS = 120_000;
+
+const ASSET_IN_MESSAGE =
+  /(?:https?:\/\/[^\s"')]+|[A-Za-z0-9_.-]+\.(?:whl|wasm|mjs|js|zip|json))/u;
+
+export function assetHint(message: string): string | null {
+  return ASSET_IN_MESSAGE.exec(message)?.[0] ?? null;
+}
+
+const STAGE_TEXT: Readonly<Record<StartupStage, { readonly ru: string; readonly en: string }>> = {
+  worker_construction: { ru: "не удалось создать фоновый поток", en: "the background worker could not be created" },
+  worker_load: { ru: "фоновый поток не загрузился", en: "the background worker failed to load" },
+  runtime_boot: { ru: "среда Python не запустилась", en: "the Python runtime did not start" },
+  boot_timeout: { ru: "запуск не завершился за отведённое время", en: "startup did not finish in time" },
+};
+
+export function startupDiagnosticsOf(
+  failure: StartupFailure | null,
+  environment: SandboxEnvironment | undefined,
+  locale: "ru" | "en" = "ru",
+): readonly SandboxDiagnostic[] {
+  const ru = locale === "ru";
+  const rows: SandboxDiagnostic[] = [];
+  if (failure) {
+    rows.push({ label: ru ? "Этап" : "Stage", value: ru ? STAGE_TEXT[failure.stage].ru : STAGE_TEXT[failure.stage].en });
+    rows.push({ label: ru ? "Причина" : "Reason", value: failure.message });
+    if (failure.asset) rows.push({ label: ru ? "Ресурс" : "Asset", value: failure.asset });
+  }
+  if (environment) {
+    rows.push({ label: ru ? "Пакеты Python" : "Python assets", value: environment.indexURL });
+    rows.push({ label: ru ? "Модуль надстройки" : "Add-in module", value: environment.moduleURL });
+    rows.push({ label: ru ? "Источник" : "Origin", value: environment.origin });
+    rows.push({ label: "document.baseURI", value: environment.baseURI });
+    rows.push({ label: ru ? "Тип потока" : "Worker type", value: environment.workerType });
+  }
+  return rows;
 }
 
 export class WorkerSandboxRuntime {
@@ -73,6 +106,7 @@ export class WorkerSandboxRuntime {
 
   #worker: SandboxWorkerLike | null = null;
   #booting: Promise<void> | null = null;
+  #startupFailure: StartupFailure | null = null;
   #seq = 0;
   readonly #pending = new Map<number, Pending>();
   readonly #options: WorkerRuntimeOptions;
@@ -89,18 +123,50 @@ export class WorkerSandboxRuntime {
     await this.#booting;
   }
 
+  startupDiagnostics(): readonly SandboxDiagnostic[] {
+    return startupDiagnosticsOf(this.#startupFailure, this.#options.environment);
+  }
+
   #boot(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const worker = this.#options.factory();
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const fail = (stage: StartupStage, message: string): void => {
+        if (settled) return;
+        settled = true;
+        this.#startupFailure = { stage, message, asset: assetHint(message) };
+        reject(new Error(message));
+      };
+      const succeed = (): void => {
+        if (settled) return;
+        settled = true;
+        this.#startupFailure = null;
+        resolve();
+      };
+
+      const timer = setTimeout(
+        () => fail("boot_timeout", `the analytical runtime did not report ready within ${this.#options.bootTimeoutMs ?? BOOT_TIMEOUT_MS} ms`),
+        this.#options.bootTimeoutMs ?? BOOT_TIMEOUT_MS,
+      );
+
+      let worker: SandboxWorkerLike;
+      try {
+        worker = this.#options.factory();
+      } catch (error) {
+        clearTimeout(timer);
+        fail("worker_construction", String(error));
+        return;
+      }
       this.#worker = worker;
       listen(worker, "message", (raw) => {
         const message = payloadOf(raw) as WorkerMessage;
         if (message.type === "ready") {
-          resolve();
+          clearTimeout(timer);
+          succeed();
           return;
         }
         if (message.type === "boot_error") {
-          reject(new Error(message.message));
+          clearTimeout(timer);
+          fail("runtime_boot", message.message);
           return;
         }
         const id = (message as { id?: number }).id;
@@ -111,8 +177,10 @@ export class WorkerSandboxRuntime {
         pending.resolve(message);
       });
       listen(worker, "error", (raw) => {
-        const error = new Error(String((raw as { message?: string })?.message ?? raw));
-        reject(error);
+        clearTimeout(timer);
+        const message = String((raw as { message?: string })?.message ?? raw);
+        fail("worker_load", message);
+        const error = new Error(message);
         for (const [, pending] of this.#pending) pending.reject(error);
         this.#pending.clear();
       });
@@ -205,34 +273,13 @@ export class WorkerSandboxRuntime {
     }
 
     if (reply.type === "failed") {
-      return fail({ code: reply.code as SandboxError["code"], message: reply.message, repairHint: reply.message });
+      return fail({ code: reply.code as SandboxError["code"], message: reply.message, repairHint: repairHintFor(reply.message) });
     }
     if (reply.type !== "result") {
       return fail({ code: "INVALID_RESULT", message: `unexpected reply from the analytical runtime: ${reply.type}` });
     }
 
-    const lineage: SourceLineage = {
-      datasetIds: [dataset.datasetId],
-      sheet: dataset.sheet,
-      sourceRange: dataset.sourceRange,
-      freshnessToken: dataset.freshnessToken,
-    };
-    const result = {
-      executionId: `exec_${started.toString(36)}`,
-      status: "ok" as const,
-      tables: [],
-      scalars: {},
-      series: [],
-      groups: [],
-      models: [],
-      diagnostics: {},
-      findingsCandidates: [],
-      warnings: [],
-      artifacts: [],
-      ...reply.envelope,
-      sourceLineage: lineage,
-    } as unknown as SandboxResult;
-
+    const result = envelopeToResult(reply.envelope, dataset, started);
     return { ok: true, result, stdout: String(reply.envelope["stdout"] ?? ""), durationMs: Date.now() - started };
   }
 
@@ -240,6 +287,36 @@ export class WorkerSandboxRuntime {
   async dispose(): Promise<void> {
     await this.#discard({ code: "CANCELLED", message: "runtime disposed" });
   }
+}
+
+/**
+ * The collected envelope as a `SandboxResult`.
+ *
+ * §26 requires an emitted result to go through the same normalization,
+ * validation, lineage and numeric verification as any other.
+ */
+function envelopeToResult(envelope: Record<string, unknown>, dataset: SandboxDataset, started: number): SandboxResult {
+  const lineage: SourceLineage = {
+    datasetIds: [dataset.datasetId],
+    sheet: dataset.sheet,
+    sourceRange: dataset.sourceRange,
+    freshnessToken: dataset.freshnessToken,
+  };
+  return {
+    executionId: `exec_${started.toString(36)}`,
+    status: "ok" as const,
+    tables: [],
+    scalars: {},
+    series: [],
+    groups: [],
+    models: [],
+    diagnostics: {},
+    findingsCandidates: [],
+    warnings: [],
+    artifacts: [],
+    ...envelope,
+    sourceLineage: lineage,
+  } as unknown as SandboxResult;
 }
 
 /** §9 — exactly what crosses into the worker. No handles, no tokens. */

@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4.4 §8 — prompt-injection hardening for the bounded agent.
-//
-// Workbook cell content is DATA. It can never become a tool name, an operator,
-// a system instruction, a mutation, an extra tool, or bypass the resolver /
-// evidence validation. The registry has no mutating tool; decisions come only
-// from `decide`, never from observations.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it, vi } from "vitest";
 import { runAgentLoop } from "./agent-loop.js";
 import { parseAgentDecision } from "./decision-schema.js";

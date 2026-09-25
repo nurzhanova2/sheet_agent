@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.8–24.10 — deterministic compilers that turn a remembered ResultRef /
-// RowSetRef into validated WorkbookActions.
-//
-// The exact structured values become the action payload — the model never
-// retypes an analytical number into set_values. Every produced action is run
-// through the existing `validateAction`; a compiler that cannot produce a fully
-// valid action returns `{ error }` and nothing is proposed.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ResultRef, RowSetRef } from "./session-memory.js";
 import { columnIndexToLetters, parseLocalRange, splitSheetAddress } from "./a1.js";
@@ -255,8 +245,6 @@ export function buildCopyRowSetActions(
     columns: rowSet.columns,
     rows: rowSet.rows,
     rowsTruncated: rowSet.truncated,
-    facts: [],
-    resolved: [],
   };
   const written = buildWriteResultActions(pseudo, target, existing);
   if (isCompileError(written)) return written;

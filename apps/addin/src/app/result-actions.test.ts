@@ -13,7 +13,7 @@ const RESULT: ResultRef = {
   title: "Plan and Fact by Category", spec: null,
   columns: ["Category", "Plan", "Fact"],
   rows: [["Accessories", 227, 228], ["Electronics", 222, 250]],
-  rowsTruncated: false, facts: [], resolved: [],
+  rowsTruncated: false,
 };
 
 const ROWSET: RowSetRef = {

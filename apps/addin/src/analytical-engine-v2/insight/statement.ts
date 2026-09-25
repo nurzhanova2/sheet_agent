@@ -1,24 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §57/§58 — deterministic prose, one template per RESULT TYPE.
-//
-// §57 is the requirement: when narration fails verification, the user should
-// still read a sentence, not a table under an apology. §58 is the constraint
-// on how: templates key off the finding TYPE, never off what the user typed.
-// There is no "if the question contains 'самый' " branch anywhere in this file
-// and there must never be one — that is a phrase handler, and phrase handlers
-// are the architecture Stage 26 replaced.
-//
-// A second, quieter job: these sentences are what the narrator is SHOWN as the
-// worked form of each finding. A model given "Активы | 17941.7 | 19871.5 |
-// 10.76%" writes a table back; a model given "«Активы»: рост на 10,8% — с
-// 17 941,7 до 19 871,5" writes prose, and relates it to the next finding.
-//
-// Russian note: every template is built from NOUNS ("рост", "снижение") rather
-// than past-tense verbs, because a past-tense verb has to agree with the
-// gender of a metric label that can be any noun in any language. Noun
-// constructions are correct for all of them.
-// ---------------------------------------------------------------------------
-
 import type { NumberLocale } from "../../analysis/format-number.js";
 import { measureWord, type MeasureWord } from "./measure-words.js";
 import { valueOf, type FindingValue, type VerifiedFinding } from "./verified-finding.js";
@@ -48,29 +27,49 @@ function leadAndDetail(finding: VerifiedFinding): { readonly lead: string | null
   return { lead: pct?.text ?? abs?.text ?? null, detail: pct ? (abs?.text ?? null) : null };
 }
 
-function changeStatement(finding: VerifiedFinding, locale: NumberLocale): string {
+export function periodSpanSentence(finding: VerifiedFinding, locale: NumberLocale): string {
+  const from = valueOf(finding, "startValue")?.at ?? "";
+  const to = valueOf(finding, "endValue")?.at ?? "";
+  if (from === "" || to === "" || from === to) return "";
+  return locale === "ru" ? `Период сравнения — с ${from} по ${to}.` : `The comparison runs from ${from} to ${to}.`;
+}
+
+function changeStatement(finding: VerifiedFinding, locale: NumberLocale, options: StatementOptions = {}): string {
   const subject = quoted(finding.subject, locale);
   const start = valueOf(finding, "startValue");
   const end = valueOf(finding, "endValue");
   const { lead, detail } = leadAndDetail(finding);
-  const dir = finding.direction === "up" || finding.direction === "down" || finding.direction === "flat" ? finding.direction : "flat";
-  const word = DIRECTION_WORD[locale][dir];
+  const when = periodSpanSentence(finding, locale);
 
   const span =
     start && end
       ? locale === "ru"
-        ? ` — с ${start.text} до ${end.text}`
-        : ` — from ${start.text} to ${end.text}`
+        ? `: с ${start.text} до ${end.text}`
+        : `: from ${start.text} to ${end.text}`
       : "";
-  const tail = detail ? ` (${detail})` : "";
 
   if (finding.direction === "flat" || lead === null) {
-    return locale === "ru" ? `${subject}: ${word}${span}.` : `${subject}: ${word}${span}.`;
+    const head = locale === "ru" ? `${subject} — без изменений${span}.` : `${subject} did not change${span}.`;
+    return when === "" ? head : `${head} ${when}`;
   }
-  // "рост на 10,8%" — the sign already rides in the text, so strip the "+"
-  // that would otherwise read as "рост на +10,8%".
+
   const magnitude = lead.startsWith("+") || lead.startsWith("-") ? lead.slice(1) : lead;
-  return locale === "ru" ? `${subject}: ${word} на ${magnitude}${span}${tail}.` : `${subject}: ${word} ${magnitude}${span}${tail}.`;
+  const inline = options.expand === true || detail === null ? "" : ` (${detail})`;
+  const head =
+    locale === "ru"
+      ? finding.direction === "up"
+        ? `Рост ${subject} составил ${magnitude}${span}${inline}.`
+        : `Снижение ${subject} составило ${magnitude}${span}${inline}.`
+      : finding.direction === "up"
+        ? `${subject} rose by ${magnitude}${span}${inline}.`
+        : `${subject} fell by ${magnitude}${span}${inline}.`;
+  const absolute =
+    options.expand !== true || detail === null
+      ? ""
+      : locale === "ru"
+        ? `В абсолютном выражении изменение составило ${detail}.`
+        : `In absolute terms the change was ${detail}.`;
+  return [head, absolute, when].filter((s) => s !== "").join(" ");
 }
 
 function periodOf(finding: VerifiedFinding, role: "startValue" | "endValue"): string {
@@ -89,8 +88,9 @@ function eventStatement(finding: VerifiedFinding, locale: NumberLocale): string 
 function valueStatement(finding: VerifiedFinding, locale: NumberLocale): string {
   const value = valueOf(finding, "value");
   if (!value) return "";
-  const at = value.at ? (locale === "ru" ? ` на ${value.at}` : ` at ${value.at}`) : "";
-  return locale === "ru" ? `${quoted(finding.subject, locale)}${at}: ${value.text}.` : `${quoted(finding.subject, locale)}${at}: ${value.text}.`;
+  const subject = quoted(finding.subject, locale);
+  if (!value.at) return locale === "ru" ? `${subject} — ${value.text}.` : `${subject} is ${value.text}.`;
+  return locale === "ru" ? `${subject} на ${value.at} — ${value.text}.` : `${subject} at ${value.at} is ${value.text}.`;
 }
 
 function trendStatement(finding: VerifiedFinding, locale: NumberLocale): string {
@@ -120,15 +120,38 @@ function volatilityStatement(finding: VerifiedFinding, locale: NumberLocale): st
   const score = finding.values[0];
   const rank = finding.materiality.find((s) => s.kind === "rank");
   const subject = quoted(finding.subject, locale);
+  const steadiest = finding.findingType === "stability";
+  const measure = steadiest
+    ? locale === "ru"
+      ? "оценка разброса"
+      : "the spread score"
+    : locale === "ru"
+      ? "оценка волатильности"
+      : "the volatility score";
   // §51 — the score is meaningless on its own, so it is stated as a POSITION
   // among its peers and only then as a number.
   if (rank && rank.kind === "rank" && rank.position === 1) {
-    const word = finding.findingType === "stability" ? (locale === "ru" ? "самый ровный" : "the steadiest") : locale === "ru" ? "самый нестабильный" : "the most volatile";
-    const tail = score ? (locale === "ru" ? ` (оценка ${score.text}, максимум в таблице)` : ` (score ${score.text}, the highest here)`) : "";
-    return locale === "ru" ? `${subject} — ${word} показатель${tail}.` : `${subject} is ${word} indicator${tail}.`;
+    const head = steadiest
+      ? locale === "ru"
+        ? `Самый ровный показатель — ${subject}.`
+        : `The steadiest indicator is ${subject}.`
+      : locale === "ru"
+        ? `Самый волатильный показатель — ${subject}.`
+        : `The most volatile indicator is ${subject}.`;
+    if (!score) return head;
+    const extreme = steadiest
+      ? locale === "ru"
+        ? "наименьшее значение среди сравниваемых показателей"
+        : "the lowest of the indicators compared"
+      : locale === "ru"
+        ? "максимальное значение среди сравниваемых показателей"
+        : "the highest of the indicators compared";
+    return locale === "ru"
+      ? `${head} По используемой метрике его ${measure} — ${score.text}: это ${extreme}.`
+      : `${head} On the measure used, ${measure} is ${score.text} — ${extreme}.`;
   }
   if (!score) return "";
-  return locale === "ru" ? `${subject}: оценка ${score.text}.` : `${subject}: score ${score.text}.`;
+  return locale === "ru" ? `У ${subject} ${measure} — ${score.text}.` : `For ${subject}, ${measure} is ${score.text}.`;
 }
 
 function monotonicityStatement(finding: VerifiedFinding, locale: NumberLocale): string {
@@ -160,13 +183,13 @@ function rankingStatement(finding: VerifiedFinding, locale: NumberLocale): strin
   return locale === "ru" ? `Порядок: ${list}.` : `Order: ${list}.`;
 }
 
-function extremumStatement(finding: VerifiedFinding, locale: NumberLocale): string {
+function extremumStatement(finding: VerifiedFinding, locale: NumberLocale, options: StatementOptions = {}): string {
   const change = valueOf(finding, "percentageChange") ?? valueOf(finding, "absoluteChange");
   const value = valueOf(finding, "value");
   const subject = quoted(finding.subject, locale);
-  if (change) return changeStatement(finding, locale);
-  if (value) return locale === "ru" ? `Наибольшее значение у ${subject}: ${value.text}.` : `The largest value is ${subject}: ${value.text}.`;
-  return locale === "ru" ? `${subject}.` : `${subject}.`;
+  if (change) return changeStatement(finding, locale, options);
+  if (value) return locale === "ru" ? `Наибольшее значение — у ${subject}: ${value.text}.` : `The largest value is ${subject}: ${value.text}.`;
+  return locale === "ru" ? `Подходит ${subject}.` : `That is ${subject}.`;
 }
 
 /**
@@ -360,10 +383,14 @@ function emptySetStatement(locale: NumberLocale): string {
  * raw table, which is the thing §43 forbids, so the switch has no default that
  * silently returns "".
  */
-export function statementFor(finding: VerifiedFinding, locale: NumberLocale): string {
+export interface StatementOptions {
+  readonly expand?: boolean;
+}
+
+export function statementFor(finding: VerifiedFinding, locale: NumberLocale, options: StatementOptions = {}): string {
   switch (finding.findingType) {
     case "change":
-      return changeStatement(finding, locale);
+      return changeStatement(finding, locale, options);
     case "event":
       return eventStatement(finding, locale);
     case "value":
@@ -380,13 +407,13 @@ export function statementFor(finding: VerifiedFinding, locale: NumberLocale): st
     case "ranking":
       return rankingStatement(finding, locale);
     case "extremum":
-      return extremumStatement(finding, locale);
+      return extremumStatement(finding, locale, options);
     case "empty_set":
       return emptySetStatement(locale);
     case "table_overview":
       return overviewStatement(finding, locale);
     case "comparison":
-      return changeStatement(finding, locale);
+      return changeStatement(finding, locale, options);
     case "cluster":
       return clusterStatement(finding, locale);
     case "data_quality":

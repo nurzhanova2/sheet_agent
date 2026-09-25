@@ -1,19 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.3 — the conversational router.
-//
-// Decides, for a NON-slash turn, whether SheetAgent should answer as ordinary
-// chat or reach for the workbook — and, when it does, whether the current
-// selection is enough or the bounded workbook map is needed.
-//
-// Rules-first (this module): deterministic lexical rules + the existing
-// `classifyIntent` lexicon + conversational memory. A model classification
-// call is only a documented fallback for genuinely ambiguous turns and is NOT
-// made here — the caller may add one later without changing these rules.
-//
-// `\b` / `\w` are ASCII-only in JS regex — every Russian alternative below is
-// written with explicit Cyrillic character classes and no `\b`.
-// ---------------------------------------------------------------------------
-
 import { classifyIntent } from "./intent.js";
 import type { ConversationRoute } from "./session-memory.js";
 

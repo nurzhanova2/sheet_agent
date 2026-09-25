@@ -1,22 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.8 §27/§28/§29/§30 — clarification that makes progress.
-//
-// Stage 26.7 measured this: of ten clarifications, the three that had work to
-// suspend all resumed correctly, but two conversations spent their whole length
-// being asked for a threshold ONE METRIC AT A TIME, and answering "20%" bought
-// the next question rather than an answer. In a benchmark that is a row in a
-// table. In a task pane it is a dead conversation.
-//
-// §27 forbids the obvious fix. There is no threshold rule here, no parameter
-// vocabulary, and nothing keyed to the word "порог". What this module knows is
-// STRUCTURAL: two questions that differ only by which metric they name are the
-// same question asked twice, and a question already answered is not a question.
-//
-// §30 — and the engine never invents the value. It hands the planner back what
-// the user already said and lets the planner decide whether it applies to one
-// output or to all of them.
-// ---------------------------------------------------------------------------
-
 /** §28 — one clarification that WAS answered, kept with the answer. */
 export interface AnsweredClarification {
   readonly signature: string;

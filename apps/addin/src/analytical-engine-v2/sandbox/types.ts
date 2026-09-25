@@ -1,26 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §9/§10/§12/§13/§27/§30/§32/§68 — the analytical sandbox's contract.
-//
-// Everything that crosses the boundary between the engine and generated Python
-// is typed here, in both directions:
-//
-//   engine → sandbox   SandboxDataset (§9) and SandboxPlan (§13)
-//   sandbox → engine   SandboxResult (§27)
-//
-// Two asymmetries are deliberate.
-//
-// First, the sandbox receives DATA, never handles. No Excel object, no range
-// address it could re-read, no workbook reference, no credential — just the
-// prepared rows, their semantic types, and a freshness token it cannot forge
-// (§9). If the sandbox is ever compromised, what it holds is the table the
-// user was already looking at.
-//
-// Second, the sandbox returns STRUCTURE, never prose. §28 is explicit: Python
-// calculates, the narrator explains. A result carries numbers, tables, groups
-// and finding CANDIDATES — never a sentence about the business — so no path
-// exists by which generated code writes something a user reads.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ResultId } from "../types.js";
 import type { ExplorationDimension } from "./exploration.js";
@@ -290,6 +267,7 @@ export interface SandboxResult {
   /** §32 — which dataset, at which freshness, produced this. */
   readonly sourceLineage: SourceLineage;
   readonly artifacts: readonly SandboxArtifact[];
+  readonly excludedEntities?: readonly { readonly entity: string; readonly reason: string }[];
 }
 
 export interface SourceLineage {
@@ -338,6 +316,19 @@ export interface SandboxError {
   readonly repairHint?: string;
   /** Which line of generated code, when known. */
   readonly line?: number;
+  /**
+   * Stage 27.x.1 §31 — the attempt-level class, when it is known WITHOUT
+   * having to re-read a traceback.
+   *
+   * `classifyFailure` reads the runtime's message and is right most of the
+   * time; the preflight checks and the output-contract check KNOW their class
+   * because they are the thing that decided it. Recording it here means the
+   * taxonomy stops depending on a regex agreeing with a hint that was written
+   * from the same rule two files away.
+   */
+  readonly failureClass?: string;
+  /** §12 — which flavour of contract failure, when the class is not enough. */
+  readonly subtype?: "OUTPUT_SHAPE_MISMATCH";
 }
 
 export type SandboxOutcome =

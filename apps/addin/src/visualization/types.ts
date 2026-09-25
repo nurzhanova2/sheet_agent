@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Visualization protocol. The LLM may request a chart by TYPE and by which
-// columns / aggregation to use. It may NOT provide the numeric data points —
-// those are always produced by the deterministic analysis engine (see prepare.ts).
-//
-// Stage 21.2.4 extends this with MULTI-SERIES bar / line and scatter groupBy.
-// The model still only chooses structure (type, dimension, metric, aggregate,
-// groupBy, mode); every rendered number comes from the engine.
-//
-// Like the analysis protocol this is plain data: no code, no SVG, no HTML, no
-// expression strings beyond the safe Expression AST already used by the engine.
-// ---------------------------------------------------------------------------
-
 import type { AggregateMetric, ConditionGroup, Expression } from "../analysis/types.js";
 
 export type ChartType = "bar" | "line" | "scatter" | "pie" | "histogram";

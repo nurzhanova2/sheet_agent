@@ -1,31 +1,7 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §6/§7/§8/§11/§12/§15/§70 — the Pyodide-backed analytical sandbox.
-//
-// Why a WASM runtime and not a host Python. §7 requires the analysis to be
-// unable to reach the filesystem, the registry, PowerShell, subprocesses or
-// the network, and §16 requires that isolation to hold INDEPENDENTLY of the
-// AST check. A host CPython meets that only behind an OS sandbox — an
-// AppContainer or a restricted token — which is a large amount of Windows
-// security code whose failure mode is silent. A WASM runtime has no syscalls
-// to begin with: there is no host path to traverse, no process to spawn, and
-// cancelling it is terminating a worker rather than killing a process tree
-// that may have spawned children (§70).
-//
-// What the runtime does NOT give for free is documented in
-// `python-runtime.ts`: `import js` hands Python the whole JavaScript scope.
-// That door is shut in the bootstrap, and the shutting is verified by tests
-// rather than assumed.
-//
-// One implementation serves two environments. In the task pane it runs inside
-// a Worker (`worker-runtime.ts`), so a 30-second analysis never freezes the
-// pane and cancellation is `terminate()`. In tests it runs in-process, which
-// is what makes the §72 escape tests exercise the same bootstrap the product
-// ships rather than a mock of it.
-// ---------------------------------------------------------------------------
-
 import type { SandboxDataset, SandboxError, SandboxLimits, SandboxResult, SourceLineage } from "./types.js";
 import { SANDBOX_LIMITS } from "./types.js";
 import { BOOTSTRAP_SOURCES } from "./python-runtime.js";
+import { repairHintFor } from "./failure-classes.js";
 
 /** The slice of Pyodide's API this module uses. Kept narrow on purpose. */
 export interface PyodideApi {
@@ -37,9 +13,11 @@ export interface PyodideApi {
 
 export type PyodideLoader = (options: { readonly indexURL?: string }) => Promise<PyodideApi>;
 
+export type DeniedCapability = "NETWORK" | "PROCESS" | "FILESYSTEM" | "BRIDGE";
+
 /** §15 — one refusal from the AST contract. */
 export interface CodeViolation {
-  readonly code: "SYNTAX" | "IMPORT" | "CALL" | "ATTR" | "NAME" | "IO";
+  readonly code: "SYNTAX" | "IMPORT" | "CALL" | "ATTR" | "NAME" | "IO" | DeniedCapability;
   readonly detail: string;
   readonly line: number;
 }
@@ -200,9 +178,9 @@ export class PyodideSandboxRuntime {
         return fail({ code: "SANDBOX_MEMORY_LIMIT", message: "the analysis ran out of memory" });
       }
       if (/ModuleNotFoundError|not available in the analytical sandbox/.test(message)) {
-        return fail({ code: "UNSUPPORTED_LIBRARY", message: pythonMessage(message), repairHint: pythonMessage(message) });
+        return fail({ code: "UNSUPPORTED_LIBRARY", message: pythonMessage(message), repairHint: repairHintFor(pythonMessage(message)) });
       }
-      return fail({ code: "SANDBOX_RUNTIME_ERROR", message: pythonMessage(message), repairHint: pythonMessage(message) });
+      return fail({ code: "SANDBOX_RUNTIME_ERROR", message: pythonMessage(message), repairHint: repairHintFor(pythonMessage(message)) });
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
@@ -220,30 +198,41 @@ export class PyodideSandboxRuntime {
       return fail({ code: "INVALID_RESULT", message: "the analysis returned something that is not a structured result" });
     }
 
-    const lineage: SourceLineage = {
-      datasetIds: [dataset.datasetId],
-      sheet: dataset.sheet,
-      sourceRange: dataset.sourceRange,
-      freshnessToken: dataset.freshnessToken,
-    };
-    const result = {
-      executionId: `exec_${started.toString(36)}`,
-      status: "ok" as const,
-      tables: [],
-      scalars: {},
-      series: [],
-      groups: [],
-      models: [],
-      diagnostics: {},
-      findingsCandidates: [],
-      warnings: [],
-      artifacts: [],
-      ...parsed,
-      sourceLineage: lineage,
-    } as unknown as SandboxResult;
-
+    const result = envelopeToResult(parsed, dataset, started);
     return { ok: true, result, stdout: String(parsed["stdout"] ?? ""), durationMs: Date.now() - started };
   }
+}
+
+/**
+ * The collected envelope as a `SandboxResult`.
+ *
+ * Shared by the one-shot `execute` and the iterative `finish` on purpose: §26
+ * requires an emitted result to go through the same normalization, validation,
+ * lineage and numeric verification as any other, and two constructors would be
+ * two chances for those to diverge.
+ */
+function envelopeToResult(parsed: Record<string, unknown>, dataset: SandboxDataset, started: number): SandboxResult {
+  const lineage: SourceLineage = {
+    datasetIds: [dataset.datasetId],
+    sheet: dataset.sheet,
+    sourceRange: dataset.sourceRange,
+    freshnessToken: dataset.freshnessToken,
+  };
+  return {
+    executionId: `exec_${started.toString(36)}`,
+    status: "ok" as const,
+    tables: [],
+    scalars: {},
+    series: [],
+    groups: [],
+    models: [],
+    diagnostics: {},
+    findingsCandidates: [],
+    warnings: [],
+    artifacts: [],
+    ...parsed,
+    sourceLineage: lineage,
+  } as unknown as SandboxResult;
 }
 
 /** §9 — exactly what crosses into Python. No addresses, no handles, no tokens. */
@@ -261,6 +250,13 @@ function datasetPayload(dataset: SandboxDataset): Record<string, unknown> {
   };
 }
 
+const DENIED_CAPABILITY_HINTS: readonly { readonly code: DeniedCapability; readonly sentence: string }[] = [
+  { code: "NETWORK", sentence: "The sandbox has no network; do not call out to a host or URL" },
+  { code: "PROCESS", sentence: "The sandbox has no operating system, process or interpreter access" },
+  { code: "FILESYSTEM", sentence: "The sandbox has no filesystem; do not open, read or write a path" },
+  { code: "BRIDGE", sentence: "The sandbox has no host bridge; the page and its APIs are unreachable" },
+];
+
 /** §66 — what the code generator is told, in terms it can act on. */
 function unsafeRepairHint(violations: readonly CodeViolation[]): string {
   const byCode = new Map<string, string[]>();
@@ -276,6 +272,10 @@ function unsafeRepairHint(violations: readonly CodeViolation[]): string {
   if (calls) parts.push(`These functions are not available: ${[...new Set(calls)].join(", ")}.`);
   const io = byCode.get("IO");
   if (io) parts.push(`Do not read or write files or URLs (${[...new Set(io)].join(", ")}); the data is already provided in \`data\`.`);
+  for (const capability of DENIED_CAPABILITY_HINTS) {
+    const denied = byCode.get(capability.code);
+    if (denied) parts.push(`${capability.sentence} (${[...new Set(denied)].join(", ")}). The data is already provided in \`data\`.`);
+  }
   const attrs = [...(byCode.get("ATTR") ?? []), ...(byCode.get("NAME") ?? [])];
   if (attrs.length > 0) parts.push(`Do not use introspection attributes: ${[...new Set(attrs)].join(", ")}.`);
   return parts.join(" ");

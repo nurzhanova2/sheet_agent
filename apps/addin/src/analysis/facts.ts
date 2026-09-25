@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// VerifiedFacts (Stage 21.2.2).
-//
-// The LLM MAY PLAN AND EXPLAIN. It MUST NOT CALCULATE. Every deterministic
-// numeric or comparative statement it is allowed to make must already exist here
-// as a VerifiedFact, produced by pure code from the frozen 21.2.1 engine output
-// and traceable to a source operation and range.
-//
-// This layer NEVER re-reads the workbook and NEVER calls the engine. It only
-// derives shares / ratios / rankings / extremes / closest-pair / combined
-// comparisons from AnalysisResult values that the engine already computed.
-// ---------------------------------------------------------------------------
-
 import {
   formatCorrelation,
   formatCount,
@@ -257,7 +244,6 @@ function factsForNumericMetric(
   const percent = metric?.metric !== "count" && metricIsPercent(metric, metricLabel);
   const fmt = (value: number) => (percent ? formatPercent(value) : formatNumber(value));
 
-  // per-group scalar
   for (const slice of usable) builder.scalar(metricLabel, slice.value, slice.group, fmt(slice.value));
 
   // subset percentage: a filtered count within its own bucket

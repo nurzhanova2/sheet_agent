@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §22/§23/§26/§30 — SET operations and derived columns.
-//
-// These are the tools that make §23 true: the planner NEVER reads a preview
-// and declares a winner. It names the ranking basis — which field, and whether
-// to compare by absolute size — and `set.argmax` scans every row of the given
-// result to find it. That is Stage 25.1.3e's lesson expressed as an interface
-// rather than as a downstream corrective audit.
-//
-// `derive.compute` accepts only the restricted AST from
-// `app/schema/analytical/derive-expr.ts` — no code strings, no eval (§30).
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import { evalExpr, exprFields, isValidExpr, type ExprNode } from "../../app/schema/analytical/derive-expr.js";
 import { fieldIndex, metricFieldIndex } from "../results/result-store.js";
@@ -103,6 +90,7 @@ function compareText(a: string, op: StringOp, b: string | readonly string[]): bo
 
 const setFilter: ToolSpec = {
   name: "set.filter",
+  capability: "ranking",
   description:
     'Keep only the rows of an earlier per-metric result that satisfy a comparison. Works on a NUMERIC field (percentageChange < 0 keeps everything that fell) and equally on a CATEGORICAL one (direction eq "increasing" keeps the metrics that grew). Returns a filtered_set, and THAT restricted set is the answer to a "show only …" request, never its unfiltered input. A later ranking over this result stays confined to the rows it kept. Matching nothing is a valid answer, not an error: the result simply has no rows.',
   args: {
@@ -181,6 +169,7 @@ function ordered(name: "set.sort" | "set.top" | "set.bottom"): ToolSpec {
   const slice = name !== "set.sort";
   return {
     name,
+    capability: "ranking",
     description:
       name === "set.sort"
         ? "Order the rows of an earlier per-metric result by a numeric field. Returns a ranked_set with the same rows in a new order. Ordering alone does not choose an answer — use set.argmax/set.argmin when the request asks for a single winner."
@@ -233,6 +222,7 @@ function ordered(name: "set.sort" | "set.top" | "set.bottom"): ToolSpec {
 function argExtreme(name: "set.argmax" | "set.argmin", direction: "max" | "min"): ToolSpec {
   return {
     name,
+    capability: "extrema",
     description:
       direction === "max"
         ? "Select the ONE row of an earlier per-metric result whose numeric field is largest, scanning every row. Returns a metric_winner. Set magnitude=true when positive and negative values should be compared by absolute size — which is what a generic \"changed the most\" question means across metrics of different scales. Never pick a winner by reading a preview; call this."
@@ -300,6 +290,7 @@ function argExtreme(name: "set.argmax" | "set.argmin", direction: "max" | "min")
 function combine(name: "set.union" | "set.intersection"): ToolSpec {
   return {
     name,
+    capability: "ranking",
     description:
       name === "set.union"
         ? "Every metric present in EITHER of two results. Returns a metric_set. Use it to widen a candidate set deliberately."
@@ -339,6 +330,7 @@ function combine(name: "set.union" | "set.intersection"): ToolSpec {
 
 const deriveCompute: ToolSpec = {
   name: "derive.compute",
+  capability: "comparison",
   description:
     'Add one computed numeric column to an earlier per-metric result, using a restricted arithmetic expression over that result\'s own numeric fields. Returns a derived result you can then rank or filter. Use it when a request needs a ratio the tools do not provide directly — for example a normalised deviation, abs(latest - mean) / abs(mean), which makes metrics of different scales comparable. The expression is a small JSON tree: {"field":"name"}, {"const":1}, {"op":"add|subtract|multiply|divide","left":…,"right":…}, {"op":"abs|neg","value":…}. No code strings.',
   args: {
@@ -395,8 +387,82 @@ const deriveCompute: ToolSpec = {
   },
 };
 
+/**
+ * Stage 27 §3/§83 — the total ACROSS the rows of a result.
+ *
+ * `aggregate.sum` totals one metric across its periods; this totals one column
+ * across the metrics. They are different questions and the catalogue only had
+ * the first, which the live run found the hard way: "сколько всего продали в
+ * декабре" reached `value.at_period` correctly, then had nowhere to go — the
+ * planner tried `aggregate.sum` on it, got INCOMPATIBLE_INPUT, and fell
+ * through to the code sandbox with `necessity: MISSING_DETERMINISTIC_CAPABILITY`.
+ * It was right that no tool did this. Sending a column sum through a
+ * code-generating model is the §83 failure, and the fix belongs here, not in
+ * the routing rules.
+ *
+ * The total row is LABELLED, because an unlabelled subject narrates as «»:
+ * the period when every row shares one, otherwise the sheet. Both are names
+ * the reader already has in front of them.
+ */
+const setTotal: ToolSpec = {
+  name: "set.total",
+  capability: "statistics",
+  description:
+    "Add up ONE numeric field ACROSS every row of an earlier result: the total over the metrics, as opposed to aggregate.sum which totals one metric over its periods. Returns an aggregate holding one row — the total, and how many rows carried a value. Rows with no observation are excluded from the total and counted separately, never read as zeros. Reach for it whenever the request is about a combined amount rather than a per-metric one.",
+  args: {
+    inputRef: { type: "resultRef", required: true, describe: "the result whose rows are summed" },
+    field: { type: "string", required: true, describe: "the numeric field to total" },
+  },
+  returns: "aggregate",
+  accepts: RANKABLE,
+  reads: false,
+  run: (args, env) => {
+    const input = numericPerMetricInput(args, env);
+    if (isErr(input)) return input.error;
+    const { src, field, index } = input;
+    if (src.rows.length === 0) {
+      return toolError("EMPTY_INPUT_SET", `"${src.resultId}" has no rows, so there is nothing to total — it is a valid empty result you can present as "nothing matched"`);
+    }
+
+    // §23/§25 — a row with no observation is EXCLUDED and counted, never read
+    // as a zero. `counted` is reported so the answer can say what the total
+    // covers, and `skipped` so it can say what it does not.
+    let total = 0;
+    let counted = 0;
+    let skipped = 0;
+    for (const row of src.rows) {
+      const value = numberAt(row, index);
+      if (value === null) {
+        skipped += 1;
+        continue;
+      }
+      total += value;
+      counted += 1;
+    }
+    if (counted === 0) return toolError("INCOMPATIBLE_INPUT", `no row of "${src.resultId}" has a value for "${field}"`);
+
+    const labelIndex = fieldIndex(src, "periodLabel");
+    const periodLabels = labelIndex >= 0 ? new Set(src.rows.map((r) => String(r[labelIndex] ?? ""))) : new Set<string>();
+    const subject = periodLabels.size === 1 ? [...periodLabels][0]! : env.schema.sheetName;
+
+    return {
+      ok: true,
+      result: env.store.put({
+        tool: "set.total",
+        type: "aggregate",
+        fields: [{ name: "metric", kind: "metric" }, num("value"), num("rowCount")],
+        rows: [[subject, total, counted]],
+        ...(src.periodCanonicals ? { periodCanonicals: src.periodCanonicals } : {}),
+        parents: [src.resultId],
+        metadata: { totalOf: field, counted, ...(skipped > 0 ? { skippedRowsWithNoValue: skipped } : {}) },
+      }),
+    };
+  },
+};
+
 export const SET_DERIVE_TOOLS: readonly ToolSpec[] = [
   setFilter,
+  setTotal,
   ordered("set.sort"),
   ordered("set.top"),
   ordered("set.bottom"),

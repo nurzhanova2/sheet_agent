@@ -1,21 +1,6 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §60/§63 — how the answer was computed, for the answer to mention.
-//
-// A deterministic tool call needs no method note. "Я сложил столбец" is not
-// information, and a system that narrates its own arithmetic reads as nervous
-// rather than transparent. The note exists for the analyses where the METHOD
-// is a real choice someone could have made differently — the sandbox ones —
-// and it is built from the metadata the result already carries rather than
-// from a parallel record that could drift away from what actually ran.
-//
-// Everything here is defensive. The metadata is a loose record that crossed a
-// JSON boundary from Python, so nothing may be assumed about its shape; a
-// malformed field costs the note that line, never the answer.
-// ---------------------------------------------------------------------------
-
 import type { MethodComparison } from "../sandbox/method-comparison.js";
 import type { EngineResult } from "../types.js";
-import type { MethodNote } from "./narrator.js";
+import type { MethodNote } from "./presentation-plan.js";
 
 function str(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;

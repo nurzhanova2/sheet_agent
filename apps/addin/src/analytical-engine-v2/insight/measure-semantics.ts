@@ -1,26 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §52/§53 — what a NUMBER MEANS, so it can be written for a human.
-//
-// The engine's results carry raw doubles: 19871.544896, 0.286253, -0.0219. All
-// three are "numbers" to the narrator and all three are formatted wrongly by
-// default — the first needs grouping and one decimal, the second is a FRACTION
-// that must be shown as a percentage, and the third is a percentage-point move
-// if its metric is itself a percentage, or a relative change if it is not.
-//
-// §53 is the reason this module exists rather than a formatting helper. The
-// difference between "+0.80 п.п." and "+2.89%" is not a rounding choice: for a
-// share that moved 27.82% → 28.63% BOTH are true, they are different
-// statements, and conflating them is a wrong answer. Which one a column holds
-// is decided HERE, from the metric's semantic class and the field's role, and
-// never by the model.
-//
-// Nothing here invents a unit. Every classification comes from evidence the
-// schema already carries (label cues, number formats) or from the tool
-// contract that produced the field (`percentageChange` is a fraction because
-// `comparePoints` divides by the start value). Absent evidence, the answer is
-// `unknown` and the value is printed plainly.
-// ---------------------------------------------------------------------------
-
 import { isPercentNumberFormat } from "../../app/schema/excel-date.js";
 import type { AnalysisGrids } from "../../app/schema/matrix-analysis.js";
 import { classifySemanticMetricClass, isPercentageLike, type SemanticMetricClass } from "../../app/schema/measure-compatibility.js";

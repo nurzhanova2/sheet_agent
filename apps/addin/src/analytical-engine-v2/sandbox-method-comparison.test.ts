@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §18/§19/§20/§21 — several methods, and an honest reason for one.
-//
-// The failure these guard against is not a crash. It is an analysis that reads
-// beautifully — "я попробовал k-means и иерархическую кластеризацию; вторая
-// оказалась интерпретируемее" — where only one method ever ran and
-// "интерпретируемее" means nothing that could be checked. Every test here is
-// an attempt to write exactly that and be refused.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it } from "vitest";
 import type { CellValue } from "@sheet-agent/application";
 import { executeAnalysis, validateMethodChoice, type AnalyticalRuntime } from "./sandbox/executor.js";
@@ -22,6 +12,7 @@ import {
   type MethodComparison,
 } from "./sandbox/method-comparison.js";
 import { methodNoteFor } from "./narration/method-note.js";
+import { findingValue } from "./insight/verified-finding.js";
 import { storeSandboxResult } from "./sandbox/result-adapter.js";
 import { ResultStore } from "./results/result-store.js";
 import { buildNarratorMessages, gateNarration, type NarrationInput } from "./narration/narrator.js";
@@ -388,7 +379,14 @@ describe("Stage 27 §21/§60 — the method note", () => {
 
     const invented = gateNarration("Из двух способов надёжнее разделил k-means (0,99 против 0,11).", narration);
     expect(invented.usedFallback).toBe(true);
-    expect(invented.reasons.join(" ")).toContain("0.99");
+    // Stage 27.x.1 §28 — the token is quoted AS WRITTEN, so a Russian draft's
+    // "0,99" is reported as "0,99" and can be found in the draft by search.
+    expect(invented.reasons.join(" ")).toContain("0,99");
+    expect(invented.reasons.join(" ")).toContain("NO_MATCH");
+    // §26 — numbers were the only objection, so one more narration is worth a
+    // call; the sandbox and the planner are not re-run for a quoting slip.
+    expect(invented.retryableNarration).toBe(true);
+    expect(invented.unsupported.map((u) => u.numericToken)).toEqual(["0,99", "0,11"]);
   });
 });
 
@@ -412,7 +410,25 @@ function narrationWith(cmp: MethodComparison): NarrationInput {
   return {
     request: "Кластеризуй продукты и попробуй несколько способов",
     analysis: { primary, supporting: [], answerStyle: "explanatory" },
-    findings: [],
+    // A real clustering answer always carries at least one observation, and
+    // since §37 an answer with NO findings is refused outright — nothing
+    // verified to say means nothing may be said. The comparison check here is
+    // about which NUMBERS may be cited, so the fixture supplies an ordinary
+    // finding rather than leaning on an empty list.
+    findings: [
+      {
+        id: "f1",
+        findingType: "cluster",
+        subject: "стабильные",
+        direction: "none",
+        values: [findingValue("clusterSize", 2, { kind: "count" }, "ru")],
+        materiality: [],
+        confidence: [],
+        caveats: [],
+        provenance: { resultRef: "r1", tool: "sandbox.k-means", sourceRange: "S!A1:B3", sourceVersion: "v1", periods: [] },
+        statement: "Стабильные — 2: «a», «b».",
+      },
+    ],
     locale: "ru",
     method: methodNoteFor(primary)!,
   };

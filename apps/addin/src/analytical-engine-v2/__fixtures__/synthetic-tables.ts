@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §60/§62/§73 — synthetic tables for the V2 engine's tests.
-//
-// Deliberately NOTHING in here resembles the Balance workbook the Stage 25
-// acceptance chain used: the metric labels are invented, the periods are
-// different, the row counts are different, and none of them appears anywhere
-// in engine code. Two DIFFERENT table shapes are provided as well (a two-level
-// dated header with abs/% pairs, and a flat text-labelled header), so a test
-// that passes on both cannot be passing because of a layout assumption.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { AnalysisGrids } from "../../app/schema/matrix-analysis.js";
 import { induceTableSchema, type TableSchema } from "../../app/schema/schema-induction.js";

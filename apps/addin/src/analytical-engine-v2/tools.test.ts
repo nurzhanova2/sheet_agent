@@ -46,13 +46,16 @@ const PREVIOUS = (s: ReturnType<typeof session>, of: string): string => s.ok("pe
 describe("Stage 26.2 §3 — the registry is structurally complete", () => {
   it("exposes every tool the stage requires, each with a usable description and a declared return type", () => {
     const required = [
-      "schema.describe", "schema.metrics", "schema.periods",
+      "schema.describe", "schema.overview_evidence", "schema.metrics", "schema.periods",
       "metric.list", "metric.resolve", "metric.resolve_set", "metric.filter",
       "period.list", "period.resolve", "period.latest", "period.previous", "period.next", "period.range",
       "value.at_period", "series.get",
       "change.compute", "change.compare_periods",
       "aggregate.sum", "aggregate.avg", "aggregate.min", "aggregate.max", "aggregate.std",
       "set.filter", "set.sort", "set.top", "set.bottom", "set.argmax", "set.argmin", "set.union", "set.intersection",
+      // Stage 27 §3/§83 — the total ACROSS metrics, which `aggregate.sum`
+      // (total across PERIODS) does not do and the live run needed.
+      "set.total",
       "analysis.trend", "analysis.volatility", "analysis.stability", "analysis.monotonicity", "analysis.direction_changes", "analysis.temporal_pattern",
       "event.adjacent_changes", "event.max_adjacent_change", "event.min_adjacent_change",
       "derive.compute",
@@ -180,8 +183,8 @@ describe("Stage 26.2 §4 — value, change and aggregate adapters match the prim
     const s = session(table);
     const latest = LATEST(s);
     const prev = PREVIOUS(s, latest);
-    const one = s.ok("change.compute", { metric: "Defect ratio", startPeriod: prev, endPeriod: latest });
-    const all = s.ok("change.compare_periods", { startPeriod: prev, endPeriod: latest });
+    const one = s.ok("change.compute", { metric: "Defect ratio", startPeriod: prev, endPeriod: latest, periodIntent: { kind: "named_pair", start: prev, end: latest } });
+    const all = s.ok("change.compare_periods", { startPeriod: prev, endPeriod: latest, periodIntent: { kind: "named_pair", start: prev, end: latest } });
     const i = all.metricKeys.indexOf("Defect ratio");
     expect(column(one, "percentageChange")[0]).toBe(column(all, "percentageChange")[i]);
     expect(column(one, "absoluteChange")[0]).toBe(column(all, "absoluteChange")[i]);
@@ -194,7 +197,7 @@ describe("Stage 26.2 §4 — value, change and aggregate adapters match the prim
     const a = s.ok("metric.resolve", { text: "Defect ratio" });
     const b = s.ok("metric.resolve", { text: "Queue depth" });
     const narrow = s.ok("set.union", { leftRef: a.resultId, rightRef: b.resultId });
-    const scoped = s.ok("change.compare_periods", { startPeriod: prev, endPeriod: latest, inputRef: narrow.resultId });
+    const scoped = s.ok("change.compare_periods", { startPeriod: prev, endPeriod: latest, periodIntent: { kind: "named_pair", start: prev, end: latest }, inputRef: narrow.resultId });
     expect([...scoped.metricKeys].sort()).toEqual(["Defect ratio", "Queue depth"]);
     expect(scoped.parents).toEqual([narrow.resultId]);
   });
@@ -215,8 +218,7 @@ describe("Stage 26.2 §22/§23/§26/§30 — set operations and derived columns"
   const table = fixtureOperations();
 
   function comparison(s: ReturnType<typeof session>): EngineResult {
-    const latest = LATEST(s);
-    return s.ok("change.compare_periods", { startPeriod: PREVIOUS(s, latest), endPeriod: latest });
+    return s.ok("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
   }
 
   it("set.argmax scans values, so the winner does not depend on row order", () => {
@@ -266,7 +268,7 @@ describe("Stage 26.2 §22/§23/§26/§30 — set operations and derived columns"
     const now = s.ok("value.at_period", { period: latest, inputRef: mean.resultId });
     // join the two by putting the latest value onto the mean result via derive
     // is not possible directly, so derive over the comparison instead:
-    const cmp = s.ok("change.compare_periods", { startPeriod: PREVIOUS(s, latest), endPeriod: latest });
+    const cmp = s.ok("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
     const derived = s.ok("derive.compute", {
       inputRef: cmp.resultId,
       field: "relativeMove",
@@ -366,8 +368,7 @@ describe("Stage 26.2 §8 — incompatible chains fail closed", () => {
 
   it("a non-numeric or missing field is refused, with the numeric ones listed", () => {
     const s = session(table);
-    const latest = LATEST(s);
-    const cmp = s.ok("change.compare_periods", { startPeriod: PREVIOUS(s, latest), endPeriod: latest });
+    const cmp = s.ok("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
     const textField = s.call("set.argmax", { inputRef: cmp.resultId, field: "startCell" });
     expect(textField.ok).toBe(false);
     if (!textField.ok) {
@@ -392,8 +393,7 @@ describe("Stage 26.2 §8 — incompatible chains fail closed", () => {
   // INCOMPATIBLE_INPUT made it unsayable and cost a live turn (para-flt-2).
   it("a filter that matches nothing returns a valid EMPTY result, not an error", () => {
     const s = session(table);
-    const latest = LATEST(s);
-    const cmp = s.ok("change.compare_periods", { startPeriod: PREVIOUS(s, latest), endPeriod: latest });
+    const cmp = s.ok("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
     const empty = s.ok("set.filter", { inputRef: cmp.resultId, field: "percentageChange", op: ">", value: 1e9 });
     expect(empty.type).toBe("filtered_set");
     expect(empty.rows).toHaveLength(0);
@@ -408,8 +408,7 @@ describe("Stage 26.2 §19/§20/§41 — reference tools return typed references"
 
   it("restore the previous result, metric, set, period and event as structured results", () => {
     const s0 = session(table);
-    const latest = LATEST(s0);
-    const cmp = s0.ok("change.compare_periods", { startPeriod: PREVIOUS(s0, latest), endPeriod: latest });
+    const cmp = s0.ok("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
     const state: AnalyticalConversationState = {
       turnId: "t0",
       lastResult: storeResult(cmp),
@@ -473,8 +472,7 @@ describe("Stage 26.2 §52 — the same tools on a different table with opaque la
   it("ranks by the data alone", () => {
     const table = fixtureOpaque();
     const s = session(table);
-    const latest = LATEST(s);
-    const cmp = s.ok("change.compare_periods", { startPeriod: PREVIOUS(s, latest), endPeriod: latest });
+    const cmp = s.ok("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
     const winner = s.ok("set.argmax", { inputRef: cmp.resultId, field: "percentageChange", magnitude: true });
     // Alpha 11→30 is +172.7%, Beta 470→120 is -74.5%: Alpha wins by magnitude.
     expect(winner.metricKeys).toEqual(["Alpha"]);

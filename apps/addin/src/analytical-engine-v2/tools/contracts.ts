@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §6/§8/§64 — the shared tool contract.
-//
-// Every adapter in `tools/*-tools.ts` declares a typed input contract and the
-// result types it accepts, and resolves its metric/period/result arguments
-// through the helpers here — so "unknown metric", "invented date" and
-// "incompatible input" are answered identically by every tool, with the same
-// candidate lists that make the error recoverable (§15).
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { AnalysisGrids } from "../../app/schema/matrix-analysis.js";
 import type { RowAxisMember, TableSchema } from "../../app/schema/schema-induction.js";
@@ -15,6 +5,7 @@ import { buildMetricIndex, resolveMetric, resolveMetricSet, type MetricIndex } f
 import { buildPeriodIndex, type PeriodIndex } from "../../app/schema/analytical/period-index.js";
 import { getTemporalSeries } from "../../app/schema/analytical/temporal-series.js";
 import type { CanonicalPeriod, ResolvedSubject, TemporalSeries } from "../../app/schema/analytical/types.js";
+import type { CapabilityFacts, CapabilityId } from "../capability/capability-model.js";
 import type { ResultStore } from "../results/result-store.js";
 import { fieldIndex } from "../results/result-store.js";
 import type { AnalyticalConversationState } from "../state/conversation-state.js";
@@ -51,6 +42,8 @@ export interface ToolSpec {
   readonly name: string;
   /** §5 — what it does, what it takes, what it returns, when to use it. */
   readonly description: string;
+  readonly capability: CapabilityId;
+  readonly usable?: (facts: CapabilityFacts) => boolean;
   readonly args: Readonly<Record<string, ArgSpec>>;
   readonly returns: ResultType;
   /** §8 — result types this tool's `inputRef` accepts; omitted when it takes none. */
@@ -150,16 +143,43 @@ export function periodFor(env: ToolEnv, canonical: unknown): Resolved<CanonicalP
   }
   const p = env.periodIndex.points.find((x) => x.canonical === canonical);
   if (!p) {
-    return { error: toolError("AMBIGUOUS_PERIOD", `"${canonical}" is not a period of this table`, sortedPoints(env).map((x) => x.canonical)) };
+    // The candidate list alone was not enough: the live run answered it with
+    // "Дек (Дек)" — the label with the candidate's own formatting glued on —
+    // and then re-sent the identical call until the turn died. Saying that the
+    // candidates are to be copied verbatim is the missing half.
+    return {
+      error: toolError("AMBIGUOUS_PERIOD", `"${canonical}" is not a period of this table; use one of the candidates below exactly as written`, sortedPoints(env).map((x) => x.canonical)),
+    };
   }
   return p;
+}
+
+/**
+ * §5/§8 — an unresolvable reference, explained well enough to recover from.
+ *
+ * `no result "schema.metrics()" in this analysis` is true and useless: the
+ * planner wrote a CALL where an id belongs, and being handed the list of ids
+ * does not tell it that. The live run lost two turns to exactly this — one
+ * burned its whole round budget re-sending the same call — so the shape of the
+ * mistake is named when it is recognisable.
+ */
+export function unknownReference(ref: string, env: ToolEnv): ReturnType<typeof toolError> {
+  const asCall = /^([a-z_]+\.[a-z_]+)\s*\(\s*\)?$/i.exec(ref.trim());
+  if (asCall) {
+    return toolError(
+      "UNKNOWN_REFERENCE",
+      `"${ref}" is a tool NAME, not a result. Call ${asCall[1]} first as its own decision, then pass the resultId it returns`,
+      env.store.ids(),
+    );
+  }
+  return toolError("UNKNOWN_REFERENCE", `no result "${ref}" in this analysis`, env.store.ids());
 }
 
 /** A resultId → the stored result. */
 export function inputResult(ref: unknown, env: ToolEnv): Resolved<EngineResult> {
   if (typeof ref !== "string" || ref === "") return { error: toolError("INVALID_ARGUMENT", '"inputRef" must be the resultId of an earlier tool result') };
   const r = env.store.get(ref);
-  if (!r) return { error: toolError("UNKNOWN_REFERENCE", `no result "${ref}" in this analysis`, env.store.ids()) };
+  if (!r) return { error: unknownReference(ref, env) };
   return r;
 }
 

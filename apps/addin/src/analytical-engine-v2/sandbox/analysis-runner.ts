@@ -1,19 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §4/§5/§13/§32/§34 — the bridge between a planner decision and code.
-//
-// The planner says WHAT the analysis must establish; this assembles the rest:
-// it prepares the dataset the sandbox is allowed to see (§9), turns the
-// decision into a SandboxPlan (§13), runs the generate–execute–repair loop
-// (§66), and stores whatever came back as ordinary engine results so the
-// planner can keep working with them (§32/§34).
-//
-// It decides nothing analytical. There is no place here where a failed
-// analysis becomes a different analysis, no place where a missing output is
-// filled in from a tool, and no place where an objective is rewritten — those
-// are exactly the substitutions §5 exists to forbid, and the way to keep them
-// out is to give this layer nothing to substitute WITH.
-// ---------------------------------------------------------------------------
-
 import type { AnalysisGrids } from "../../app/schema/matrix-analysis.js";
 import type { TableSchema } from "../../app/schema/schema-induction.js";
 import type { AnalysisRunner, AnalysisRunOutcome } from "../planner/planner-loop.js";
@@ -24,6 +8,7 @@ import { buildDataset } from "./dataset.js";
 import { executeAnalysis, hashCode, type AnalyticalRuntime, type AttemptRecord } from "./executor.js";
 import { storeSandboxResult } from "./result-adapter.js";
 import type { SandboxDataset, SandboxLimits, SandboxPlan } from "./types.js";
+import type { ExecutionProgress, TimingRecorder } from "../production/execution-progress.js";
 
 export interface AnalysisCapability {
   readonly runtime: AnalyticalRuntime;
@@ -34,6 +19,8 @@ export interface AnalysisCapability {
   readonly currentSourceVersion?: () => string;
   /** §71 — every attempt, including the ones that failed. */
   readonly onAttempt?: (record: AttemptRecord) => void;
+  readonly onProgress?: ExecutionProgress;
+  readonly timings?: TimingRecorder;
 }
 
 export interface AnalysisRunnerParams {
@@ -74,7 +61,25 @@ export function createAnalysisRunner(params: AnalysisRunnerParams): AnalysisRunn
     const bail = (code: string, message: string, attempts = 0): AnalysisRunOutcome => ({ ok: false, code, message, attempts, durationMs: Date.now() - started });
 
     const unusable = unusableRuntime(capability.runtime);
-    if (unusable) return bail("SANDBOX_UNAVAILABLE", unusable);
+    if (unusable) {
+      capability.onProgress?.({ kind: "sandbox_unavailable", reason: unusable });
+      return bail("SANDBOX_UNAVAILABLE", unusable);
+    }
+
+    capability.onProgress?.({ kind: "sandbox_required" });
+    const bootStarted = Date.now();
+    try {
+      await capability.runtime.ready?.();
+      capability.onProgress?.({ kind: "sandbox_ready", durationMs: Date.now() - bootStarted });
+    } catch (err) {
+      const diagnostics = capability.runtime.startupDiagnostics?.() ?? [];
+      capability.onProgress?.({
+        kind: "sandbox_unavailable",
+        reason: String(err),
+        ...(diagnostics.length > 0 ? { diagnostics } : {}),
+      });
+      return bail("SANDBOX_UNAVAILABLE", `the analytical runtime did not start: ${String(err)}`);
+    }
 
     if (!cached) {
       const built = buildDataset({ schema, grids });
@@ -91,6 +96,15 @@ export function createAnalysisRunner(params: AnalysisRunnerParams): AnalysisRunn
       dataset,
       ...(capability.limits ? { limits: capability.limits } : {}),
       ...(signal ? { signal } : {}),
+      ...(capability.onProgress ? { onProgress: capability.onProgress } : {}),
+      ...(capability.timings
+        ? {
+            onPhase: (phase: "generation" | "execution", ms: number) => {
+              if (phase === "generation") capability.timings?.addCodeGeneration(ms);
+              else capability.timings?.addSandbox(ms);
+            },
+          }
+        : {}),
       currentSourceVersion: capability.currentSourceVersion ?? (() => schema.sourceVersion),
       onAttempt: (record) => {
         lastCode = record.code;

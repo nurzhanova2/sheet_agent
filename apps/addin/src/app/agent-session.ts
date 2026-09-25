@@ -27,6 +27,41 @@ export interface ActivityEntry {
   readonly title: string;
   readonly detail?: string;
   readonly status: ActivityStatus;
+  readonly durationMs?: number;
+}
+
+export interface CodeEntry {
+  readonly kind: "code";
+  readonly id: string;
+  readonly title: string;
+  readonly code: string;
+  readonly attempt: number;
+}
+
+export interface ExecutionDiagnostic {
+  readonly label: string;
+  readonly value: string;
+}
+
+export type ExecutionDetail =
+  | {
+      readonly kind: "step";
+      readonly title: string;
+      readonly status: ActivityStatus;
+      readonly detail?: string;
+      readonly durationMs?: number;
+      readonly diagnostics?: readonly ExecutionDiagnostic[];
+    }
+  | { readonly kind: "code"; readonly title: string; readonly code: string; readonly attempt: number };
+
+export interface ExecutionEntry {
+  readonly kind: "execution";
+  readonly id: string;
+  readonly title: string;
+  readonly subtitle?: string;
+  readonly status: "running" | "done" | "error";
+  readonly details: readonly ExecutionDetail[];
+  readonly metrics: readonly string[];
 }
 export interface ResponseEntry {
   readonly kind: "response";
@@ -76,7 +111,16 @@ export type TranscriptEntry =
   | ResponseEntry
   | ProposalEntry
   | NoticeEntry
-  | ChartEntry;
+  | ChartEntry
+  | CodeEntry
+  | ExecutionEntry;
+
+export function formatSeconds(ms: number, locale: "ru" | "en" = "ru"): string {
+  const seconds = Math.max(0, ms) / 1000;
+  const digits = seconds < 10 ? 1 : seconds < 100 ? 1 : 0;
+  const text = seconds.toFixed(digits);
+  return locale === "ru" ? `${text.replace(".", ",")} с` : `${text} s`;
+}
 
 export type UndoableChange =
   // One approved proposal = one undo transaction, however many internal cell

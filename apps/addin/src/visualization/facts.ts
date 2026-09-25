@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Verified visualization facts & chart-claim integrity (Stage 21.2.4).
-//
-// The deterministic engine decides what the chart actually contains. The LLM may
-// only describe STRUCTURE — chart type, axes, datasets, grouping, point counts —
-// that appears in the VisualizationResult it was handed. It must never invent a
-// series, a grouping, a reference / trend / y=x line, an annotation, a colour, a
-// symbol, a bin count or a point total.
-//
-// This module turns a VisualizationResult into a model-facing fact block and
-// validates the final prose against it (RU + EN).
-// ---------------------------------------------------------------------------
-
 import type { ResponseLanguage } from "../app/language.js";
 import type { NumberLocale } from "../analysis/format-number.js";
 import { formatNumber } from "../analysis/format-number.js";

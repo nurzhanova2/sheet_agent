@@ -1,20 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 23 — the deterministic Workbook Resolver.
-//
-// Turns a user-typed reference ("Sales Test Data", "Revenue") into a concrete
-// workbook object taken from the {@link WorkbookMap}. It FAILS CLOSED:
-//   • an exact (case-insensitive) match resolves;
-//   • a single case-insensitive prefix match resolves (safe normalization);
-//   • a single case-insensitive substring match resolves;
-//   • anything with two or more candidates is reported as ambiguous — never
-//     silently chosen;
-//   • no match is reported as not-found.
-//
-// `strict` mode (used for MUTATION targets) accepts ONLY an exact / case-exact
-// match — fuzzy normalization must never turn an ambiguous or unknown reference
-// into a write target.
-// ---------------------------------------------------------------------------
-
 import type { WorkbookMap, WorkbookMapSheet } from "./workbook-map.js";
 
 export interface ResolvedSheet {

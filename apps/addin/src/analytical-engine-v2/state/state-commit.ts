@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §9/§39/§40 — deriving the next conversation state from a completed,
-// verified analysis.
-//
-// Three rules, all of which Stages 24–25 violated at least once:
-//
-//   §9  commit depends on EXECUTION success, never on narration success — a
-//       deterministic fallback is a presentation outcome;
-//   §39 every field is DERIVED from the structured result's own type, never
-//       guessed from row shape or tool name;
-//   §40 the whole snapshot is built and then swapped in one assignment, so
-//       `lastEvent.metricKey` and `lastMetric` can never disagree.
-// ---------------------------------------------------------------------------
-
 import type { EngineAnalysis, EngineResult } from "../types.js";
 import { fieldIndex, metricFieldIndex } from "../results/result-store.js";
 import type { AnalysisRefV2, AnalyticalConversationState, EventRefV2, RefLineage, SeriesRefV2, StoredResultRef, TableRef } from "./conversation-state.js";

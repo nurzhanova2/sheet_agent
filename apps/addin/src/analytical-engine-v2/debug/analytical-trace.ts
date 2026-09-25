@@ -1,16 +1,7 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §42 — the analytical trace.
-//
-// The point of this module is that the NEXT failure should be diagnosable
-// from one trace instead of another 25.1.3a/b/c/d/e/f patch: for a single
-// turn it records the context the planner saw, every decision it made, every
-// tool call and its typed outcome, the explicit completion, and the state
-// before and after. Developer-facing only — never part of a user answer.
-// ---------------------------------------------------------------------------
-
 import type { AnalyticalConversationState } from "../state/conversation-state.js";
 import type { DecisionProblem, EngineResult, PlannedOutput, PlannerDecision, SerializationClass, ToolError } from "../types.js";
 import type { VerifiedFinding } from "../insight/verified-finding.js";
+import type { UnsupportedClaim } from "../narration/narration-facts.js";
 
 export interface TraceRound {
   readonly round: number;
@@ -48,6 +39,84 @@ export interface BudgetUse {
   readonly primaryCorrections: number;
   /** Stage 27 §38/§83 — how many code analyses this turn ran. */
   readonly analyses?: number;
+  readonly finalToolCalls?: number;
+  readonly finalToolCallsHonoured?: number;
+}
+
+export interface HeldFindingTrace {
+  readonly id: string;
+  readonly findingType: string;
+  readonly subject: string;
+  readonly reason: string;
+}
+
+export interface AnswerQualityTrace {
+  readonly extractedFindings: number;
+  readonly visibleGroundedFindings: number;
+  readonly heldFindings: number;
+  readonly unnamedSubjectFindingsHeld: number;
+  readonly heldByFindingType: Readonly<Record<string, number>>;
+  readonly heldByReason: Readonly<Record<string, number>>;
+  readonly held: readonly HeldFindingTrace[];
+  readonly answerShape: string;
+  readonly deterministicFirstAnswers?: number;
+  readonly narratorDrafts: number;
+  readonly narrationGateRejects: number;
+  readonly answerEvaluatorRejects: number;
+  readonly answerEvaluatorIssues: readonly string[];
+  readonly rewriteFailureReasons: readonly string[];
+  readonly rejectedDrafts: readonly RejectedDraft[];
+  readonly answerRewriteAttempts: number;
+  readonly answerRewriteSuccesses: number;
+  readonly deterministicFallbacks: number;
+  readonly minimalFallbacks: number;
+  readonly causalClaimsRejected: number;
+  readonly numericClaimsRejected: number;
+  readonly unnamedSubjectClaimsPresented: number;
+  readonly unsupportedCausalClaimsPresented: number;
+  readonly unsupportedRecommendationsPresented: number;
+  readonly rawEvidenceDumpsPresented: number;
+  readonly unsupportedNumericClaims: number;
+  readonly unsupportedNumericClaimsPresented: number;
+  readonly narratorLatencyMs: number;
+  readonly evaluatorLatencyMs: number;
+  readonly rewriteLatencyMs: number;
+}
+
+export interface RejectedDraft {
+  readonly stage: "draft" | "rewrite";
+  readonly text: string;
+  readonly gateReasons: readonly string[];
+  readonly evaluatorIssues: readonly string[];
+}
+
+export interface ToolContextTrace {
+  readonly availableCapabilities: readonly string[];
+  readonly selectedCapabilities: readonly string[];
+  readonly availableCapabilityCount: number;
+  readonly selectedCapabilityCount: number;
+  readonly registryToolCount: number;
+  readonly availableToolCount: number;
+  readonly initiallyExposedToolCount: number;
+  readonly initiallyLoadedToolCount: number;
+  readonly finalExposedToolCount: number;
+  readonly finalLoadedToolCount: number;
+  readonly calledToolCount: number;
+  readonly toolDiscoveryRequests: number;
+  readonly capabilityUnavailableErrors: number;
+  readonly unknownToolErrors: number;
+  readonly callToolWithoutInvoker: number;
+  readonly executeCodeWithoutRuntime: number;
+  readonly mutationCapabilityOffered: number;
+  readonly toolSchemaLeaks: number;
+  readonly initialPromptChars: number;
+  readonly initialToolContextChars: number;
+  readonly fullCatalogChars: number;
+  readonly promptCharsByRound: readonly number[];
+  readonly toolContextCharsByRound: readonly number[];
+  readonly agentActions?: readonly string[];
+  readonly agentCapabilities?: readonly string[];
+  readonly agentExposedTools?: readonly string[];
 }
 
 export interface AnalyticalTraceV2 {
@@ -84,8 +153,20 @@ export interface AnalyticalTraceV2 {
   readonly failureReason?: string;
   readonly stateAfter?: AnalyticalConversationState;
   readonly stateRejected?: string;
-  readonly narratorStatus?: "verified" | "fallback" | "not_run";
+  readonly narratorStatus?: "verified" | "fallback" | "deterministic" | "not_run";
   readonly narratorReasons?: readonly string[];
+  /**
+   * Stage 27.x.1 §28 — every unsupported numeric claim, with its nearest
+   * facts and the rule that refused it.
+   *
+   * Debug-only and never rendered to a user. It exists because the previous
+   * five-run investigation had only a reason STRING to work from — "these
+   * figures are not VERIFIED FACTS: 70" — which says a number was refused and
+   * nothing about whether the narrator was wrong or the verifier was. Both
+   * answers turned out to be "the verifier", and finding that out took a day
+   * of reading raw transcripts. This is that day, written down.
+   */
+  readonly unsupportedClaims?: readonly UnsupportedClaim[];
   /**
    * Stage 27 §71 — the observations the answer was built from. The trace shows
    * WHAT WAS CONCLUDED, not only what was computed: a turn whose tools all ran
@@ -93,12 +174,14 @@ export interface AnalyticalTraceV2 {
    * evidence of that is the prose itself.
    */
   readonly findings?: readonly VerifiedFinding[];
+  readonly answerQuality?: AnswerQualityTrace;
+  readonly toolContext?: ToolContextTrace;
   /** Stage 27 §71 — how the sandbox analysis was performed, if one ran. */
   readonly analysisMethod?: Readonly<Record<string, unknown>>;
   readonly analysisAttempts?: number;
   readonly analysisDurationMs?: number;
   /** Stage 27 §67 — why the requested analysis could not be completed. */
-  readonly analysisFailure?: { readonly code: string; readonly message: string; readonly attempts: number };
+  readonly analysisFailure?: { readonly code: string; readonly message: string; readonly attempts: number; readonly objective?: string };
 }
 
 const MAX_TRACES = 12;
@@ -256,7 +339,34 @@ export function renderTrace(trace: AnalyticalTraceV2): string {
   if (trace.analysisFailure) {
     lines.push(`ANALYSIS FAILED  ${trace.analysisFailure.code}: ${trace.analysisFailure.message} (after ${trace.analysisFailure.attempts} attempt(s))`);
   }
+  const tc = trace.toolContext;
+  if (tc) {
+    const saved = tc.fullCatalogChars > 0 ? Math.round((1 - tc.initialToolContextChars / tc.fullCatalogChars) * 100) : 0;
+    lines.push(
+      `CAPABILITIES     available=[${tc.availableCapabilities.join(", ")}] selected=[${tc.selectedCapabilities.join(", ")}]`,
+      `TOOL EXPOSURE    registry=${tc.registryToolCount} exposed=${tc.initiallyExposedToolCount} loaded=${tc.initiallyLoadedToolCount}→${tc.finalLoadedToolCount} called=${tc.calledToolCount}`,
+      `TOOL CONTEXT     ${tc.initialToolContextChars} chars vs ${tc.fullCatalogChars} full (${saved}% off) prompt=${tc.initialPromptChars} chars`,
+      `CAPABILITY GATES unavailable=${tc.capabilityUnavailableErrors} unknownTool=${tc.unknownToolErrors} discovery=${tc.toolDiscoveryRequests} callToolNoInvoker=${tc.callToolWithoutInvoker} executeCodeNoRuntime=${tc.executeCodeWithoutRuntime} mutationOffered=${tc.mutationCapabilityOffered} leaks=${tc.toolSchemaLeaks}`,
+    );
+  }
   lines.push(`NARRATOR         ${trace.narratorStatus ?? "not_run"}${trace.narratorReasons?.length ? ` (${trace.narratorReasons.join("; ")})` : ""}`);
+  const quality = trace.answerQuality;
+  if (quality) {
+    lines.push(
+      `GROUNDING        extracted=${quality.extractedFindings} visible=${quality.visibleGroundedFindings} held=${quality.heldFindings} unnamedHeld=${quality.unnamedSubjectFindingsHeld}`,
+      `ANSWER SHAPE     ${quality.answerShape}`,
+      `ANSWER QUALITY   drafts=${quality.narratorDrafts} gateRejects=${quality.narrationGateRejects} evaluatorRejects=${quality.answerEvaluatorRejects} rewrite=${quality.answerRewriteAttempts}/${quality.answerRewriteSuccesses} fallbacks=${quality.deterministicFallbacks} minimal=${quality.minimalFallbacks}`,
+      `ANSWER REJECTED  causal=${quality.causalClaimsRejected} numeric=${quality.numericClaimsRejected}${quality.rewriteFailureReasons.length > 0 ? ` rewriteFailed=${quality.rewriteFailureReasons.join(",")}` : ""}`,
+      `ANSWER PRESENTED unnamed=${quality.unnamedSubjectClaimsPresented} causal=${quality.unsupportedCausalClaimsPresented} recommendation=${quality.unsupportedRecommendationsPresented} rawDump=${quality.rawEvidenceDumpsPresented}`,
+      `ANSWER LATENCY   narrator=${quality.narratorLatencyMs}ms evaluator=${quality.evaluatorLatencyMs}ms rewrite=${quality.rewriteLatencyMs}ms`,
+    );
+    for (const entry of quality.held) lines.push(`HELD FINDING     ${entry.findingType} ${entry.subject || "-"} <- ${entry.reason}`);
+    if (quality.answerEvaluatorIssues.length > 0) lines.push(`ANSWER ISSUES    ${quality.answerEvaluatorIssues.join(", ")}`);
+    for (const rejected of quality.rejectedDrafts ?? []) {
+      const why = [...rejected.gateReasons, ...rejected.evaluatorIssues].join("; ") || "-";
+      lines.push(`REJECTED ${rejected.stage.toUpperCase().padEnd(8)}${why}`, `                 ${rejected.text.replace(/\s+/gu, " ").slice(0, 200)}`);
+    }
+  }
   if (trace.findings?.length) {
     for (const finding of trace.findings) {
       const caveats = finding.caveats.length > 0 ? ` [${finding.caveats.map((c) => c.code).join(", ")}]` : "";

@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 23 — `/new-sheet <Name>` (deterministic, previewed mutation).
-//
-//   command → validate → Preview → Approve → port.addWorksheet → confirmation
-//           → Undo (port.deleteWorksheet, removing ONLY the sheet we created).
-//
-// No mutation before Approve. One command = one undo transaction (the shared
-// undo stack, a new "sheet" variant alongside the chart-shape variant).
-// ---------------------------------------------------------------------------
-
 import type { ResponseLanguage } from "../language.js";
 import type { WorkbookMap } from "./workbook-map.js";
 

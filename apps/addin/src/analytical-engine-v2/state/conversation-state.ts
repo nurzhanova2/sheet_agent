@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §7/§8/§39/§40 — THE canonical analytical conversation state.
-//
-// Stages 24–25 accumulated several independent stores that could each claim
-// to know "the current metric" or "the previous result" (`lastMetricFocusRef`,
-// `lastEventRef.metricKey`, `lastMetricSetRef`, `lastResultSetRef`,
-// `lastAnalyticalResultSetRef`, plus the planner's own same-turn winner). This
-// module replaces them with ONE immutable snapshot per turn.
-//
-// Everything here is DERIVED from a verified deterministic result (§39) and
-// committed atomically (§40). Narration can never write to it (§36).
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { EngineResult } from "../types.js";
 import type { AnsweredClarification } from "./clarification-loop.js";

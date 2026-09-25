@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §3/§27/§28 — TEMPORAL analyses and adjacent-period EVENTS.
-//
-// Every score here comes from `temporal-primitives.ts` / `temporal-series.ts` /
-// `series-aggregates.ts`. The V2 layer only chooses the metric scope and
-// shapes the output into a typed result.
-//
-// §28's "stable growth" family is deliberately NOT a tool. It is a composition
-// the planner assembles — trend (is it growing?), then stability (how smoothly?),
-// then a filter and a ranking. Tool descriptions say what each score means so
-// the planner can build that itself instead of matching a phrase.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import {
   computeDirectionChangeEvents,
@@ -45,6 +32,7 @@ const EVENT_FIELDS = [
 
 const analysisTrend: ToolSpec = {
   name: "analysis.trend",
+  capability: "statistics",
   description:
     'The overall direction of each metric over its whole history: a fitted slope, a scale-free normalised slope, a direction label ("increasing"/"decreasing"/"flat") and the fit quality r2. Returns a trend result with one row per metric. Use it to establish WHETHER something grew; combine it with analysis.stability or analysis.volatility to say HOW SMOOTHLY it grew.',
   args: { ...METRIC_SCOPE_ARGS },
@@ -84,6 +72,7 @@ function volStab(name: "analysis.volatility" | "analysis.stability"): ToolSpec {
   const volatile = name === "analysis.volatility";
   return {
     name,
+    capability: "statistics",
     description: volatile
       ? "How much each metric moves from period to period — a higher score means bigger, more erratic swings. Returns a volatility result with one row per metric. Use it for \"most unstable/erratic\" questions, and rank it with set.argmax."
       : "How smooth each metric's period-to-period movement is — a higher score means steadier. Returns a stability result with one row per metric. It is the inverse of volatility, so ranking stability descending and volatility ascending pick the same metric. It says nothing about DIRECTION, so pair it with analysis.trend when the request is about steady GROWTH.",
@@ -95,6 +84,7 @@ function volStab(name: "analysis.volatility" | "analysis.stability"): ToolSpec {
       const scope = metricScope(args, env);
       if (isErr(scope)) return scope.error;
       const rows: CellValue[][] = [];
+      const details: Record<string, { readonly method: string; readonly periods: number; readonly largestSwing: number; readonly largestSwingFrom: string; readonly largestSwingTo: string }> = {};
       const skipped: string[] = [];
       for (const m of scope.members) {
         const series = seriesOf(env, m);
@@ -108,6 +98,13 @@ function volStab(name: "analysis.volatility" | "analysis.stability"): ToolSpec {
           continue;
         }
         rows.push([m.display, volatile ? v.score : stabilityFromVolatility(v.score)]);
+        details[m.display] = {
+          method: v.method,
+          periods: v.periods,
+          largestSwing: v.largestSwing,
+          largestSwingFrom: v.largestSwingFrom.periodLabel,
+          largestSwingTo: v.largestSwingTo.periodLabel,
+        };
       }
       if (rows.length === 0) return toolError("INCOMPATIBLE_INPUT", "no metric has enough points to score");
       return {
@@ -118,7 +115,7 @@ function volStab(name: "analysis.volatility" | "analysis.stability"): ToolSpec {
           fields: [METRIC_FIELD, num("score")],
           rows,
           parents: scope.parents,
-          ...(skipped.length > 0 ? { metadata: { skipped } } : {}),
+          metadata: { volatilityDetails: details, ...(skipped.length > 0 ? { skipped } : {}) },
         }),
       };
     },
@@ -127,6 +124,7 @@ function volStab(name: "analysis.volatility" | "analysis.stability"): ToolSpec {
 
 const analysisMonotonicity: ToolSpec = {
   name: "analysis.monotonicity",
+  capability: "statistics",
   description:
     "Whether each metric moved in ONE direction the whole time: flags for strictly increasing, strictly decreasing, non-decreasing and non-increasing (1 or 0), plus how many periods were tested. Returns a monotonicity result. Use it for \"never fell\" / \"grew every period\" style conditions, filtered with set.filter on the flag you need.",
   args: { ...METRIC_SCOPE_ARGS },
@@ -159,6 +157,7 @@ const analysisMonotonicity: ToolSpec = {
 
 const analysisDirectionChanges: ToolSpec = {
   name: "analysis.direction_changes",
+  capability: "statistics",
   description:
     "How many times each metric reversed direction, and at which periods. Returns a direction_changes result with one row per metric. Use it for \"most erratic\" / \"kept flipping\" questions; rank it with set.argmax on directionChangeCount.",
   args: { ...METRIC_SCOPE_ARGS },
@@ -191,6 +190,7 @@ const analysisDirectionChanges: ToolSpec = {
 
 const analysisTemporalPattern: ToolSpec = {
   name: "analysis.temporal_pattern",
+  capability: "statistics",
   description:
     'Flag metrics whose history contains a fall later followed by a rise ("down_then_up"), or a rise later followed by a fall ("up_then_down"), reporting where each leg turned. Returns a temporal_pattern result with matched = 1 or 0 per metric; filter it with set.filter on matched. The reversal may happen at ANY later period, not only the immediately next one.',
   args: {
@@ -229,6 +229,7 @@ const analysisTemporalPattern: ToolSpec = {
 
 const eventAdjacentChanges: ToolSpec = {
   name: "event.adjacent_changes",
+  capability: "extrema",
   description:
     "Every period-to-period move of ONE metric — each neighbouring pair with its start and end values, absolute and percentage change. Returns an event_set whose rows are MOVES, not metrics. Use it to show a metric's full movement history; use event.max_adjacent_change when only the biggest move matters.",
   args: {
@@ -263,6 +264,7 @@ const eventAdjacentChanges: ToolSpec = {
 function adjacentExtreme(name: "event.max_adjacent_change" | "event.min_adjacent_change", which: "max" | "min"): ToolSpec {
   return {
     name,
+    capability: "extrema",
     description:
       which === "max"
         ? 'The pair of NEIGHBOURING periods where one metric moved the most, with both values and the size of the move. Returns a one-row event result. Use it for "when was the biggest jump/drop" — note this is a move between two adjacent periods, which is usually NOT the same pair as an overall latest-vs-previous comparison. basis="percentage" compares relative moves, basis="absolute" raw amounts.'

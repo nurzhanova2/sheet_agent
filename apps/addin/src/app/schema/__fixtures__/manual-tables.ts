@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.8 §39/§40/§41/§49 — the tables a HUMAN will test on.
-//
-// One definition, two consumers: the §42 production smoke suite runs against
-// these in memory, and `scripts/build-manual-workbook.mjs` writes the same
-// numbers into `SheetAgent_V2_Manual_Test.xlsx`. A tester's Excel and the
-// automated smoke therefore see the same data, and a bug report about "Узел
-// сборки" can be reproduced without asking what was on the screen.
-//
-// §41 — two of these are UNSEEN: they appear in no benchmark, no Stage 24-26
-// test, and no prompt. Nothing in production keys off these strings, and
-// nothing may start to.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { FixtureSnapshot } from "./tables.js";
 

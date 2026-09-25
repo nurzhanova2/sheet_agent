@@ -1,32 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §36/§37/§38 — "Исследуй таблицу", answered without wandering.
-//
-// An open-ended request is the one place where an analytical agent most easily
-// becomes useless in two opposite directions. It can do too little — map
-// "что здесь интересно?" onto whichever single tool is nearest and report a
-// sum, which §36 forbids — or it can do too much, and keep looking until the
-// turn dies of old age, which §38 forbids.
-//
-// The shape that avoids both is a PLAN: a small set of named dimensions,
-// chosen from the schema before any code runs, each of which must come back
-// with something. §37 supplies the dimensions; §38 supplies the ceiling.
-//
-// One decision worth writing down. §38 asks for "3–6 analytical
-// investigations before synthesis", and there are two ways to read that: six
-// separate analyses, or one analysis covering six dimensions. This takes the
-// second. Six round trips through a code-generating model inside a turn that
-// already spends ~40s in the planner is not an exploration, it is a timeout —
-// and the dimensions genuinely share their preparation, since they all run
-// over the same prepared frame. So a dimension is the investigation §38
-// counts, and `ENGINE_BOUNDS.maxAnalyses` stays the separate, smaller limit on
-// how many times a turn may reach for the sandbox at all.
-//
-// The other asymmetry is deliberate: the MAXIMUM is enforced and the minimum
-// is not. §38's boundedness is the safety property and is checked; "3" is
-// advice, and a two-column table with nothing to explore should not fail a
-// turn for being small.
-// ---------------------------------------------------------------------------
-
 import type { FindingType } from "../insight/verified-finding.js";
 import type { SandboxResult } from "./types.js";
 
@@ -59,7 +30,7 @@ export const EXPLORATION_BOUNDS = {
   /** Below this the exploration is thin, but it is not refused. */
   suggestedMin: 3,
   /** Above this it is refused: §38's "do not run arbitrary endless exploration". */
-  max: 6,
+  max: 4,
 } as const;
 
 const DIMENSION_ALIASES: Readonly<Record<string, ExplorationDimension>> = {

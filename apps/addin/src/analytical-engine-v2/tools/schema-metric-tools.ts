@@ -1,18 +1,11 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §3/§4 — SCHEMA and METRIC tools.
-//
-// Adapters over `schema-induction`, `metric-resolver` and
-// `measure-compatibility`. §28's semantic classes are exposed through
-// `metric.filter` so a request like "ignore the percentage indicators" is a
-// TOOL ARGUMENT, not a phrase handler.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import { isPercentNumberFormat } from "../../app/schema/excel-date.js";
 import { classifySemanticMetricClass, isPercentageLike, type SemanticMetricClass } from "../../app/schema/measure-compatibility.js";
 import type { RowAxisMember } from "../../app/schema/schema-induction.js";
+import { comparePoints } from "../../app/schema/analytical/temporal-primitives.js";
+import { compareMetricSetAtTwoPoints } from "../../app/schema/analytical/temporal-series.js";
 import { toolError } from "../types.js";
-import { METRIC_FIELD, allMetricLabels, isErr, memberFor, metricScope, resolveSetPhrase, sortedPoints, text, type ToolEnv, type ToolSpec } from "./contracts.js";
+import { METRIC_FIELD, allMetricLabels, isErr, memberFor, metricScope, num, resolveSetPhrase, sortedPoints, text, type ToolEnv, type ToolSpec } from "./contracts.js";
 
 function classOf(env: ToolEnv, member: RowAxisMember): SemanticMetricClass {
   const percentFormatted = env.periodIndex.points.some((p) => p.colIndex >= 0 && isPercentNumberFormat(env.grids.numberFormats[member.rowIndex]?.[p.colIndex] ?? null));
@@ -21,8 +14,9 @@ function classOf(env: ToolEnv, member: RowAxisMember): SemanticMetricClass {
 
 const schemaDescribe: ToolSpec = {
   name: "schema.describe",
+  capability: "schema",
   description:
-    "Describe the table itself: sheet, range, layout, how many metrics and how many periods it has. Takes no input and returns a one-row schema result. Use it only when you need to know the shape of the data before planning; the same facts are already summarised in the TABLE block.",
+    "Describe the table itself: sheet, range, layout, how many metrics and how many periods it has. Takes no input and returns a one-row schema result. For a table-overview request this is the deterministic answer; otherwise use it only when you need to know the shape before planning. The same facts are already summarised in the TABLE block.",
   args: {},
   returns: "schema",
   reads: false,
@@ -33,13 +27,102 @@ const schemaDescribe: ToolSpec = {
       type: "schema",
       fields: [text("sheet"), text("range"), text("orientation"), text("metricCount"), text("periodCount")],
       rows: [[env.schema.sheetName, env.schema.sourceRange, env.schema.orientation, env.schema.rowAxis.length, env.periodIndex.points.length]],
-      metricKeys: [],
+      metricKeys: env.schema.rowAxis.map((member) => member.display),
     }),
   }),
 };
 
+const OVERVIEW_EVIDENCE_FIELDS = [
+  METRIC_FIELD,
+  num("fullStartValue"),
+  num("fullEndValue"),
+  num("fullAbsoluteChange"),
+  num("fullPercentageChange"),
+  text("fullStartPeriodLabel"),
+  text("fullEndPeriodLabel"),
+  num("latestStartValue"),
+  num("latestEndValue"),
+  num("latestAbsoluteChange"),
+  num("latestPercentageChange"),
+  text("latestStartPeriodLabel"),
+  text("latestEndPeriodLabel"),
+];
+
+const schemaOverviewEvidence: ToolSpec = {
+  name: "schema.overview_evidence",
+  capability: "schema",
+  description:
+    "The deterministic evidence a table-overview answer is written from: for every metric, its value at the first available period, its latest value, its change over the WHOLE available horizon, and its change over the LATEST period alone. Returns a comparison result, one row per metric, sorted by the size of its full-range move. Call this once for a table-overview request instead of schema.describe, which names counts only and returns no 'what changed' evidence.",
+  args: {},
+  returns: "comparison",
+  reads: true,
+  run: (_args, env) => {
+    const points = sortedPoints(env);
+    if (points.length === 0) return toolError("INCOMPATIBLE_INPUT", "this table has no periods to compare");
+    const first = points[0]!;
+    const latest = points[points.length - 1]!;
+    const previous = points.length > 1 ? points[points.length - 2]! : first;
+    const members = env.schema.rowAxis;
+    const subject = { kind: "metric_set" as const, members };
+    const fullPairs = new Map(compareMetricSetAtTwoPoints(env.schema, env.grids, subject, first, latest).map((p) => [p.key, p]));
+    const latestPairs = new Map(compareMetricSetAtTwoPoints(env.schema, env.grids, subject, previous, latest).map((p) => [p.key, p]));
+
+    const rows: { readonly row: CellValue[]; readonly weight: number }[] = [];
+    for (const member of members) {
+      const full = fullPairs.get(member.display);
+      const near = latestPairs.get(member.display);
+      if (!full?.start || !full.end) continue;
+      const fullCmp = comparePoints(full.start, full.end);
+      const nearCmp = near?.start && near.end ? comparePoints(near.start, near.end) : null;
+      rows.push({
+        row: [
+          member.display,
+          full.start.value,
+          full.end.value,
+          fullCmp.absoluteChange,
+          fullCmp.percentChange,
+          full.start.periodLabel,
+          full.end.periodLabel,
+          nearCmp ? near!.start!.value : null,
+          nearCmp ? near!.end!.value : null,
+          nearCmp ? nearCmp.absoluteChange : null,
+          nearCmp ? nearCmp.percentChange : null,
+          nearCmp ? near!.start!.periodLabel : null,
+          nearCmp ? near!.end!.periodLabel : null,
+        ],
+        weight: Math.abs(fullCmp.percentChange ?? fullCmp.absoluteChange),
+      });
+    }
+    if (rows.length === 0) return toolError("INCOMPATIBLE_INPUT", "no metric has a value at both the first and the latest period");
+    rows.sort((a, b) => b.weight - a.weight);
+
+    return {
+      ok: true,
+      result: env.store.put({
+        tool: "schema.overview_evidence",
+        type: "comparison",
+        fields: OVERVIEW_EVIDENCE_FIELDS,
+        rows: rows.map((r) => r.row),
+        periodCanonicals: [first.canonical, previous.canonical, latest.canonical],
+        metricKeys: rows.map((r) => r.row[0] as string),
+        metadata: {
+          overviewEvidence: true,
+          sheet: env.schema.sheetName,
+          range: env.schema.sourceRange,
+          metricCount: members.length,
+          periodCount: points.length,
+          firstPeriodLabel: first.headerPath,
+          previousPeriodLabel: previous.headerPath,
+          latestPeriodLabel: latest.headerPath,
+        },
+      }),
+    };
+  },
+};
+
 const schemaMetrics: ToolSpec = {
   name: "schema.metrics",
+  capability: "schema",
   description:
     "List every metric in the table with its semantic class (amount, ratio, share, rate, percentage, count, index). Takes no input and returns a metric_set. Use it when you need the exact metric labels to pass to another tool, or to see which metrics are percentages before comparing them with amounts.",
   args: {},
@@ -58,6 +141,7 @@ const schemaMetrics: ToolSpec = {
 
 const schemaPeriods: ToolSpec = {
   name: "schema.periods",
+  capability: "schema",
   description:
     "List every period of the table, oldest first, as canonical period strings with their displayed header text. Takes no input and returns a period result. Use it when you need to choose a specific period; always pass the canonical string, never a date you wrote yourself.",
   args: {},
@@ -81,6 +165,7 @@ const schemaPeriods: ToolSpec = {
 
 const metricList: ToolSpec = {
   name: "metric.list",
+  capability: "schema",
   description:
     "List the table's metrics, optionally narrowed to one semantic class. Returns a metric_set you can pass to any tool as inputRef. Use scope to exclude incomparable metrics — for example scope=\"amount_like\" when ranking money amounts, or scope=\"percentage_like\" when the request is about ratios.",
   args: { scope: { type: "string", describe: '"all" (default) | "amount_like" | "percentage_like"' } },
@@ -102,6 +187,7 @@ const metricList: ToolSpec = {
 
 const metricResolve: ToolSpec = {
   name: "metric.resolve",
+  capability: "schema",
   description:
     "Turn the user's wording for ONE metric into the table's exact label. Returns a metric_set of one row. Use it when the request names a metric in words that may not match the label exactly; if the wording is ambiguous the tool refuses and lists the candidates instead of guessing.",
   args: { text: { type: "string", required: true, describe: "the user's wording for a single metric" } },
@@ -116,6 +202,7 @@ const metricResolve: ToolSpec = {
 
 const metricResolveSet: ToolSpec = {
   name: "metric.resolve_set",
+  capability: "schema",
   description:
     'Turn a phrase naming SEVERAL metrics ("A and B", "A, B and C") into their exact labels. Returns a metric_set you can pass as inputRef to a comparison or analysis tool. Use it when the request explicitly lists the metrics to work with.',
   args: { text: { type: "string", required: true, describe: "the phrase naming two or more metrics" } },
@@ -132,6 +219,7 @@ const metricResolveSet: ToolSpec = {
 
 const metricFilter: ToolSpec = {
   name: "metric.filter",
+  capability: "schema",
   description:
     'Narrow a metric universe by semantic class — keep only amounts, or drop every percentage-like indicator. Takes an optional inputRef (defaults to the whole table) and returns a metric_set. Use it when the request asks to exclude a kind of indicator rather than specific named ones.',
   args: {
@@ -167,4 +255,4 @@ const metricFilter: ToolSpec = {
   },
 };
 
-export const SCHEMA_METRIC_TOOLS: readonly ToolSpec[] = [schemaDescribe, schemaMetrics, schemaPeriods, metricList, metricResolve, metricResolveSet, metricFilter];
+export const SCHEMA_METRIC_TOOLS: readonly ToolSpec[] = [schemaDescribe, schemaOverviewEvidence, schemaMetrics, schemaPeriods, metricList, metricResolve, metricResolveSet, metricFilter];

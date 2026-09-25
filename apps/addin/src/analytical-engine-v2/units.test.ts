@@ -6,6 +6,8 @@
 // ---------------------------------------------------------------------------
 
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { CellValue } from "@sheet-agent/application";
 import { ResultStore, deriveMetricKeys, fieldIndex, metricFieldIndex } from "./results/result-store.js";
 import { EMPTY_ANALYTICAL_STATE, invalidateStale, isStale, storeResult, type AnalyticalConversationState } from "./state/conversation-state.js";
@@ -14,10 +16,10 @@ import { buildToolEnv, findTool, V2_TOOLS } from "./tools/registry.js";
 import { executeCall, validateCall } from "./tools/validator.js";
 import { buildEngineContext } from "./context/build-context.js";
 import { parsePlannerDecision } from "./planner/planner-prompt.js";
-import { countAsks, verifyCoverage } from "./verification/coverage-verifier.js";
+import { verifyCoverage } from "./verification/coverage-verifier.js";
 import { buildPeriodIndex } from "../app/schema/analytical/period-index.js";
 import { fixtureOperations, fixtureInjection, type SyntheticTable } from "./__fixtures__/synthetic-tables.js";
-import type { EngineResult, ResultField, ToolOutcome } from "./types.js";
+import type { CompleteDecision, EngineResult, PlannedOutput, ResultField, ToolOutcome } from "./types.js";
 
 const METRIC: ResultField = { name: "metric", kind: "metric" };
 const NUM = (n: string): ResultField => ({ name: n, kind: "number" });
@@ -238,7 +240,7 @@ describe("Stage 26 §16/§24/§25/§26/§29 — the tool adapters", () => {
     expect(prev?.ok).toBe(true);
     if (!latest.ok || !prev?.ok) return;
     const narrow = s.put({ tool: "set.filter", type: "comparison", fields: [METRIC], rows: [["Defect ratio"], ["Queue depth"]] });
-    const outcome = run(table, "change.compare_periods", { startPeriod: prev.result.periodCanonicals[0], endPeriod: latest.result.periodCanonicals[0], inputRef: narrow.resultId }, s);
+    const outcome = run(table, "change.compare_periods", { startPeriod: prev.result.periodCanonicals[0], endPeriod: latest.result.periodCanonicals[0], periodIntent: { kind: "named_pair", start: prev.result.periodCanonicals[0]!, end: latest.result.periodCanonicals[0]! }, inputRef: narrow.resultId }, s);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.result.metricKeys).toEqual(["Defect ratio", "Queue depth"]);
@@ -394,28 +396,83 @@ describe("Stage 26 §6/§45 — the planner context", () => {
   });
 });
 
-describe("Stage 26 §23 — coverage is a detector, never a second intent engine", () => {
+describe("Stage 26 §23 · Stage 28G §11 — coverage checks the planner contract, never the request text", () => {
   const s = store();
   const one = s.put({ tool: "series.get", type: "series", fields: [METRIC], rows: [["A"]] });
   const two = s.put({ tool: "event.max_adjacent_change", type: "event", fields: [METRIC], rows: [["A"]] });
-
-  it("counts asks structurally and passes a single-ask request unconditionally", () => {
-    expect(countAsks("Покажи динамику.")).toBe(1);
-    expect(countAsks("Покажи динамику и объясни, когда был скачок.")).toBe(2);
-    expect(verifyCoverage("Покажи динамику.", { primary: one, supporting: [], answerStyle: "concise" }).ok).toBe(true);
+  const known = (id: string): boolean => id === one.resultId || id === two.resultId;
+  const outputs: readonly PlannedOutput[] = [
+    { id: "o1", description: "изменение активов и обязательств" },
+    { id: "o2", description: "самый сильный рост" },
+  ];
+  const complete = (over: Partial<CompleteDecision> = {}): CompleteDecision => ({
+    kind: "complete",
+    primaryResultRef: one.resultId,
+    supportingResultRefs: [],
+    ...over,
   });
 
-  it("flags a two-part request answered by one non-event result", () => {
-    const result = verifyCoverage("Покажи динамику и назови самый большой скачок.", { primary: one, supporting: [], answerStyle: "concise" });
+  it("passes a single declared output unconditionally — that output IS the answer", () => {
+    const single = [{ id: "o1", description: "динамика" }];
+    expect(verifyCoverage({ declaredOutputs: single, decision: complete(), knownResult: known }).ok).toBe(true);
+    expect(verifyCoverage({ declaredOutputs: [], decision: complete(), knownResult: known }).ok).toBe(true);
+  });
+
+  it("«Сравни активы и обязательства и назови самый сильный рост» — every declared output is bound", () => {
+    const decision = complete({
+      supportingResultRefs: [two.resultId],
+      outputBindings: [
+        { outputId: "o1", resultRef: one.resultId },
+        { outputId: "o2", resultRef: two.resultId },
+      ],
+    });
+    const result = verifyCoverage({ declaredOutputs: outputs, decision, knownResult: known });
+    expect(result.ok).toBe(true);
+    expect(result.declared).toBe(2);
+    expect(result.bound).toBe(2);
+  });
+
+  it("flags the same request when the completion silently omits one declared output", () => {
+    const decision = complete({ outputBindings: [{ outputId: "o1", resultRef: one.resultId }] });
+    const result = verifyCoverage({ declaredOutputs: outputs, decision, knownResult: known });
     expect(result.ok).toBe(false);
-    expect(result.detail).toMatch(/2 parts/);
+    expect(result.unsatisfied).toEqual(["o2"]);
+    expect(result.detail).toContain("самый сильный рост");
   });
 
-  it("accepts the same request once both parts are named", () => {
-    expect(verifyCoverage("Покажи динамику и назови самый большой скачок.", { primary: two, supporting: [one], answerStyle: "concise" }).ok).toBe(true);
+  it("flags a binding that points at a result the store does not hold", () => {
+    const decision = complete({
+      outputBindings: [
+        { outputId: "o1", resultRef: one.resultId },
+        { outputId: "o2", resultRef: "result_999" },
+      ],
+    });
+    expect(verifyCoverage({ declaredOutputs: outputs, decision, knownResult: known }).unsatisfied).toEqual(["o2"]);
   });
 
-  it("accepts a single EVENT result for a what+when pair — the row carries both", () => {
-    expect(verifyCoverage("Покажи скачок и скажи когда.", { primary: two, supporting: [], answerStyle: "concise" }).ok).toBe(true);
+  it("flags a primary that is not one of the results it bound", () => {
+    const decision = complete({
+      primaryResultRef: "result_999",
+      outputBindings: [
+        { outputId: "o1", resultRef: one.resultId },
+        { outputId: "o2", resultRef: two.resultId },
+      ],
+    });
+    const result = verifyCoverage({ declaredOutputs: outputs, decision, knownResult: known });
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("not bound to any declared output");
+  });
+
+  it("reads nothing from the user's sentence — wording cannot change the verdict", () => {
+    const decision = complete({
+      supportingResultRefs: [two.resultId],
+      outputBindings: [
+        { outputId: "o1", resultRef: one.resultId },
+        { outputId: "o2", resultRef: two.resultId },
+      ],
+    });
+    const source = readFileSync(join("src", "analytical-engine-v2", "verification", "coverage-verifier.ts"), "utf8");
+    expect(source).not.toMatch(/покажи|найди|сравни|назови/iu);
+    expect(verifyCoverage({ declaredOutputs: outputs, decision, knownResult: known }).ok).toBe(true);
   });
 });

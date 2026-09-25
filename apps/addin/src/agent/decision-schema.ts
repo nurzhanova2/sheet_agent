@@ -1,15 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4 — the agent decision protocol.
-//
-// Each iteration the model returns ONE of:
-//   { kind: "tool_call", tool, input }   — run a deterministic tool
-//   { kind: "clarify",   question, candidates } — ask the user, persist the task
-//   { kind: "final",     answer }        — finish, grounded in observations
-//
-// Anything else FAILS CLOSED. There is no "best guess" fallback: a malformed
-// decision is surfaced to the loop, which bounds retries.
-// ---------------------------------------------------------------------------
-
 import type { AgentDecision, ParsedDecision } from "./types.js";
 
 const TOOL_CALL_KEYS = new Set(["kind", "tool", "input"]);

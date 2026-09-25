@@ -237,6 +237,94 @@ body {
 .term-act-body { display: flex; flex-direction: column; min-width: 0; }
 .term-act-title { overflow-wrap: anywhere; }
 .term-act-detail { color: var(--term-dim); font-size: 11px; overflow-wrap: anywhere; }
+.term-act-elapsed { color: var(--term-dim); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.term-turn-timer {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  padding-left: 0;
+  color: var(--color-accent-400);
+  font-size: 12px;
+}
+.term-turn-timer-glyph { animation: term-blink 1s step-end infinite; }
+.term-turn-timer-value { font-variant-numeric: tabular-nums; }
+
+.term-code { margin: 4px 0 4px 17px; border-left: 2px solid var(--color-neutral-600); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.term-code-head {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--color-neutral-300);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.term-code-head:hover { color: var(--color-accent-100); }
+.term-code-head:focus-visible { outline: 1px solid var(--color-accent-400); outline-offset: -1px; }
+.term-code-title { flex: 1; }
+.term-code-hint { color: var(--term-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.term-code-body {
+  margin: 0;
+  padding: 6px 9px 9px;
+  overflow-x: auto;
+  color: var(--color-accent-100);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.term-exec { margin: 5px 0; border: 1px solid var(--term-line); border-radius: var(--radius-md); background: var(--color-surface); overflow: visible; flex: 0 0 auto; }
+.term-exec-head { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 30px; padding: 6px 8px; border: 0; background: transparent; color: var(--color-neutral-200); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
+.term-exec-head:hover { color: var(--color-accent-100); }
+.term-exec-head:focus-visible { outline: 1px solid var(--color-accent-400); outline-offset: -1px; }
+.term-exec-glyph { color: var(--color-accent-400); font-size: 12px; }
+.term-exec--error .term-exec-glyph { color: var(--color-danger); }
+.term-exec--running .term-exec-glyph { color: var(--color-warn); animation: term-pulse 1s ease-in-out infinite; }
+.term-exec-title { overflow-wrap: anywhere; }
+.term-exec-subtitle { color: var(--term-dim); font-size: 11px; white-space: nowrap; }
+.term-exec-caret { flex: 1; color: var(--term-dim); }
+.term-exec-body { padding: 0 8px 8px; border-top: 1px solid var(--term-line); }
+.term-exec-panel-head { display: flex; justify-content: space-between; padding: 7px 0 5px; color: var(--color-neutral-400); font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.term-exec-stages { display: flex; flex-direction: column; gap: 2px; }
+.term-exec-step { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 6px; align-items: start; min-height: 20px; font-size: 11.5px; }
+.term-exec-step-glyph { color: var(--color-accent-400); text-align: center; }
+.term-exec-step--error .term-exec-step-glyph { color: var(--color-danger); }
+.term-exec-step--running .term-exec-step-glyph { color: var(--color-warn); animation: term-pulse 1s ease-in-out infinite; }
+.term-exec-step-body { display: flex; flex-direction: column; min-width: 0; }
+.term-exec-step-title { overflow-wrap: anywhere; }
+.term-exec-step-elapsed { color: var(--term-dim); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.term-exec-step-detail { color: var(--term-dim); font-size: 11px; overflow-wrap: anywhere; }
+.term-exec-diagnostics { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
+.term-exec-diagnostic { color: var(--term-dim); font-size: 11px; overflow-wrap: anywhere; }
+.term-exec-diagnostic-label { color: var(--color-neutral-400); }
+.term-exec-code { margin: 6px 0; border: 1px solid var(--term-line); border-radius: var(--radius-sm); background: var(--term-bg); overflow: hidden; }
+.term-exec-code-head { display: flex; align-items: center; gap: 5px; min-height: 29px; padding: 4px 6px; border-bottom: 1px solid var(--term-line); font-size: 10.5px; }
+.term-exec-code-name { min-width: 0; flex: 1; color: var(--color-neutral-200); }
+.term-exec-code-status { color: var(--color-accent-400); white-space: nowrap; }
+.term-exec-code-button { padding: 2px 5px; border: 1px solid var(--term-line); border-radius: 3px; background: transparent; color: var(--term-dim); font: inherit; cursor: pointer; }
+.term-exec-code-button:hover { color: var(--color-accent-100); border-color: var(--color-accent-600); }
+.term-exec-code-body { max-height: 168px; margin: 0; padding: 6px 0; overflow: hidden; color: var(--color-neutral-200); font-size: 10.5px; line-height: 1.5; }
+.term-exec-code--expanded .term-exec-code-body { max-height: none; overflow: visible; }
+.term-exec-code-body code { display: block; counter-reset: code-line; }
+.term-exec-code-line { display: grid; grid-template-columns: 31px minmax(0, 1fr); min-width: 0; padding-right: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.term-exec-code-line::before { counter-increment: code-line; content: counter(code-line); padding-right: 8px; color: var(--color-neutral-600); text-align: right; user-select: none; }
+.term-exec-details-head { display: flex; justify-content: space-between; width: 100%; margin-top: 5px; padding: 6px 0 0; border: 0; border-top: 1px solid var(--term-line); background: transparent; color: var(--term-dim); font: inherit; font-size: 11px; text-align: left; cursor: pointer; }
+.term-exec-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--color-neutral-700);
+}
+.term-exec-metric { color: var(--term-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 
 .term-response { padding-left: 17px; overflow-wrap: anywhere; color: var(--color-accent-100); }
 .term-caret { color: var(--color-accent-400); animation: term-blink 1s step-end infinite; }

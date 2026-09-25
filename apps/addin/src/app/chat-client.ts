@@ -9,6 +9,7 @@ import { canonicalizeAnalysisRequest } from "../analysis/canonical.js";
 import { groupMetricLabel, reorderGroupGrid } from "../analysis/group-grid.js";
 import { renderVerifiedFacts, validateClaimsAgainstFacts, type VerifiedFact } from "../analysis/facts.js";
 import { projectCompoundFacts, renderProjectedFactsForModel, type FactProjection } from "../analysis/fact-projection.js";
+import { generationFields, type GenerationRole } from "./generation-profile.js";
 import {
   checkCoverage,
   compileGoalIntents,
@@ -211,6 +212,24 @@ export interface ChatClient {
     signal: AbortSignal,
     model?: string,
   ): Promise<string>;
+  /**
+   * Stage 27 §13/§14 — one analytical Python script for the sandbox.
+   *
+   * A FOURTH role, separate for the same reason the other three are separate:
+   * it carries its own contract prompt, its own failure mode (a script that
+   * does not parse) and its own repair loop. Folding it into `narrate` because
+   * both return text would tie the narrator prompt to the code contract, and
+   * the next change to either would silently move the other.
+   *
+   * Optional: without it the engine still runs, and every analyze decision is
+   * answered with a capability error rather than a substitute (§5).
+   */
+  generateAnalysisCode?(
+    messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
+    signal: AbortSignal,
+    model?: string,
+  ): Promise<string>;
+  lastDiagnostics?(role: GenerationRole): CompletionDiagnostics | undefined;
 }
 
 const ACTION_FENCE = /```sheet-agent-actions\s*([\s\S]*?)```/;
@@ -766,6 +785,16 @@ function validateFinalAnswer(
   return { ok: reasons.length === 0, reasons };
 }
 
+export interface CompletionDiagnostics {
+  readonly role: GenerationRole;
+  readonly model: string;
+  readonly contentLength: number;
+  readonly reasoningLength?: number;
+  readonly finishReason?: string;
+  readonly elapsedMs: number;
+  readonly source: "companion_stats" | "client_timed";
+}
+
 export class HttpChatClient implements ChatClient {
   // `fetch` is a method of the global object: invoking it through any other receiver
   // (e.g. `this.fetchImpl(...)` on a class instance) throws
@@ -777,6 +806,12 @@ export class HttpChatClient implements ChatClient {
     private readonly fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
   ) {}
 
+  #lastDiagnosticsByRole = new Map<GenerationRole, CompletionDiagnostics>();
+
+  lastDiagnostics(role: GenerationRole): CompletionDiagnostics | undefined {
+    return this.#lastDiagnosticsByRole.get(role);
+  }
+
   /**
    * Stage 24.4 §2 — one strict agent decision. Non-streaming from the caller's
    * point of view: it collects the model text and returns it raw. The bounded
@@ -784,7 +819,7 @@ export class HttpChatClient implements ChatClient {
    */
   async decideAgentStep(request: AgentDecisionRequest, signal: AbortSignal): Promise<string> {
     const messages = buildAgentDecisionMessages(request).map((m) => ({ role: m.role, content: m.content }));
-    return this.runCompletion(messages, request.model, () => {}, signal, request.language);
+    return this.runCompletion(messages, request.model, () => {}, signal, request.language, "agent");
   }
 
   /**
@@ -794,7 +829,16 @@ export class HttpChatClient implements ChatClient {
    * prompts/temperatures without coupling (§62).
    */
   async narrate(messages: readonly { readonly role: "system" | "user"; readonly content: string }[], signal: AbortSignal, model?: string): Promise<string> {
-    return this.runCompletion(messages, model, () => {}, signal, "en");
+    return this.runCompletion(messages, model, () => {}, signal, "en", "narrator");
+  }
+
+  /** Stage 27 §14 — the analytical code generator. Carries no product prompt. */
+  async generateAnalysisCode(
+    messages: readonly { readonly role: "system" | "user"; readonly content: string }[],
+    signal: AbortSignal,
+    model?: string,
+  ): Promise<string> {
+    return this.runCompletion(messages, model, () => {}, signal, "en", "code");
   }
 
   /**
@@ -808,7 +852,7 @@ export class HttpChatClient implements ChatClient {
     signal: AbortSignal,
     model?: string,
   ): Promise<string> {
-    return this.runCompletion(messages, model, () => {}, signal, "en");
+    return this.runCompletion(messages, model, () => {}, signal, "en", "planner");
   }
 
   async stream(request: ChatStreamRequest, handlers: ChatStreamHandlers, signal: AbortSignal): Promise<ChatResult> {
@@ -1724,11 +1768,19 @@ export class HttpChatClient implements ChatClient {
     onDelta: (text: string) => void,
     signal: AbortSignal,
     language: ResponseLanguage = "en",
+    // Stage 27.2 §8 — which role is asking, so it can decode accordingly.
+    // Defaults to `chat`, whose profile is empty, so every existing caller
+    // keeps the exact request body it had before this stage.
+    role: GenerationRole = "chat",
   ): Promise<string> {
+    const requestStarted = Date.now();
     const response = await this.fetchImpl(this.endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider: "litellm", model: model ?? this.model, stream: true, messages }),
+      // §7 — the generation fields are sent here and forwarded by the
+      // companion only from the build carrying the §7 change. Against an older
+      // binary they are dropped, which is a no-op rather than a failure.
+      body: JSON.stringify({ provider: "litellm", model: model ?? this.model, stream: true, messages, ...generationFields(role) }),
       signal,
     });
     if (!response.ok || !response.body) {
@@ -1756,12 +1808,31 @@ export class HttpChatClient implements ChatClient {
       const frames = buffer.split(/\r?\n\r?\n/);
       buffer = frames.pop() ?? "";
       for (const frame of frames) for (const line of frame.split(/\r?\n/)) if (line.startsWith("data:")) {
-        const event = JSON.parse(line.slice(5).trim()) as { type?: string; text?: string; code?: string; message?: string };
+        const event = JSON.parse(line.slice(5).trim()) as {
+          type?: string;
+          text?: string;
+          code?: string;
+          message?: string;
+          stats?: { contentLength?: number; reasoningLength?: number; elapsedMs?: number; finishReason?: string };
+        };
         if (event.type === "delta" && event.text) {
           full += event.text;
           onDelta(event.text);
         }
         if (event.type === "error") throw new Error(providerErrorMessage(language, event.code, event.message));
+        if (event.type === "done") {
+          this.#lastDiagnosticsByRole.set(role, event.stats
+            ? {
+                role,
+                model: model ?? this.model,
+                contentLength: event.stats.contentLength ?? full.length,
+                ...(event.stats.reasoningLength !== undefined ? { reasoningLength: event.stats.reasoningLength } : {}),
+                ...(event.stats.finishReason !== undefined ? { finishReason: event.stats.finishReason } : {}),
+                elapsedMs: event.stats.elapsedMs ?? Date.now() - requestStarted,
+                source: "companion_stats",
+              }
+            : { role, model: model ?? this.model, contentLength: full.length, elapsedMs: Date.now() - requestStarted, source: "client_timed" });
+        }
       }
       if (chunk.done) break;
     }

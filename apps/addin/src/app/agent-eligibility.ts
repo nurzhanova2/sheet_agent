@@ -1,20 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.4 Increment 4.2 §5 — the explicit agent-eligibility decision.
-//
-// The bounded agent loop is a FALLBACK. It runs only after every deterministic
-// route (slash commands, deterministic NL analysis, ResultRef / RowSetRef
-// follow-ups, clarification continuations) has declined the turn. This module
-// decides whether a still-unhandled analytical turn is broad / investigative
-// enough to warrant discovery + multi-step reasoning.
-//
-// It reuses the router's own classification (`TurnRoute`) plus a small set of
-// investigative markers — NOT a growing list of exact phrases. A plain
-// single-sheet analytical request ("what is the average Revenue", "which
-// category has the highest Fact") stays on the deterministic path.
-//
-// `\b`/`\w` are ASCII-only, so every Russian alternative uses explicit classes.
-// ---------------------------------------------------------------------------
-
 import type { TurnRoute } from "./conversation-route.js";
 
 export interface AgentEligibility {

@@ -1,15 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 23 — `/copy <Sheet>!<range> to <Sheet>!<cell>` (deterministic, previewed).
-//
-// Narrow by design: copy the VALUES of a resolved source range to a resolved
-// destination, sized from the source. Source and destination are resolved
-// through the Workbook resolver — the model never invents an address. The
-// destination is written with a single `set_values` action, so the existing
-// Preview → Approve → applyAction(snapshot) → undoChange path applies unchanged
-// (one `/undo` restores the destination's prior contents). A populated
-// destination is flagged in the preview — never silently overwritten.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { ResponseLanguage } from "../language.js";
 import type { SelectionSnapshot } from "../workbook-context.js";

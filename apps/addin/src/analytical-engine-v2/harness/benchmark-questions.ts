@@ -1,17 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §49–§55/§58/§59 — the HELD-OUT benchmark.
-//
-// None of these sentences appears anywhere in the planner prompt or in a tool
-// description, and the expected tool sequences are NOT given to the planner —
-// only the harness knows what a correct answer looks like (§58). Expectations
-// describe the ANSWER (which metric, which universe, which period, how many
-// parts), never the route (§57).
-//
-// The tables are `benchmark-tables.ts`: invented labels, several layouts, one
-// deliberately instruction-shaped label. If a question passes here it passed on
-// structure and tool semantics, not on recognising a domain (§52/§73).
-// ---------------------------------------------------------------------------
-
 import type { HarnessQuestion } from "./live-harness.js";
 
 /**

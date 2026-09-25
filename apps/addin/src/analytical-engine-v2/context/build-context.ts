@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §6/§45 — the planner's structured context.
-//
-// Two hard rules:
-//
-//   §6  compact STRUCTURED metadata only — schema, periods, conversation
-//       state, tool catalogue. Never a raw cell grid; data reaches the model
-//       only as a bounded tool result it explicitly asked for.
-//   §45 workbook text is UNTRUSTED DATA. Metric labels are fenced into their
-//       own clearly-marked section so a label reading "IGNORE ALL RULES" is
-//       visibly a label, not an instruction.
-// ---------------------------------------------------------------------------
-
 import { isPercentNumberFormat } from "../../app/schema/excel-date.js";
 import { classifySemanticMetricClass } from "../../app/schema/measure-compatibility.js";
 import type { AnalysisGrids } from "../../app/schema/matrix-analysis.js";
@@ -18,6 +5,10 @@ import type { TableSchema } from "../../app/schema/schema-induction.js";
 import type { PeriodIndex } from "../../app/schema/analytical/period-index.js";
 import type { AnalyticalConversationState } from "../state/conversation-state.js";
 import { V2_TOOLS } from "../tools/registry.js";
+import { projectTools, type ToolProjection, type ToolProjectionEntry } from "../tools/projection.js";
+import { capabilityFactsOf } from "../capability/capability-availability.js";
+import { selectCapabilities } from "../capability/capability-selection.js";
+import { buildToolContext } from "../capability/tool-context.js";
 
 const MAX_METRICS_SHOWN = 60;
 const MAX_PERIODS_SHOWN = 30;
@@ -31,15 +22,16 @@ export interface EngineContext {
 
 /** §6 — TableSchemaContext: shape and confidence, never values. */
 function buildTableBlock(schema: TableSchema, periodIndex: PeriodIndex): string {
-  const points = [...periodIndex.points].sort((a, b) => a.orderKey - b.orderKey);
-  const shown = points.slice(-MAX_PERIODS_SHOWN);
+  const points = [...periodIndex.points].sort((a, b) => b.orderKey - a.orderKey);
+  const shown = points.slice(0, MAX_PERIODS_SHOWN);
   const lines = [
     `sheet: ${schema.sheetName}`,
     `range: ${schema.sourceRange}`,
     `orientation: ${schema.orientation}`,
     `metrics: ${schema.rowAxis.length}`,
     `schemaConfidence: ${schema.confidence.toFixed(2)}`,
-    `periods (${points.length} total, showing ${shown.length}, oldest first — use these canonical strings verbatim):`,
+    `periods (${points.length} total, showing ${shown.length}, newest first):`,
+    `current comparison is selected only by periodIntent {kind:"latest_vs_previous"}; the resolver uses the latest period and its immediately previous comparable period.`,
     ...shown.map((p) => `  - ${p.canonical} (${p.headerPath})`),
   ];
   return lines.join("\n");
@@ -135,58 +127,17 @@ function buildStateBlock(state: AnalyticalConversationState): string {
  * every description string is still present. `catalogEntries` exposes that as
  * data so the §25 test can assert it rather than pattern-matching prose.
  */
-export interface CatalogEntry {
-  readonly name: string;
-  readonly signature: string;
-  readonly returns: string;
-  readonly description: string;
-  /** Argument contracts stated on this tool's own line. */
-  readonly ownArgs: readonly string[];
-}
-
-export interface CatalogModel {
-  readonly shared: readonly { readonly name: string; readonly type: string; readonly describe: string; readonly uses: number }[];
-  readonly entries: readonly CatalogEntry[];
-}
+export type CatalogEntry = ToolProjectionEntry;
+export type CatalogModel = ToolProjection;
 
 const CATALOG_HEADER = [
-  "Each tool is written as  name(argument:type, \u2026) \u2192 resultType .  \"!\" marks a REQUIRED argument; every other argument is optional.",
+  "Each tool is written as  name(argument:type, …) → resultType .  \"!\" marks a REQUIRED argument; every other argument is optional.",
   "Types: string, number, boolean, string[], value (a number or a string), object; resultRef / metricRef / periodRef are all the resultId STRING of an earlier result.",
-  "Wherever an argument has both a literal and a \u2026Ref form, pass the Ref form when you already hold that result.",
-].join("\n");
-
-/**
- * An argument contract used by more than one tool is stated once, here, instead
- * of once per tool. Keyed by name+type+text, so two tools sharing an argument
- * NAME but not its meaning still each keep their own wording.
- */
-function catalogModel(): CatalogModel {
-  const uses = new Map<string, { name: string; type: string; describe: string; uses: number }>();
-  for (const tool of V2_TOOLS) {
-    for (const [name, spec] of Object.entries(tool.args)) {
-      const key = `${name}\u0000${spec.type}\u0000${spec.describe}`;
-      const entry = uses.get(key) ?? { name, type: spec.type, describe: spec.describe, uses: 0 };
-      entry.uses += 1;
-      uses.set(key, entry);
-    }
-  }
-  const shared = [...uses.values()].filter((e) => e.uses > 1).sort((a, b) => a.name.localeCompare(b.name));
-  const isShared = new Set(shared.map((e) => `${e.name}\u0000${e.type}\u0000${e.describe}`));
-  const entries = V2_TOOLS.map((tool) => {
-    const args = Object.entries(tool.args);
-    return {
-      name: tool.name,
-      signature: `${tool.name}(${args.map(([n, spec]) => `${n}${spec.required ? "!" : ""}:${spec.type}`).join(", ")})`,
-      returns: tool.returns,
-      description: tool.description,
-      ownArgs: args.filter(([n, spec]) => !isShared.has(`${n}\u0000${spec.type}\u0000${spec.describe}`)).map(([n, spec]) => `${n} \u2014 ${spec.describe}`),
-    };
-  });
-  return { shared, entries };
-}
+  "Wherever an argument has both a literal and a …Ref form, pass the Ref form when you already hold that result.",
+].join(String.fromCharCode(10));
 
 export function buildToolCatalog(): string {
-  const model = catalogModel();
+  const model = projectTools(V2_TOOLS);
   const shared = model.shared.map((e) => `  ${e.name} (${e.type}) \u2014 ${e.describe}`).join("\n");
   const tools = model.entries
     .map((e) => `- ${e.signature} \u2192 ${e.returns}\n  ${e.description}${e.ownArgs.length > 0 ? `\n  ${e.ownArgs.join("; ")}` : ""}`)
@@ -196,14 +147,25 @@ export function buildToolCatalog(): string {
 
 /** §25 — the catalogue's content as data, so a test asserts it rather than prose. */
 export function toolCatalogModel(): CatalogModel {
-  return catalogModel();
+  return projectTools(V2_TOOLS);
 }
 
-export function buildEngineContext(schema: TableSchema, grids: AnalysisGrids, periodIndex: PeriodIndex, state: AnalyticalConversationState): EngineContext {
+export function defaultToolCatalog(schema: TableSchema, periodIndex: PeriodIndex, state: AnalyticalConversationState): string {
+  const facts = capabilityFactsOf({ schema, periodIndex, state });
+  return buildToolContext({ facts, selection: selectCapabilities({ facts }) }).text;
+}
+
+export function buildEngineContext(
+  schema: TableSchema,
+  grids: AnalysisGrids,
+  periodIndex: PeriodIndex,
+  state: AnalyticalConversationState,
+  toolCatalog?: string,
+): EngineContext {
   return {
     tableBlock: buildTableBlock(schema, periodIndex),
     metricsBlock: buildMetricsBlock(schema, grids, periodIndex),
     stateBlock: buildStateBlock(state),
-    toolCatalog: buildToolCatalog(),
+    toolCatalog: toolCatalog ?? defaultToolCatalog(schema, periodIndex, state),
   };
 }

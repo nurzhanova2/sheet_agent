@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.5 §23–§28 — primary answer semantics.
-//
-// The theme: COVERAGE asks "did we compute everything that was asked for?";
-// PRIMARY INTENT asks "which of those results is the answer the user is
-// principally waiting for?". The planner decides both. The engine only checks
-// that the planner is internally consistent, and NEVER chooses the answer for
-// it (§42) — which is what §26 below exists to prove.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it } from "vitest";
 import { runAnalyticalEngine, type EngineTurn } from "./engine.js";
 import { parsePlannerDecision } from "./planner/planner-prompt.js";

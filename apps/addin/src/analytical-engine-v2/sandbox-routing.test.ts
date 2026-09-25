@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §4/§5/§13/§32/§34/§67/§83/§84 — routing, and what it refuses.
-//
-// The sandbox is driven by a scripted planner and a fake runtime here, because
-// what is under test is the ROUTE — which decisions are offered, which are
-// executed, and what happens when the analysis cannot be done. Real Pyodide
-// adds nine seconds and answers none of those questions; it is exercised in
-// `sandbox.test.ts`.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it, vi } from "vitest";
 import { runAnalyticalEngine } from "./engine.js";
 import { EMPTY_ANALYTICAL_STATE } from "./state/conversation-state.js";
@@ -30,7 +20,7 @@ function sandboxResult(overrides: Partial<SandboxResult> = {}): SandboxResult {
   return {
     executionId: "exec_1",
     status: "ok",
-    method: { name: "kmeans", parameters: { n_clusters: 2 }, randomState: 0 },
+    method: { name: "kmeans", parameters: { n_clusters: 2, selectionMethod: "silhouette", candidateK: [2, 3, 4] }, randomState: 0 },
     // §19 — the shared decision below commits to two methods, so the result
     // has to carry two that actually ran. A fixture that promised a comparison
     // and delivered one method would be testing the engine against exactly the
@@ -51,6 +41,7 @@ function sandboxResult(overrides: Partial<SandboxResult> = {}): SandboxResult {
       { label: "steady", members: ["Throughput index", "Queue depth"], profile: { mean_change: 0.01 } },
       { label: "volatile", members: ["Defect ratio"], profile: { mean_change: -0.14 } },
     ],
+    excludedEntities: [{ entity: "Handling cost", reason: "did not converge into either cluster at this k" }],
     models: [],
     diagnostics: { silhouette: 0.62 },
     findingsCandidates: [],
@@ -293,7 +284,7 @@ describe("Stage 27 §38 — exploration is bounded", () => {
     expect(turn.kind).toBe("failed");
     if (turn.kind !== "failed") return;
     expect(turn.reason).toBe("analysis_unavailable");
-    expect(turn.detail).toMatch(/more than 2 separate analyses/);
+    expect(turn.detail).toMatch(/more than 3 separate analyses/);
   });
 });
 

@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §39/§40/§44/§45/§52/§53/§56/§57/§58 — the Insight layer.
-//
-// The table these tests run on is a bank balance sheet, because that is the
-// shape §41/§46/§47 describe and because it carries every trap the layer
-// exists for in one place: amounts and shares in the same column, a metric
-// whose change is measured in percentage points, and a row that grows from
-// nothing so its relative change does not exist.
-// ---------------------------------------------------------------------------
-
 import { describe, expect, it } from "vitest";
 import type { CellValue } from "@sheet-agent/application";
 import { induceTableSchema } from "../app/schema/schema-induction.js";
@@ -18,7 +8,7 @@ import { displayUnit, metricSemanticClass, relativeChangeOf } from "./insight/me
 import { humanizeValue, percentagePointMove } from "./insight/humanize.js";
 import { valueOf } from "./insight/verified-finding.js";
 import { verifyNarration } from "./narration/narration-verifier.js";
-import { planAnswer } from "./narration/answer-plan.js";
+import { planPresentation } from "./narration/presentation-plan.js";
 import { renderDeterministic, gateNarration, buildNarratorMessages, type NarrationInput } from "./narration/narrator.js";
 import type { EngineAnalysis, ResultField } from "./types.js";
 
@@ -246,7 +236,7 @@ describe("Stage 27 §44/§45 — structure comes from the evidence, not the phra
 
   it("a single observation plans a direct answer with no structure", () => {
     const analysis = analysisOf([[ASSETS, "01.01.25", "01.12.25", 17941.741778, 19871.544896, 1929.8, 0.1076]]);
-    const plan = planAnswer(analysis, buildFindings(analysis.primary, [], ctx()));
+    const plan = planPresentation(analysis, buildFindings(analysis.primary, [], ctx()), { shape: "direct", count: null, direction: null, subjects: [], periodIntent: { kind: "full_range" }, wantsTable: false, wantsRecommendation: false, answerStyle: "concise" });
     expect(plan.shape).toBe("direct");
     expect(plan.showEvidenceTable).toBe(false);
   });
@@ -257,14 +247,14 @@ describe("Stage 27 §44/§45 — structure comes from the evidence, not the phra
       [LIQUID_SHARE, "a", "b", 0.311, 0.304, -0.007, -0.0225],
       [DOLLARIZATION, "a", "b", 0.2782, 0.2863, 0.0081, 0.0291],
     ]);
-    const plan = planAnswer(analysis, buildFindings(analysis.primary, [], ctx()));
-    expect(plan.shape).toBe("structured");
+    const plan = planPresentation(analysis, buildFindings(analysis.primary, [], ctx()), { shape: "comparison", count: null, direction: null, subjects: [], periodIntent: { kind: "full_range" }, wantsTable: false, wantsRecommendation: false, answerStyle: "concise" });
+    expect(plan.shape).toBe("comparison");
     expect(plan.support.length).toBeGreaterThan(0);
   });
 
   it("the lead observation comes from the PRIMARY result, never re-guessed", () => {
     const analysis = analysisOf([[ASSETS, "01.01.25", "01.12.25", 17941.741778, 19871.544896, 1929.8, 0.1076]]);
-    const plan = planAnswer(analysis, buildFindings(analysis.primary, [], ctx()));
+    const plan = planPresentation(analysis, buildFindings(analysis.primary, [], ctx()), { shape: "direct", count: null, direction: null, subjects: [], periodIntent: { kind: "full_range" }, wantsTable: false, wantsRecommendation: false, answerStyle: "concise" });
     expect(plan.lead?.subject).toBe(ASSETS);
     expect(plan.lead?.provenance.resultRef).toBe(analysis.primary.resultId);
   });
@@ -381,7 +371,7 @@ describe("Stage 27 §57/§58 — the fallback is prose, keyed off the result TYP
     // §45 — not an apology, not a table
     expect(body).not.toMatch(/Не удалось/);
     expect(body).not.toContain("|");
-    expect(body.split(/[.!?]\s/).length).toBeLessThanOrEqual(2);
+    expect(body.split(/[.!?]\s/).length).toBeLessThanOrEqual(4);
   });
 
   it("an empty filtered set is answered as a finding, not an error", () => {

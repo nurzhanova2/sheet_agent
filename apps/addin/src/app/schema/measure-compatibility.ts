@@ -1,12 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.6 — measure compatibility groups.
-//
-// A numeric series has a UNIT KIND. Series of different kinds must never be
-// compared, aggregated or put in one distribution (100 KZT vs 5 % vs 17 rows).
-// The kind is inferred from number-format evidence first, then from generic,
-// language-agnostic header hints (%, Δ, "change", "изменение", "өзгеріс", …).
-// ---------------------------------------------------------------------------
-
 import { isCurrencyNumberFormat, isPercentNumberFormat } from "./excel-date.js";
 
 export type MeasureKind =

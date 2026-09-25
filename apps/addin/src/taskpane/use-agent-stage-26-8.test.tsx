@@ -1,22 +1,9 @@
-// ---------------------------------------------------------------------------
-// Stage 26.8 §42/§43/§44/§45/§46 — the PRODUCTION integration.
-//
-// These go through `useAgent().submit()` — the real router, the real ownership
-// decision, the real schema induction, the real V2 engine, the real tools and
-// the real state commit. Only the two model roles are scripted, exactly as
-// Stage 25's integration tests script theirs.
-//
-// The thing every test here actually asserts is §44: for one user turn there is
-// ONE analytical owner. The ledger is the evidence, and a turn that ran two
-// analytical engines fails, rather than being noticed later by a human tester
-// wondering why the numbers moved.
-// ---------------------------------------------------------------------------
-
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExcelMutationPort, ExcelPort } from "@sheet-agent/application";
 import type { ChatClient, ChatResult, ChatStreamHandlers, ChatStreamRequest } from "../app/chat-client.js";
 import { useAgent } from "./use-agent.js";
+import type { ExecutionEntry } from "../app/agent-session.js";
 import { fixtureBalanceLike, fixtureDirectionAndSets, fixtureRecords, type FixtureSnapshot } from "../app/schema/__fixtures__/tables.js";
 import { lastTurn, resetTurnLedger, turnLedger } from "../analytical-engine-v2/production/turn-ledger.js";
 import { clearAnalyticalTraces, getAnalyticalTraces } from "../analytical-engine-v2/debug/analytical-trace.js";
@@ -128,7 +115,7 @@ function biggestMoverScript(messages: readonly { readonly role: string; readonly
   const prev = idOf(p, "period.previous");
   if (!prev) return call("period.previous", { ofRef: latest });
   const cmp = idOf(p, "change.compare_periods");
-  if (!cmp) return call("change.compare_periods", { startPeriodRef: prev, endPeriodRef: latest });
+  if (!cmp) return call("change.compare_periods", { periodIntent: { kind: "latest_vs_previous" } });
   const win = idOf(p, "set.argmax");
   if (!win) return call("set.argmax", { inputRef: cmp, field: "percentageChange", magnitude: true });
   return complete(win, [cmp]);
@@ -187,6 +174,12 @@ const lastResponse = (r: { current: ReturnType<typeof useAgent> }): string => {
 const activityTitles = (r: { current: ReturnType<typeof useAgent> }): readonly string[] =>
   r.current.entries.filter((x) => x.kind === "activity").map((x) => (x.kind === "activity" ? x.title : ""));
 
+const executionEntries = (r: { current: ReturnType<typeof useAgent> }): readonly ExecutionEntry[] =>
+  r.current.entries.filter((x): x is ExecutionEntry => x.kind === "execution");
+
+const executionStepTitles = (r: { current: ReturnType<typeof useAgent> }): readonly string[] =>
+  executionEntries(r).flatMap((e) => e.details.map((d) => d.title));
+
 beforeEach(() => {
   resetTurnLedger();
   clearAnalyticalTraces();
@@ -218,7 +211,7 @@ describe("Stage 26.8 §43/§46 — a schema analytical question is owned by V2",
     expect(getAnalyticalTraces()[0]!.route).toBe("analytical_engine_v2");
     expect(client.plan).toHaveBeenCalled();
     expect(client.streamFn).not.toHaveBeenCalled();
-    expect(lastResponse({ current: result.current })).toContain("Готово.");
+    expect(lastResponse({ current: result.current })).toContain("уровень долларизации вкладов физлиц");
   });
 
   it("§17 — the answer carries its source table", async () => {
@@ -237,11 +230,36 @@ describe("Stage 26.8 §43/§46 — a schema analytical question is owned by V2",
     await act(async () => {
       await result.current.submit("Какой показатель изменился сильнее всего?");
     });
-    const titles = activityTitles({ current: result.current });
-    expect(titles.some((t) => /Читаю данные/.test(t))).toBe(true);
-    expect(titles.some((t) => /Формирую ответ/.test(t))).toBe(true);
-    // §20 — and never a tool name or a percentage.
-    expect(titles.some((t) => /\b(set|metric|change|series)\./.test(t) || /%/.test(t))).toBe(false);
+    const steps = executionStepTitles({ current: result.current });
+    const collapsed = executionEntries({ current: result.current });
+    expect(steps.some((t) => /^Прочитан диапазон .+![A-Z]+\d+/u.test(t))).toBe(true);
+    expect(steps.some((t) => /Планирую анализ/u.test(t))).toBe(true);
+    expect(steps.some((t) => /Формирую ответ/u.test(t))).toBe(true);
+    expect(collapsed.map((e) => e.title)).toEqual([expect.stringMatching(/^Готово за \d/u)]);
+    expect([...steps, ...collapsed.map((e) => e.title)].some((t) => /\b(set|metric|change|series)\./.test(t) || /%/.test(t))).toBe(false);
+    expect(activityTitles({ current: result.current })).toEqual([]);
+  });
+
+  it("Stage 27.6 §3 — a deterministic turn shows no sandbox and no Python code", async () => {
+    const wb = workbookPort(fixtureDirectionAndSets());
+    const { result } = renderHook(() => useAgent({ chatClient: v2Client([biggestMoverScript]), port: wb.port }));
+    await act(async () => {
+      await result.current.submit("Какой показатель изменился сильнее всего?");
+    });
+    expect(result.current.entries.some((e) => e.kind === "code")).toBe(false);
+    expect(executionStepTitles({ current: result.current }).some((t) => /Python/u.test(t))).toBe(false);
+    expect(executionEntries({ current: result.current })[0]?.subtitle).toBeUndefined();
+  });
+
+  it("Stage 27.6 §1 — the live timer runs during the turn and stops after it", async () => {
+    const wb = workbookPort(fixtureDirectionAndSets());
+    const { result } = renderHook(() => useAgent({ chatClient: v2Client([biggestMoverScript]), port: wb.port }));
+    expect(result.current.turnStartedAt).toBeNull();
+    await act(async () => {
+      await result.current.submit("Какой показатель изменился сильнее всего?");
+    });
+    expect(result.current.turnStartedAt).toBeNull();
+    expect(executionEntries({ current: result.current }).filter((e) => /^Готово за /u.test(e.title))).toHaveLength(1);
   });
 });
 
@@ -302,38 +320,67 @@ describe("Stage 26.8 §36/§43 — a mutation request stays on the deterministic
 // --- §44: the double-execution guard ----------------------------------------
 
 describe("Stage 26.8 §44 — one turn, one analytical owner", () => {
-  it("no turn of a mixed session ever runs two analytical engines", async () => {
+  const MIXED_SESSION = [
+    "Какой показатель изменился сильнее всего?",
+    "Покажи его динамику",
+    "Что такое волатильность?",
+    "/sheets",
+    "О чём эта таблица?",
+    "Выдели красным строки с убытком",
+    "Какой показатель изменился сильнее всего?",
+  ];
+
+  const driveMixedSession = async () => {
     const wb = workbookPort(fixtureDirectionAndSets());
     const client = v2Client([biggestMoverScript, historyOfFocusScript, biggestMoverScript]);
     const { result } = renderHook(() => useAgent({ chatClient: client, port: wb.port }));
-
-    for (const text of ["Какой показатель изменился сильнее всего?", "Покажи его динамику", "Что такое волатильность?", "/sheets", "Какой показатель изменился сильнее всего?"]) {
+    for (const text of MIXED_SESSION) {
       await act(async () => {
         await result.current.submit(text);
       });
     }
+  };
 
+  it("no turn of a mixed session ever runs two analytical engines", async () => {
+    await driveMixedSession();
     for (const entry of turnLedger()) {
       expect(new Set(entry.engines).size, `${entry.request} → [${entry.engines.join(", ")}]`).toBeLessThanOrEqual(1);
     }
+  });
+
+  it("every turn the engine owns executes exactly one analytical engine, and it is analytical_engine_v2", async () => {
+    await driveMixedSession();
+    const owned = turnLedger().filter((t) => t.owner === "V2_OWNED");
+    expect(owned.length).toBeGreaterThan(0);
+    for (const entry of owned) {
+      expect(entry.engines, entry.request).toEqual(["analytical_engine_v2"]);
+    }
+  });
+
+  it("no Stage 24/25 analytical generation executes on any turn", async () => {
+    await driveMixedSession();
+    const executed = new Set(turnLedger().flatMap((t) => t.engines));
+    expect([...executed]).toEqual(["analytical_engine_v2"]);
   });
 });
 
 // --- §45/§46: the flag ------------------------------------------------------
 
-describe("Stage 26.8 §45 — the flag is a real rollback", () => {
-  it("with V2 OFF the analytical turn never reaches the V2 engine", async () => {
-    vi.stubEnv("VITE_UNIFIED_ANALYTICAL_ENGINE_V2", "false");
+describe("the analytical engine needs its transport, and says so", () => {
+  it("without a planner transport the turn is not the engine's and the engine never starts", async () => {
     const wb = workbookPort(fixtureDirectionAndSets());
     const client = v2Client([biggestMoverScript]);
-    const { result } = renderHook(() => useAgent({ chatClient: client, port: wb.port }));
+    const withoutTransport = { ...(client as unknown as Record<string, unknown>) };
+    delete withoutTransport["plan"];
+    delete withoutTransport["planAnalyticalTurn"];
+    const { result } = renderHook(() => useAgent({ chatClient: withoutTransport as never, port: wb.port }));
 
     await act(async () => {
       await result.current.submit("Какой показатель изменился сильнее всего?");
     });
 
     expect(lastTurn()!.owner).toBe("NON_V2");
-    expect(lastTurn()!.ownerReason).toBe("flag_off");
+    expect(lastTurn()!.ownerReason).toBe("no_planner_transport");
     expect(client.plan).not.toHaveBeenCalled();
     expect(getAnalyticalTraces().length).toBe(0);
   });
@@ -432,7 +479,7 @@ describe("Stage 26.8 §31 — narration can fail without costing the turn", () =
     const body = lastResponse({ current: result.current });
     expect(body.length).toBeGreaterThan(0);
     expect(lastTurn()!.outcome).toBe("answered");
-    expect(getAnalyticalTraces().at(-1)!.narratorStatus).toBe("fallback");
+    expect(getAnalyticalTraces().at(-1)!.narratorStatus).toBe("deterministic");
     // §31 — and the state was committed before narration, so this still works.
     await act(async () => {
       await result.current.submit("Покажи его динамику");
@@ -490,7 +537,7 @@ describe("Stage 26.8 §19 — the developer trace is reachable and complete", ()
       await result.current.submit("/debug analytical-engine");
     });
     const dump = lastResponse({ current: result.current });
-    for (const expected of ["analytical engine v2: ON", "TURN OWNERSHIP", "V2 CONVERSATION STATE", "PLANNER ROUND", "TOOL CALL", "REFERENCES", "SERIALIZATION", "PRIMARY RESULT", "NARRATOR"]) {
+    for (const expected of ["analytical engine: analytical_engine_v2", "TURN OWNERSHIP", "V2 CONVERSATION STATE", "PLANNER ROUND", "TOOL CALL", "REFERENCES", "SERIALIZATION", "PRIMARY RESULT", "NARRATOR"]) {
       expect(dump, expected).toContain(expected);
     }
   });

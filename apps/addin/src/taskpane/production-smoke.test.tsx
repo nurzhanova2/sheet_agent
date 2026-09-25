@@ -1,28 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.8 §42/§43/§47/§58/§62 — the PRODUCTION-PATH live smoke suite.
-//
-// Every turn here goes through `useAgent().submit()`: the real ownership
-// decision, the real cascade, the real schema induction, the real V2 engine,
-// the real tools, the real state commit — and the REAL model through the
-// Companion (§47). Nothing about the planner is scripted.
-//
-// SKIPPED BY DEFAULT. It talks to the configured model:
-//
-//   NODE_TLS_REJECT_UNAUTHORIZED=0 \
-//   SHEET_AGENT_LIVE_ENDPOINT=https://localhost:47831/v1/chat \
-//   SHEET_AGENT_LIVE_MODEL="<model id>" \
-//   SHEET_AGENT_SMOKE_JSON=<file> \
-//   npx vitest run src/taskpane/production-smoke.test.tsx
-//
-// One accommodation, and only one: the fetch handed to HttpChatClient drops the
-// AbortSignal. jsdom installs its own AbortController and undici refuses a
-// foreign signal, so every call would fail in a millisecond without reaching
-// the model. Stage 26.7's benchmark solved the same problem by running in the
-// node environment; this suite cannot, because `renderHook` needs a DOM. What
-// is given up is cancellation, which has its own scripted test (§21) — every
-// other part of the path is the production one.
-// ---------------------------------------------------------------------------
-
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { writeFileSync } from "node:fs";

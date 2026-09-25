@@ -1,15 +1,4 @@
 // @vitest-environment node
-// ---------------------------------------------------------------------------
-// Stage 27 §7/§8/§12/§15/§16/§23/§25/§27/§29/§72 — the analytical sandbox.
-//
-// These tests boot a REAL Pyodide runtime and run the same bootstrap the
-// product ships. That is the point: §16 says AST validation is defence in
-// depth and not the sandbox, so a test suite that mocks the runtime proves
-// nothing about the property the section is asking for.
-//
-// jsdom cannot host the runtime, hence the node environment above.
-// ---------------------------------------------------------------------------
-
 import { beforeAll, describe, expect, it } from "vitest";
 import { executedMethods, validateMethodComparison } from "./sandbox/method-comparison.js";
 import type { CellValue } from "@sheet-agent/application";

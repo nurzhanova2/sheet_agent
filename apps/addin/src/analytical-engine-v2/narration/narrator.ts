@@ -1,37 +1,23 @@
-// ---------------------------------------------------------------------------
-// Stage 26 §35/§36/§37/§38 + Stage 27 §42–§58 — narration and its fallback.
-//
-// The narrator is still the least powerful component: it sees only what the
-// planner named (§35), it cannot write conversation state (§36), and every
-// sentence is checked before the user sees it (§37). Stage 27 changes WHAT it
-// is shown and WHAT it is asked for.
-//
-// Stage 26 handed the model result tables and asked for a coherent answer. The
-// model's honest options were to transcribe them or to compute something —
-// the first is §43's raw dump, the second is an unverified number. Stage 27
-// hands it VerifiedFindings instead: each observation already carries its
-// numbers, formatted with their units (§52/§53), its materiality relative to
-// the data (§39), and the things the evidence cannot support (§49). The model's
-// job shrinks to what a model is actually good at — deciding what matters to
-// THIS question, relating observations to each other, and writing it in a
-// human sentence.
-//
-// The fallback changes to match (§57). When verification fails, the answer is
-// still prose: the same findings, rendered by their deterministic templates
-// (§58). A table appears only where a table genuinely reads better (§54).
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import type { NumberLocale } from "../../analysis/format-number.js";
-import type { AgentObservation } from "../../agent/types.js";
-import { agentEvidenceFacts, validateAgentAnswer } from "../../agent/evidence.js";
-import { containsForbiddenLeak, renderTableForUser } from "../../analytics-agent/narrator.js";
+import { renderTableForUser } from "../../app/answer-table.js";
 import { allowedNumbers } from "../insight/extract-findings.js";
 import { criterionLabel, executedMethods, readCriterion, type MethodComparison } from "../sandbox/method-comparison.js";
-import { caveatText, type VerifiedFinding } from "../insight/verified-finding.js";
+import { measureWord } from "../insight/measure-words.js";
+import { periodSpanSentence, statementFor } from "../insight/statement.js";
+import { caveatText, type FindingValue, type VerifiedFinding } from "../insight/verified-finding.js";
+import { isReadableLabel, subjectLabel } from "../insight/finding-subject.js";
 import type { EngineAnalysis, EngineResult } from "../types.js";
-import { planAnswer } from "./answer-plan.js";
+import { answerIntentFromResult, shapeInstruction } from "./answer-shape.js";
+import { planPresentation, suppressRedundantSubjects, type MethodNote, type PresentationPlan } from "./presentation-plan.js";
+import type { AnswerIntent } from "../types.js";
 import { verifyNarration, type NarrationCheck } from "./narration-verifier.js";
+import {
+  compileNarrationFacts,
+  renderAllowedFigures,
+  type NarrationFactSet,
+  type UnsupportedClaim,
+} from "./narration-facts.js";
 
 export interface NarratorMessage {
   readonly role: "system" | "user";
@@ -46,37 +32,40 @@ export interface NarratorMessage {
 export interface NarrationInput {
   readonly request: string;
   readonly analysis: EngineAnalysis;
+  /** Present in the production engine; optional only for legacy test fixtures. */
+  readonly answerIntent?: AnswerIntent;
   readonly findings: readonly VerifiedFinding[];
   readonly locale: NumberLocale;
   /** §60 — how the analysis was performed, when that is worth a sentence. */
   readonly method?: MethodNote;
+  readonly presentationPlan?: PresentationPlan;
+  readonly heldFindings?: number;
 }
 
 /** §60/§63 — a method summary, shown only for analyses that warrant one. */
-export interface MethodNote {
-  readonly name: string;
-  readonly parameters?: Readonly<Record<string, unknown>>;
-  readonly preprocessing?: readonly string[];
   /** §19/§21 — present when several methods ran, so the answer can say why this one. */
-  readonly comparison?: MethodComparison;
-}
+export type { MethodNote, PresentationPlan } from "./presentation-plan.js";
 
 const SYSTEM_RU = [
-  "Ты — аналитик. Ты объясняешь человеку УЖЕ ПРОВЕРЕННЫЕ наблюдения по его таблице.",
+  "Ты — старший финансовый аналитик, который готовит короткую записку для профессионального читателя. Ты объясняешь человеку УЖЕ ПРОВЕРЕННЫЕ наблюдения по его таблице — не пересказываешь устройство таблицы, а говоришь по существу того, что в ней происходит.",
   "",
   "КАК ОТВЕЧАТЬ",
-  "- Первое предложение — прямой ответ на заданный вопрос. Если спрашивают «быстрее или медленнее» — начни со слова «Быстрее» или «Медленнее». Если спрашивают «какой показатель» — назови его первым словом.",
+  "- Первое предложение — прямой ответ на заданный вопрос, по смыслу, а не механика таблицы. Если спрашивают «быстрее или медленнее» — начни со слова «Быстрее» или «Медленнее». Если спрашивают «какой показатель» — назови его первым словом.",
   "- Дальше 2–5 наблюдений, связанных между собой, а не перечисленных подряд.",
   "- Обычный связный текст. Без заголовков, без списка полей, без таблиц.",
+  "- Называй период, за который посчитано изменение, если он есть в наблюдении: «за последний период», «с января по апрель». Ответ без периода неполон.",
+  "- Если в наблюдении есть и относительное, и абсолютное изменение, приведи оба: «выросли на 10,76% — с 17 941,7 до 19 871,5».",
   "- Коротко. Если наблюдение одно — отвечай одним предложением и останавливайся.",
+  "- Если наблюдений несколько и вопрос — рейтинг или список групп, назови КАЖДЫЙ пункт из блока НАБЛЮДЕНИЯ. Пропуск хотя бы одного — ошибка, даже если текст получится длиннее.",
   "",
   "ЧИСЛА",
-  "- Бери числа ТОЛЬКО из блока НАБЛЮДЕНИЯ и переписывай их ровно так, как они там написаны: со знаком, разрядами и единицей («+10,76%», «-0,70 п.п.», «19 871,5»).",
-  "- Ничего не вычисляй сам: ни разностей, ни долей, ни процентов, ни средних, ни округлений.",
+  "- Каждое число в ответе должно быть взято из блока НАБЛЮДЕНИЯ и переписано ровно так, как оно там написано: со знаком, разрядами и единицей («+10,76%», «-0,70 п.п.», «19 871,5»).",
+  "- Не вычисляй новых чисел: ни разностей, ни долей, ни процентов, ни средних, ни округлений, ни рейтингов.",
+  "- Если нужного числа нет — объясни словами или не пиши его вовсе.",
   "- «%» и «п.п.» — разные величины. Если в наблюдении написано «п.п.», пиши «п.п.»; не превращай одно в другое.",
   "",
   "ЧЕГО НЕЛЬЗЯ",
-  "- Называть причину. Таблица показывает, ЧТО произошло, и не показывает, почему. Вместо «из-за», «потому что», «вызвано» пиши «наблюдается», «может указывать на», «гипотеза, которую стоит проверить».",
+  "- Называть причину. Таблица показывает, ЧТО произошло, и не показывает, почему. Вместо «из-за», «потому что», «вызвано» пиши «наблюдается», «может указывать на», «гипотеза, которую стоит проверить». Если объяснение недоступно, так и скажи прямо: это наблюдение, а не объяснение, и таблица не показывает причину.",
   "- Оставлять оценку без объяснения: не «волатильность 5,20», а «заметно нестабильнее остальных показателей — оценка 5,20, максимальная в таблице».",
   "- Служебных слов: result_3, tool, JSON, названия полей как слова.",
   "- Любых выводов о бизнесе, которых нет в наблюдениях.",
@@ -91,21 +80,25 @@ const SYSTEM_RU = [
 ].join("\n");
 
 const SYSTEM_EN = [
-  "You are an analyst. You explain ALREADY-VERIFIED observations about the user's table.",
+  "You are a senior financial analyst preparing a short note for a professional reader. You explain ALREADY-VERIFIED observations about the user's table — you speak to what is actually happening in it, not to how the table is built.",
   "",
   "HOW TO ANSWER",
-  "- The first sentence answers the question asked. If asked \"faster or slower\", open with \"Faster\" or \"Slower\". If asked which indicator, name it first.",
+  "- The first sentence answers the question asked, in substance, not table mechanics. If asked \"faster or slower\", open with \"Faster\" or \"Slower\". If asked which indicator, name it first.",
   "- Then 2–5 observations, related to each other rather than listed.",
   "- Ordinary connected prose. No headings, no field lists, no tables.",
+  "- Name the period the change was measured over whenever the observation carries one: over the latest period, from January to April. An answer without its period is incomplete.",
+  "- When an observation carries both a relative and an absolute change, give both: grew 10.76% — from 17,941.7 to 19,871.5.",
   "- Be brief. One observation means one sentence; then stop.",
+  "- When there are several observations and the question is a ranking or a list of groups, name EVERY item in the OBSERVATIONS block. Omitting even one is a mistake, even if that makes the answer longer.",
   "",
   "NUMBERS",
-  "- Take numbers ONLY from the OBSERVATIONS block and copy them exactly as written, with sign, grouping and unit (\"+10.76%\", \"-0.70 pp\", \"19,871.5\").",
-  "- Compute nothing yourself: no differences, shares, percentages, averages or re-rounding.",
+  "- Every number in the answer must come from the OBSERVATIONS block, copied exactly as written, with sign, grouping and unit (\"+10.76%\", \"-0.70 pp\", \"19,871.5\").",
+  "- Do not calculate new numeric values: no differences, shares, percentages, averages, ratios, rankings or re-rounding.",
+  "- If a useful number is missing, explain it qualitatively or omit it.",
   "- \"%\" and \"pp\" are different quantities. If an observation says pp, write pp; never convert one into the other.",
   "",
   "NEVER",
-  "- State a cause. The table shows WHAT happened, not why. Instead of \"because\" or \"caused by\", write \"is observed\", \"may indicate\", \"a hypothesis worth checking\".",
+  "- State a cause. The table shows WHAT happened, not why. Instead of \"because\" or \"caused by\", write \"is observed\", \"may indicate\", \"a hypothesis worth checking\". When no explanation is available, say so directly: this is an observation, not an explanation, and the table does not show the cause.",
   "- Leave a score unexplained: not \"volatility 5.20\" but \"markedly less stable than the others — a score of 5.20, the highest here\".",
   "- Use internal terms: result_3, tool, JSON, field names as words.",
   "- Draw business conclusions absent from the observations.",
@@ -134,6 +127,18 @@ const VALUE_LABEL_RU: Record<string, string> = {
   periods: "число периодов",
   runLength: "длина серии",
   directionChangeCount: "число разворотов",
+  // §18 — the engine's own measures, all of them. `valueLabel` now drops a
+  // figure it cannot name, so a measure missing from here stops being offered
+  // to the narrator at all; `insight.test.ts` holds this table to that.
+  clusterSize: "размер группы",
+  metricCount: "число показателей",
+  periodCount: "число периодов",
+  firstValue: "значение на начало всего периода",
+  previousValue: "значение на начало последнего периода",
+  fullRangeAbsoluteChange: "изменение за весь период",
+  fullRangePercentageChange: "изменение за весь период, %",
+  latestAbsoluteChange: "изменение за последний период",
+  latestPercentageChange: "изменение за последний период, %",
 };
 
 const VALUE_LABEL_EN: Record<string, string> = {
@@ -150,10 +155,37 @@ const VALUE_LABEL_EN: Record<string, string> = {
   periods: "periods",
   runLength: "run length",
   directionChangeCount: "reversals",
+  clusterSize: "group size",
+  metricCount: "indicators",
+  periodCount: "periods",
+  firstValue: "level at the start of the whole horizon",
+  previousValue: "level at the start of the latest period",
+  fullRangeAbsoluteChange: "change over the whole horizon",
+  fullRangePercentageChange: "change over the whole horizon, %",
+  latestAbsoluteChange: "change over the latest period",
+  latestPercentageChange: "change over the latest period, %",
 };
 
-function valueLabel(name: string, locale: NumberLocale): string {
-  return (locale === "ru" ? VALUE_LABEL_RU : VALUE_LABEL_EN)[name] ?? name;
+/**
+ * §18/§43 — the measure in words, or nothing at all.
+ *
+ * This used to end in `?? name`, and the live run showed exactly what that
+ * costs. The exploration layer returns measures under whatever key the
+ * generated Python chose — `total_nans`, `available` — the prompt handed the
+ * narrator "3 — total_nans", and the narrator, doing as it was told and
+ * quoting the figure with its label, wrote «найдено 3 — total_nans» to a
+ * Russian-speaking reader.
+ *
+ * The rule the deterministic templates already follow (`namedValue` in
+ * `statement.ts` skips a measure it has no word for) applies here too: a
+ * figure this system cannot name is not offered to the narrator. It stays in
+ * the result, where the reader can see it in its own column with its own
+ * header; it just never becomes a word in a sentence.
+ */
+export function valueLabel(name: string, locale: NumberLocale): string | null {
+  const known = (locale === "ru" ? VALUE_LABEL_RU : VALUE_LABEL_EN)[name];
+  if (known) return known;
+  return measureWord(name, locale)?.noun ?? null;
 }
 
 /** One finding, written out with the exact strings the answer may quote. */
@@ -162,7 +194,9 @@ function renderFinding(finding: VerifiedFinding, index: number, lead: boolean, l
   const lines = [`${index}.${marker} ${finding.statement}`];
 
   const quotable = finding.values
-    .map((v) => `${v.text} — ${valueLabel(v.name, locale)}${v.at ? ` (${v.at})` : ""}`)
+    .map((v) => ({ value: v, label: valueLabel(v.name, locale) }))
+    .filter((v): v is { value: FindingValue; label: string } => v.label !== null)
+    .map(({ value, label }) => `${value.text} — ${label}${value.at ? ` (${value.at})` : ""}`)
     .join("; ");
   if (quotable !== "") lines.push(`   ${locale === "ru" ? "числа" : "figures"}: ${quotable}`);
 
@@ -194,7 +228,14 @@ function renderComparison(comparison: MethodComparison, locale: NumberLocale): s
     .map((c) => readCriterion(c))
     .filter((c): c is Exclude<ReturnType<typeof readCriterion>, null> => c !== null)
     .map((c) => criterionLabel(c, locale === "ru" ? "ru" : "en"));
-  const evidence = Object.entries(comparison.selectionEvidence).map(([k, v]) => `${k}=${v}`);
+  // §18 — the evidence keys are criterion enums, so they go through the same
+  // labeller as the criteria themselves. `separation=0.62` in a Russian answer
+  // is the field-name leak this section was written to avoid, one line below
+  // the comment saying so.
+  const evidence = Object.entries(comparison.selectionEvidence).map(([k, v]) => {
+    const criterion = readCriterion(k);
+    return criterion ? `${criterionLabel(criterion, locale === "ru" ? "ru" : "en")} — ${v}` : `${v}`;
+  });
   const lines =
     locale === "ru"
       ? [
@@ -227,7 +268,8 @@ function renderMethod(method: MethodNote, locale: NumberLocale): string {
 /** §35/§55 — the narrator's whole world, assembled. */
 export function buildNarratorMessages(input: NarrationInput): readonly NarratorMessage[] {
   const { locale } = input;
-  const plan = planAnswer(input.analysis, input.findings);
+  const requested = input.answerIntent ?? answerIntentFromResult(input.analysis, input.findings);
+  const plan = input.presentationPlan ?? planPresentation(input.analysis, input.findings, requested, input.method);
   const findings = [plan.lead, ...plan.support].filter((f): f is VerifiedFinding => f !== null);
 
   const sections: string[] = [
@@ -254,6 +296,17 @@ export function buildNarratorMessages(input: NarrationInput): readonly NarratorM
 
   if (input.method) sections.push("", locale === "ru" ? "=== КАК СЧИТАЛОСЬ ===" : "=== HOW IT WAS COMPUTED ===", renderMethod(input.method, locale));
 
+  // §23/§24 — the permitted figures, in one place, as strings to copy.
+  //
+  // The rule ("every number must come from the observations") is in the system
+  // prompt, but a rule stated across four paragraphs of findings is a rule the
+  // model has to re-derive while writing. This is the same numbers gathered
+  // into one line. No factIds appear here: an identifier in the prompt is an
+  // identifier that can end up in the prose, which is the «a1» incident, and
+  // the ids exist for the verifier, not for the writer.
+  const allowed = renderAllowedFigures(narrationFactsFor(input), locale);
+  if (allowed !== "") sections.push("", allowed);
+
   sections.push(
     "",
     plan.shape === "direct"
@@ -275,12 +328,7 @@ export function buildNarratorMessages(input: NarrationInput): readonly NarratorM
 
 /** §54 — the evidence table, when the plan decided one helps. */
 function evidenceTable(result: EngineResult, locale: NumberLocale): string {
-  return renderTableForUser(
-    result.fields.map((f) => f.name),
-    result.rows as readonly (readonly CellValue[])[],
-    locale,
-    12,
-  );
+  return renderTableForUser(result.fields.map((f) => f.name), result.rows as readonly (readonly CellValue[])[], locale, 12);
 }
 
 /**
@@ -296,60 +344,219 @@ function evidenceTable(result: EngineResult, locale: NumberLocale): string {
  * answers to it; that the model's phrasing failed a check is not something
  * they need to read about.
  */
-export function renderDeterministic(input: NarrationInput): string {
-  const plan = planAnswer(input.analysis, input.findings);
-  const { locale } = input;
-  const findings = [plan.lead, ...plan.support].filter((f): f is VerifiedFinding => f !== null);
+export interface DeterministicOptions {
+  readonly minimal?: boolean;
+}
 
-  if (findings.length === 0) {
-    // No observation could be drawn — the last resort, and the only place a
-    // bare table is still the honest answer.
+const HUMAN_RENDERABLE: ReadonlySet<string> = new Set([
+  "change",
+  "comparison",
+  "value",
+  "trend",
+  "extremum",
+  "volatility",
+  "stability",
+  "ranking",
+  "monotonicity",
+  "direction_change",
+  "empty_set",
+]);
+
+const MAX_DETERMINISTIC_FINDINGS = 4;
+
+export function deterministicRenderEligibility(input: NarrationInput): readonly VerifiedFinding[] | null {
+  if (input.method !== undefined) return null;
+  const requested = input.answerIntent ?? answerIntentFromResult(input.analysis, input.findings);
+  const plan = input.presentationPlan ?? planPresentation(input.analysis, input.findings, requested);
+  const chosen = [plan.lead, ...plan.support].filter((f): f is VerifiedFinding => f !== null).filter((f) => groundedStatement(f, input.locale) !== "");
+  if (chosen.length === 0 || requested.wantsTable || plan.showEvidenceTable) return null;
+  if (chosen.length === 0 || chosen.length > MAX_DETERMINISTIC_FINDINGS) return null;
+  const types = new Set(chosen.map((f) => f.findingType as string));
+  if (types.size > 2) return null;
+  for (const type of types) if (!HUMAN_RENDERABLE.has(type)) return null;
+  return chosen;
+}
+
+function groundedStatement(finding: VerifiedFinding, locale: NumberLocale): string {
+  const written = finding.statement.trim();
+  if (written !== "") return written;
+  const name = subjectLabel(finding.subjectRef, finding.subject).trim();
+  if (name === "") return "";
+  const figures = finding.values
+    .map((v) => {
+      const label = valueLabel(v.name, locale);
+      return label === null ? v.text : locale === "ru" ? `${label} ${v.text}` : `${label} ${v.text}`;
+    })
+    .slice(0, 3)
+    .join(", ");
+  const quotedName = locale === "ru" ? `«${name}»` : `"${name}"`;
+  if (figures === "") return locale === "ru" ? `Подходит ${quotedName}.` : `That is ${quotedName}.`;
+  return locale === "ru" ? `У ${quotedName} — ${figures}.` : `For ${quotedName}: ${figures}.`;
+}
+
+export function composeStatements(input: readonly VerifiedFinding[], locale: NumberLocale): readonly string[] {
+  const chosen = suppressRedundantSubjects(input);
+  if (chosen.length === 1) {
+    const only = chosen[0]!;
+    const expanded = statementFor(only, locale, { expand: true }).trim();
+    return [expanded === "" ? groundedStatement(only, locale) : expanded].filter((s) => s !== "");
+  }
+
+  const spans = chosen.map((f) => periodSpanSentence(f, locale));
+  const shared = spans[0] ?? "";
+  const allShare = shared !== "" && spans.every((s) => s === shared);
+  const written = chosen
+    .map((f) => {
+      const text = groundedStatement(f, locale);
+      return allShare && text.endsWith(shared) ? text.slice(0, text.length - shared.length).trimEnd() : text;
+    })
+    .filter((s) => s !== "");
+  const unique = [...new Set(written)];
+  return allShare ? [...unique, shared] : unique;
+}
+
+export function renderDeterministic(input: NarrationInput, options: DeterministicOptions = {}): string {
+  const { locale } = input;
+  const requested = input.answerIntent ?? answerIntentFromResult(input.analysis, input.findings);
+  const presentation = input.presentationPlan ?? planPresentation(input.analysis, input.findings, requested, input.method);
+  const speakable = [presentation.lead, ...presentation.support]
+    .filter((f): f is VerifiedFinding => f !== null)
+    .filter((f) => groundedStatement(f, locale) !== "");
+
+  if (speakable.length === 0) {
     if (input.analysis.primary.rows.length === 0) {
       return locale === "ru" ? "Ни один показатель не удовлетворяет заданному условию." : "No indicator matches that condition.";
+    }
+    if ((input.heldFindings ?? 0) > 0) {
+      return locale === "ru"
+        ? "Расчёт выполнен, но результат не удалось надёжно связать с конкретными объектами таблицы."
+        : "The calculation ran, but its result could not be reliably tied to specific entities in the table.";
     }
     return evidenceTable(input.analysis.primary, locale);
   }
 
-  const parts: string[] = findings.map((f) => f.statement).filter((s) => s !== "");
-  if (plan.caveats.length > 0) {
-    const notes = plan.caveats.map((c) => caveatText(c, locale)).join("; ");
+  const chosen = options.minimal === true ? speakable.slice(0, 1) : speakable;
+  const parts = [...composeStatements(chosen, locale)];
+
+  const caveats = options.minimal === true ? presentation.caveats.slice(0, 1) : presentation.caveats;
+  if (options.minimal !== true && caveats.length > 0) {
+    const notes = caveats.map((c) => caveatText(c, locale)).join("; ");
     parts.push(locale === "ru" ? `Оговорки: ${notes}.` : `Caveats: ${notes}.`);
+  } else if (options.minimal === true && caveats.length > 0) {
+    const first = caveats[0];
+    if (first) parts.push(locale === "ru" ? `Оговорка: ${caveatText(first, locale)}.` : `Caveat: ${caveatText(first, locale)}.`);
   }
+
   const prose = parts.join(" ");
-  return plan.showEvidenceTable ? `${prose}\n\n${evidenceTable(input.analysis.primary, locale)}` : prose;
+  if (options.minimal === true) return prose;
+  return presentation.showEvidenceTable ? `${prose}\n\n${evidenceTable(input.analysis.primary, locale)}` : prose;
 }
 
 /** §37 — the same numeric evidence gate, reused by adapting results into observations. */
 /** §21/§37 — the comparison as evidence, so its numbers are citable. */
-function comparisonObservation(comparison: MethodComparison): AgentObservation {
-  const ran = executedMethods(comparison);
-  const metricNames = [...new Set(ran.flatMap((m) => Object.keys(m.metrics)))];
-  const extra = Object.keys(comparison.selectionEvidence);
-  const rows: readonly CellValue[][] = ran.map((m) => [
-    m.name,
-    ...metricNames.map((k) => m.metrics[k] ?? null),
-    ...extra.map((k) => (m.name === comparison.selectedMethod ? (comparison.selectionEvidence[k] ?? null) : null)),
-  ]);
-  return { tool: "sandbox.method_comparison", ok: true, kind: "table", columns: ["method", ...metricNames, ...extra], rows, rowCount: rows.length };
-}
-
-function asObservation(result: EngineResult): AgentObservation {
-  return {
-    tool: result.tool,
-    ok: true,
-    kind: "table",
-    columns: result.fields.map((f) => f.name),
-    rows: result.rows as readonly (readonly CellValue[])[],
-    rowCount: result.rows.length,
-  };
-}
-
+/**
+ * §31/§37 — the findings themselves, as evidence the gate recognises.
+ *
+ * The gate derives its facts from RESULT ROWS, and a finding's values are not
+ * all in the rows: `absoluteChange` is computed by the insight layer from the
+ * first and last points, deterministically and once. The prompt offers that
+ * figure — «+31 — абсолютное изменение» — and the gate then refused the answer
+ * for citing a number "not in the data", which is how two good answers were
+ * lost in the first live run and one in the second.
+ *
+ * Showing a number and forbidding it is not a safety property, it is a bug in
+ * two halves. The half to fix is this one: what the narrator was shown is
+ * exactly what it may quote. The verification is not weakened — every value
+ * here was computed by the engine from the workbook, which is the same
+ * provenance the row facts have, and a figure the narrator invents still has
+ * no fact behind it.
+ */
 export interface NarratedAnswerV2 {
   readonly text: string;
   readonly usedFallback: boolean;
   readonly reasons: readonly string[];
   /** §71 — what the verifier objected to, for the trace. */
   readonly check?: NarrationCheck;
+  /**
+   * §26 — true when the ONLY objection was unsupported numbers.
+   *
+   * That is the one failure a second narration can fix on its own: the
+   * analysis, the results and the findings are all intact and re-running any
+   * of them would cost a planner round and a sandbox execution to produce
+   * identical inputs. Anything else — a causal claim, a leaked identifier, a
+   * superlative against the ranking — is a reasoning failure, and repeating
+   * the request is not a fix for one.
+   */
+  readonly retryableNarration: boolean;
+  /** §28 — the unsupported claims, for diagnosis. Debug-only; never shown. */
+  readonly unsupported: readonly UnsupportedClaim[];
+}
+
+/** §17 — the compiled numeric evidence for one narration, built once. */
+export function narrationFactsFor(input: NarrationInput): NarrationFactSet {
+  return compileNarrationFacts({
+    findings: input.findings,
+    primary: input.analysis.primary,
+    supporting: input.analysis.supporting,
+    ...(input.method?.comparison ? { comparison: input.method.comparison } : {}),
+    locale: input.locale,
+  });
+}
+
+/**
+ * §26 — the retry message: the rejected sentence, the offending numbers, and
+ * the facts that ARE allowed.
+ *
+ * Deliberately not a fresh narration request. A model told only "try again"
+ * rewrites from scratch and loses whatever was right; a model shown the one
+ * sentence that failed and the list it may quote from fixes that sentence.
+ */
+export function buildNarratorRetryMessages(
+  input: NarrationInput,
+  rejected: string,
+  unsupported: readonly UnsupportedClaim[],
+  answerGuidance = "",
+): readonly NarratorMessage[] {
+  const { locale } = input;
+  const ru = locale === "ru";
+  const base = buildNarratorMessages(input);
+  const requested = input.answerIntent ?? answerIntentFromResult(input.analysis, input.findings);
+  const offending = [...new Set(unsupported.map((u) => u.numericToken))].join(", ");
+  const sentences = [...new Set(unsupported.map((u) => u.claimText))].slice(0, 3);
+  const subjects = [...new Set(input.findings.map((f) => subjectLabel(f.subjectRef, f.subject)).filter((s) => isReadableLabel(s)))].slice(0, 20);
+
+  const tail: string[] = [
+    "",
+    ru ? "=== ВОПРОС ===" : "=== QUESTION ===",
+    input.request,
+    "",
+    ru ? "=== ПРЕДЫДУЩИЙ ОТВЕТ ОТКЛОНЁН ===" : "=== YOUR PREVIOUS ANSWER WAS REJECTED ===",
+    rejected,
+    "",
+  ];
+  if (unsupported.length > 0) {
+    tail.push(
+      ru ? `Эти числа не подтверждены наблюдениями: ${offending}.` : `These numbers are not supported by the observations: ${offending}.`,
+      ...(sentences.length > 0 ? [ru ? "Проблемные предложения:" : "The failing sentences:", ...sentences.map((s) => `  - ${s}`)] : []),
+      "",
+    );
+  }
+  if (answerGuidance.trim() !== "") tail.push(answerGuidance.trim(), "");
+  tail.push(ru ? "=== ФОРМА ОТВЕТА ===" : "=== ANSWER SHAPE ===", shapeInstruction(requested.shape, locale), "");
+  if (subjects.length > 0) {
+    tail.push(ru ? "=== НАЗВАНИЯ, КОТОРЫМИ МОЖНО ПОЛЬЗОВАТЬСЯ ===" : "=== SUBJECTS YOU MAY NAME ===", subjects.join(", "), "");
+  }
+  tail.push(
+    ru ? "=== ЧЕГО ДЕЛАТЬ НЕЛЬЗЯ ===" : "=== WHAT YOU MUST NOT DO ===",
+    ru ? "- не вводи чисел, которых нет в блоке НАБЛЮДЕНИЯ;" : "- do not introduce numbers absent from the observations;",
+    ru ? "- не добавляй рекомендаций и предложений что-нибудь проверить;" : "- do not add recommendations or suggestions to look into anything;",
+    ru ? "- не объясняй причины;" : "- do not explain causes;",
+    ru ? "- не описывай процесс анализа и не пересчитывай ничего." : "- do not describe the analysis process and do not recompute anything.",
+    "",
+    ru ? "Перепиши ответ." : "Rewrite the answer.",
+  );
+  const user = base[1]?.content ?? "";
+  return [base[0]!, { role: "user", content: `${user}\n${tail.join("\n")}` }];
 }
 
 /**
@@ -363,24 +570,78 @@ export interface NarratedAnswerV2 {
  *
  * State is never touched here; by the time narration runs, it already stands.
  */
-export function gateNarration(draft: string, input: NarrationInput): NarratedAnswerV2 {
+export function gateNarration(draft: string, input: NarrationInput, narratorAttempt = 1): NarratedAnswerV2 {
+  const nothing = { retryableNarration: false, unsupported: [] as readonly UnsupportedClaim[] };
   if (draft.trim() === "") {
-    return { text: renderDeterministic(input), usedFallback: true, reasons: ["empty narrator output"] };
+    return { text: renderDeterministic(input), usedFallback: true, reasons: ["empty narrator output"], ...nothing };
   }
-  const observations = [input.analysis.primary, ...input.analysis.supporting].map(asObservation);
+  // §37/§56 — NO FINDINGS means nothing verified to say, so nothing may be
+  // said. The numeric gate below cannot catch this on its own: a draft with no
+  // figures in it passes every numeric check trivially, and the live run
+  // produced the worst possible use of that hole — an analysis that computed
+  // 91 pairwise correlations, an insight layer that drew no observation from
+  // the result, and an answer that read «В таблице нет зафиксированных
+  // значений динамики продаж». Confidently false, fully verified, zero
+  // numbers. A wrong answer is worse than a refusal, and this is the only
+  // place that distinction can be enforced.
+  if (input.findings.length === 0 && input.analysis.primary.rows.length > 0) {
+    return {
+      text: renderDeterministic(input),
+      usedFallback: true,
+      reasons: ["no verified observation was drawn from the result, so no prose is licensed"],
+      ...nothing,
+    };
+  }
+  /* Legacy AgentObservation conversion removed in P0-4. */
   // §21 — the comparison's metrics are measured numbers the narrator was shown
   // on purpose, so the fact gate has to know about them. Without this, an
   // answer that cites the silhouette it was handed is rejected for using a
   // number "not in the data" and quietly replaced by the fallback.
-  const withComparison = input.method?.comparison ? [...observations, comparisonObservation(input.method.comparison)] : observations;
-  const facts = agentEvidenceFacts(withComparison);
-  const base = validateAgentAnswer(draft, facts, withComparison.map((o) => o.rowCount ?? 0));
-  const leaked = containsForbiddenLeak(draft);
-  const stage27 = verifyNarration(draft, input.findings, input.locale);
+  const narrationFacts = narrationFactsFor(input);
 
-  const reasons = [...base.reasons, ...stage27.reasons, ...(leaked ? ["internal identifier leaked"] : [])];
-  if (reasons.length === 0) return { text: draft, usedFallback: false, reasons: [], check: stage27 };
-  return { text: renderDeterministic(input), usedFallback: true, reasons, check: stage27 };
+  // Stage 27.x.1 §25 — ONE numeric authority, and it is the fact resolver.
+  //
+  // The Stage 26 gate's numeric clause and this resolver were answering the
+  // same question with different information, and where they disagreed the
+  // resolver was right: it knows a fact's UNIT, its deterministic rendering,
+  // and which spans of the text are entity names rather than claims. Running
+  // both would mean reporting a number twice and arguing with itself, so the
+  // tokens the resolver took responsibility for are handed over as settled,
+  // and everything the Stage 26 gate checks BESIDES numbers — causal claims,
+  // "combined" comparisons, superlatives against a ranking, leaked
+  // identifiers — runs exactly as before. Nothing is skipped; one check moved.
+  const rowCounts = [input.analysis.primary.rows.length, ...input.analysis.supporting.map((r) => r.rows.length)];
+  // Row counts come from the REAL results only. The findings table is a view
+  // of what was already shown, not a result anyone can open, so counting its
+  // rows would let "все 15 показателей" be checked against the wrong total.
+  const plan = input.presentationPlan;
+  const requiredFindings =
+    plan && plan.shape === "ranking" ? [plan.lead, ...plan.support].filter((f): f is VerifiedFinding => f !== null) : undefined;
+  const verification = verifyNarration({
+    draft,
+    findings: input.findings,
+    locale: input.locale,
+    request: input.request,
+    hasResults: input.analysis.primary.rows.length > 0,
+    facts: narrationFacts,
+    structural: new Set<number>([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 100, ...rowCounts]),
+    narratorAttempt,
+    ...(requiredFindings ? { requiredFindings } : {}),
+  });
+  if (verification.ok) {
+    return { text: draft, usedFallback: false, reasons: [], check: verification, retryableNarration: false, unsupported: [] };
+  }
+  return {
+    text: renderDeterministic(input),
+    usedFallback: true,
+    reasons: verification.reasons,
+    check: verification,
+    // §26 — a second narration is only worth a call when numbers were the
+    // whole problem. If anything else failed, the model did not merely quote
+    // badly, and asking again would spend a model call to be told the same.
+    retryableNarration: verification.retryableNarration,
+    unsupported: verification.unsupported,
+  };
 }
 
 /** Exposed for the trace and for tests: what the answer was allowed to say. */

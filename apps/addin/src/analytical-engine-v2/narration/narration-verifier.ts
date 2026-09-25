@@ -1,30 +1,37 @@
-// ---------------------------------------------------------------------------
-// Stage 27 §56 — what findings make checkable that result tables did not.
-//
-// The Stage 26 gate (`validateAgentAnswer`) still runs and is not weakened: it
-// rejects a number that no named result supports, and it rejects a bare causal
-// claim. This module adds the checks that only exist once observations are
-// typed — and one of them closes a hole the old gate cannot see.
-//
-// The hole is §53. `acceptableNumbers` deliberately accepts a fact's value in
-// EITHER scaling, so a fact of 0.0081 legitimises both "0.81" and "0.0081" in
-// the prose. That is right for quoting a fraction as a percentage, and it is
-// exactly wrong for percentage points: it means an answer may silently call a
-// +0.80 п.п. move "+0.80%" and pass. Both readings of the same fact are
-// numerically present; only one of them is true. So the percentage-point check
-// here is not about the digits at all — it is about the UNIT WORD next to
-// them, which is the only thing that distinguishes the two statements.
-// ---------------------------------------------------------------------------
-
 import type { NumberLocale } from "../../analysis/format-number.js";
 import type { VerifiedFinding } from "../insight/verified-finding.js";
+import { evaluateAnswer, type AnswerEvaluation } from "./answer-evaluator.js";
+import { resolveNumericClaims, type NarrationFactSet, type UnsupportedClaim } from "./narration-facts.js";
+// Stage 28G §19 — ONE leak list. The V2 facade had a verbatim copy of the six
+// patterns in `app/answer-leak.ts`, so the two answer domains could drift on
+// what counts as a leak. The list lives in the lower module, which depends on
+// nothing, and both domains read it.
+export { containsForbiddenLeak } from "../../app/answer-leak.js";
+import { containsForbiddenLeak } from "../../app/answer-leak.js";
 
-export interface NarrationCheck {
+export interface VerificationInput {
+  readonly draft: string;
+  readonly findings: readonly VerifiedFinding[];
+  readonly locale: NumberLocale;
+  readonly request?: string;
+  readonly hasResults?: boolean;
+  readonly facts?: NarrationFactSet;
+  readonly structural?: ReadonlySet<number>;
+  readonly narratorAttempt?: number;
+  readonly requiredFindings?: readonly VerifiedFinding[];
+}
+
+export interface VerificationResult {
   readonly ok: boolean;
   readonly reasons: readonly string[];
   /** §71 — which checks were applicable, for the trace. */
   readonly applied: readonly string[];
+  readonly unsupported: readonly UnsupportedClaim[];
+  readonly retryableNarration: boolean;
+  readonly answerQuality?: AnswerEvaluation;
 }
+
+export type NarrationCheck = VerificationResult;
 
 // ---------------------------------------------------------------------------
 // A note on word boundaries, learned the expensive way in Stage 26.8.
@@ -206,7 +213,7 @@ function checkSuperlatives(text: string, findings: readonly VerifiedFinding[], l
 }
 
 /** §49/§94 — an unhedged causal claim. A labelled hypothesis is allowed. */
-function checkCausalLanguage(text: string, locale: NumberLocale): readonly string[] {
+export function checkCausalLanguage(text: string, locale: NumberLocale): readonly string[] {
   const causal = locale === "ru" ? CAUSAL_RU : CAUSAL_EN;
   const hedged = locale === "ru" ? HEDGED_RU : HEDGED_EN;
   if (!causal.test(text)) return [];
@@ -244,7 +251,19 @@ function checkScoreExplained(text: string, findings: readonly VerifiedFinding[],
  * Returns reasons, never a rewritten answer: a failing draft is replaced by
  * the deterministic prose (§57), it is never patched into passing.
  */
-export function verifyNarration(draft: string, findings: readonly VerifiedFinding[], locale: NumberLocale): NarrationCheck {
+function checkRankingCoverage(text: string, requiredFindings: readonly VerifiedFinding[] | undefined): readonly string[] {
+  if (!requiredFindings || requiredFindings.length < 2) return [];
+  const missing = requiredFindings.filter((finding) => finding.subject !== "" && !finding.values.some((v) => text.includes(v.text)));
+  if (missing.length === 0) return [];
+  return [`the answer does not represent every requested item — missing: ${missing.map((f) => f.id).join(", ")}`];
+}
+
+function semanticVerification(
+  draft: string,
+  findings: readonly VerifiedFinding[],
+  locale: NumberLocale,
+  requiredFindings?: readonly VerifiedFinding[],
+): { reasons: string[]; applied: string[] } {
   const applied: string[] = [];
   const reasons: string[] = [];
 
@@ -261,5 +280,66 @@ export function verifyNarration(draft: string, findings: readonly VerifiedFindin
   applied.push("score_explained");
   reasons.push(...checkScoreExplained(draft, findings, locale));
 
-  return { ok: reasons.length === 0, reasons, applied };
+  applied.push("ranking_coverage");
+  reasons.push(...checkRankingCoverage(draft, requiredFindings));
+
+  return { reasons, applied };
+}
+
+export function verifyNarration(input: VerificationInput): VerificationResult;
+export function verifyNarration(draft: string, findings: readonly VerifiedFinding[], locale: NumberLocale): NarrationCheck;
+export function verifyNarration(
+  inputOrDraft: VerificationInput | string,
+  legacyFindings?: readonly VerifiedFinding[],
+  legacyLocale?: NumberLocale,
+): VerificationResult {
+  const input: VerificationInput = typeof inputOrDraft === "string"
+    ? { draft: inputOrDraft, findings: legacyFindings ?? [], locale: legacyLocale ?? "en" }
+    : inputOrDraft;
+  const semantic = semanticVerification(input.draft, input.findings, input.locale, input.requiredFindings);
+  const applied = [...semantic.applied];
+  const reasons = [...semantic.reasons];
+  let unsupported: readonly UnsupportedClaim[] = [];
+  let answerQuality: AnswerEvaluation | undefined;
+  let numericReasons: string[] = [];
+
+  if (input.facts) {
+    applied.push("numeric_claims");
+    const resolution = resolveNumericClaims({
+      text: input.draft,
+      facts: input.facts,
+      structural: input.structural ?? new Set<number>(),
+      narratorAttempt: input.narratorAttempt ?? 1,
+    });
+    unsupported = resolution.unsupported;
+    numericReasons = resolution.unsupported.map((u) =>
+      `unsupported numeric claim ${u.numericToken} (${u.reason}); it matches no verified fact — nearest: ${u.nearestFacts.join(", ") || "none"}`,
+    );
+    reasons.push(...numericReasons);
+  }
+
+  if (input.request !== undefined) {
+    applied.push("answer_quality");
+    answerQuality = evaluateAnswer({
+      answer: input.draft,
+      findings: input.findings,
+      request: input.request,
+      locale: input.locale,
+      hasResults: input.hasResults ?? input.findings.length > 0,
+    });
+    reasons.push(...answerQuality.details.map((d) => `${d.issue}${d.evidence ? `: ${d.evidence}` : ""}`));
+  }
+
+  applied.push("internal_leaks");
+  if (containsForbiddenLeak(input.draft)) reasons.push("internal identifier or execution detail leaked into narration");
+
+  const nonNumeric = reasons.filter((reason) => !reason.startsWith("unsupported numeric claim "));
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    applied,
+    unsupported,
+    retryableNarration: numericReasons.length > 0 && nonNumeric.length === 0,
+    ...(answerQuality ? { answerQuality } : {}),
+  };
 }

@@ -1,13 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 22 — the slash-command registry. A single typed source of truth for the
-// ten Stage 22 commands. UI (the palette) and routing (chat-client / use-agent)
-// both read from here instead of scattering command-name string checks.
-//
-// A slash command never introduces a parallel analytical path: it resolves to a
-// natural-language prompt plus a locked route, and flows through the existing
-// planner → GoalIntent → compiler → engine → validation → answer pipeline.
-// ---------------------------------------------------------------------------
-
 export type SlashCommandName =
   | "analyze"
   | "summary"

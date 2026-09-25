@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 26.2 §3/§24 — PERIOD and VALUE/SERIES tools.
-//
-// Adapters over `period-index`, `period-resolver` and `temporal-series`.
-//
-// §24's rule is enforced here rather than prompted for: a period argument must
-// be a canonical string that came out of one of these tools. A date the model
-// wrote itself resolves to nothing and returns AMBIGUOUS_PERIOD with the real
-// periods attached — there is no nearest-date substitution anywhere.
-// ---------------------------------------------------------------------------
-
 import type { CellValue } from "@sheet-agent/application";
 import { normalizeDateText } from "../../app/schema/analytical/period-resolver.js";
 import { getPointValue } from "../../app/schema/analytical/temporal-series.js";
@@ -36,6 +25,7 @@ function periodResult(
 
 const periodList: ToolSpec = {
   name: "period.list",
+  capability: "periods",
   description:
     "List every period of the table, oldest first. Takes no input and returns a period result whose rows are canonical period strings with their displayed headers. Use it to see what periods exist before choosing one.",
   args: {},
@@ -46,6 +36,7 @@ const periodList: ToolSpec = {
 
 const periodLatest: ToolSpec = {
   name: "period.latest",
+  capability: "periods",
   description:
     'The most recent period of the table. Takes no input and returns a one-row period result. Use it whenever the request says "the latest date", "the last period" or similar — never write a date yourself.',
   args: {},
@@ -62,6 +53,7 @@ const periodLatest: ToolSpec = {
 function neighbour(name: "period.previous" | "period.next", direction: -1 | 1): ToolSpec {
   return {
     name,
+    capability: "periods",
     description:
       direction === -1
         ? 'The period immediately BEFORE the given one. Takes a canonical period and returns a one-row period result. Use it with period.latest to build a "latest vs previous" comparison.'
@@ -89,6 +81,7 @@ function neighbour(name: "period.previous" | "period.next", direction: -1 | 1): 
 
 const periodResolve: ToolSpec = {
   name: "period.resolve",
+  capability: "periods",
   description:
     'Turn a date the user wrote ("01.12.2025", "2025-12-01", "December 2025") into the table\'s canonical period. Returns a one-row period result. Use it when the request names an explicit date; if that date is not a period of this table the tool refuses and lists the real ones rather than picking a nearby date.',
   args: { text: { type: "string", required: true, describe: "the date or period label the user wrote" } },
@@ -111,6 +104,7 @@ const periodResolve: ToolSpec = {
 
 const periodRange: ToolSpec = {
   name: "period.range",
+  capability: "periods",
   description:
     "The inclusive span between two canonical periods, oldest first. Returns a period_range result. Use it when an analysis should be restricted to a window rather than the whole history.",
   args: {
@@ -136,6 +130,7 @@ const periodRange: ToolSpec = {
 
 const valueAtPeriod: ToolSpec = {
   name: "value.at_period",
+  capability: "read_values",
   description:
     "The value of one or more metrics at ONE period, with the source cell. Takes metrics (or an inputRef whose metric universe to reuse) plus a canonical period, and returns a value result with one row per metric. Use it for a point lookup; use series.get when you need the whole history.",
   args: {
@@ -181,6 +176,7 @@ const valueAtPeriod: ToolSpec = {
 
 const seriesGet: ToolSpec = {
   name: "series.get",
+  capability: "series",
   description:
     "The full time series of ONE metric across every available period, with source cells. Returns a series result whose rows are PERIODS, not metrics — so it cannot be filtered or ranked by a per-metric field; use it to show a metric's history, and use event.* or analysis.* tools to characterise it.",
   args: {

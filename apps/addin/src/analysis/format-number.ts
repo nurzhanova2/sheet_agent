@@ -1,14 +1,3 @@
-// ---------------------------------------------------------------------------
-// Centralized deterministic number formatting (Stage 21.2.2 groundwork; the
-// wider label/localization sweep is Stage 21.2.5). Every user-facing
-// deterministic figure — VerifiedFact `formatted`, fallback tables, chart
-// warnings, activity counts — is produced here so the model never has to decide
-// precision, percentage scaling, thousands separators or ratio precision.
-//
-// RAW numeric values remain the source of truth (claim validation always uses
-// them). Only the DISPLAY string is rounded.
-// ---------------------------------------------------------------------------
-
 export type NumberLocale = "en" | "ru";
 
 /** Missing / null / non-finite display token (locale-independent). */

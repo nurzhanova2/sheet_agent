@@ -1,18 +1,3 @@
-// ---------------------------------------------------------------------------
-// Stage 24.13 — the minimum safe freshness policy.
-//
-// A remembered ResultRef / RowSetRef records a `sourceVersion`: the source
-// range's dimensions plus a cheap checksum of its values at the moment it was
-// computed. Before a retained result is used for a CONSEQUENTIAL action
-// (workbook mutation, chart insertion, a fresh engine computation over its
-// rows) the source is re-read and the version compared. If it changed — or
-// cannot be verified — stale row numbers are never applied blindly.
-//
-// Read-only conversational transforms (top N / sort / which-is-worst) do NOT
-// call this — they operate on data already held and are always presented as the
-// prior result.
-// ---------------------------------------------------------------------------
-
 import type { CellValue, ExcelPort } from "@sheet-agent/application";
 import { readAddressSnapshot } from "./workbook-context.js";
 

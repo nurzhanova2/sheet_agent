@@ -7,7 +7,6 @@ import {
   rememberChart,
   rememberResult,
   rememberRowSet,
-  rememberSheet,
   resolveReference,
 } from "./conversation-memory.js";
 import { MEMORY_LIMITS, type PendingClarification } from "./session-memory.js";
@@ -35,11 +34,9 @@ function resultInput(over: Partial<Parameters<typeof rememberResult>[1]> = {}) {
       ["Electronics", 222, 226],
     ],
     rowsTruncated: false,
-    facts: [],
     sourceSheet: "Sales Test Data",
     sourceRange: "Sales Test Data!A1:L121",
     sourceVersion: "121x12@Sales Test Data!A1:L121",
-    resolved: [],
     ...over,
   };
 }
@@ -145,7 +142,6 @@ describe("interpretClarificationAnswer", () => {
     originalPrompt: "Compare PD",
     route: "workbook_analysis",
     kind: "column_ambiguous",
-    resolved: [],
     observations: [],
     candidates: ["PD12", "PD_Lifetime", "PD_Model"],
     question: "Which PD column should I compare?",
@@ -164,70 +160,14 @@ describe("interpretClarificationAnswer", () => {
   it("returns unclear for an unrelated reply", () => {
     expect(interpretClarificationAnswer("what is PD anyway", pending)).toEqual({ kind: "unclear" });
   });
-
-  // Stage 24.6.1 — a norm clarification is a semantic choice, not a yes/no.
-  const norm: PendingClarification = {
-    id: "clr_n",
-    turnId: "t2",
-    createdAt: 0,
-    originalPrompt: "найди значения, выходящие за пределы нормы",
-    route: "workbook_analysis",
-    kind: "schema_norm",
-    resolved: [],
-    observations: [],
-    candidates: ["статистический выброс", "заданный порог"],
-    term: "норма",
-    question: "статистический выброс или заданный порог?",
-    answerShape: "one_of",
-  };
-  const thr: PendingClarification = { ...norm, kind: "schema_threshold", candidates: [], question: "какое значение порога?", answerShape: "free" };
-
-  it.each(["да", "ага", "угу", "ок", "хорошо", "yes", "yeah", "ok", "okay", "нет", "no"])(
-    "generic acknowledgement %j does NOT pick a branch",
-    (a) => expect(interpretClarificationAnswer(a, norm)).toEqual({ kind: "unclear" }),
-  );
-
-  it("explicit statistical answers resolve to the statistical marker", () => {
-    for (const a of ["статистический выброс", "статистические выбросы", "выброс", "выбросы", "IQR", "по IQR", "statistical outlier"]) {
-      expect(interpretClarificationAnswer(a, norm), a).toEqual({ kind: "choice", choices: ["statistical"] });
-    }
-  });
-
-  it("'порог' with no number → threshold marker (asks for the value later)", () => {
-    expect(interpretClarificationAnswer("порог", norm)).toEqual({ kind: "choice", choices: ["threshold"] });
-    expect(interpretClarificationAnswer("используй порог", norm)).toEqual({ kind: "choice", choices: ["threshold"] });
-  });
-
-  it("a numeric answer is the threshold value (percent normalised)", () => {
-    expect(interpretClarificationAnswer("0.2", norm)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-    expect(interpretClarificationAnswer("0,2", norm)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-    expect(interpretClarificationAnswer("20%", norm)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-    expect(interpretClarificationAnswer("порог 0.2", norm)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-  });
-
-  it("explicit ordinals map to the two branches", () => {
-    expect(interpretClarificationAnswer("первое", norm)).toEqual({ kind: "choice", choices: ["statistical"] });
-    expect(interpretClarificationAnswer("1", norm)).toEqual({ kind: "choice", choices: ["statistical"] });
-    expect(interpretClarificationAnswer("второе", norm)).toEqual({ kind: "choice", choices: ["threshold"] });
-    expect(interpretClarificationAnswer("2", norm)).toEqual({ kind: "choice", choices: ["threshold"] });
-  });
-
-  it("schema_threshold accepts only a number", () => {
-    expect(interpretClarificationAnswer("0.2", thr)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-    expect(interpretClarificationAnswer("20%", thr)).toEqual({ kind: "choice", choices: ["threshold:0.2"] });
-    expect(interpretClarificationAnswer("да", thr)).toEqual({ kind: "unclear" });
-    expect(interpretClarificationAnswer("порог", thr)).toEqual({ kind: "unclear" });
-  });
 });
 
 describe("projectMemoryForModel", () => {
   it("lists refs by id without dumping the row grid", () => {
-    let m = rememberResult(emptySessionMemory(), resultInput());
-    m = rememberSheet(m, { turnId: "t2", name: "Summary", createdByAgent: true });
+    const m = rememberResult(emptySessionMemory(), resultInput());
     const block = projectMemoryForModel(m, "en");
     expect(block).toMatch(/PRIOR RESULTS/);
     expect(block).toMatch(/\[res_\w+\] "Average Plan and Fact by Category" · grouped_table/);
-    expect(block).toMatch(/last created sheet: "Summary"/);
     expect(block).not.toMatch(/Accessories/); // no grid dump
   });
   it("is empty when nothing is remembered", () => {

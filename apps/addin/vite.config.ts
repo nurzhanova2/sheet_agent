@@ -38,6 +38,14 @@ export default defineConfig({
     strictPort: true,
     https: {},
   },
+  // Stage 27 §11/§12 — the analysis worker ships as an ES module.
+  //
+  // Vite's default worker format is IIFE, and an IIFE cannot be code-split.
+  // The analysis worker loads Pyodide, which splits, so the default fails the
+  // build outright rather than quietly producing something broken — this is
+  // the one line that lets the sandbox exist in the packaged add-in at all.
+  // WebView2 in Excel Desktop is Chromium-based and supports module workers.
+  worker: { format: "es" },
   build: {
     rollupOptions: {
       input: {

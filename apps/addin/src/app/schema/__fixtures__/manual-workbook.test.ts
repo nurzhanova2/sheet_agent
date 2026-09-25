@@ -1,19 +1,4 @@
 // @vitest-environment node
-// ---------------------------------------------------------------------------
-// Stage 26.8 §49 — dump the manual-testing sheets for the workbook builder.
-//
-// The sheets are defined in TypeScript because the §42 smoke suite consumes
-// them directly; this writes the same objects out as JSON so
-// `scripts/build-manual-workbook.mjs` can turn them into a real .xlsx without
-// duplicating a single number.
-//
-//   SHEET_AGENT_MANUAL_WORKBOOK_OUT=<file.json> npx vitest run \
-//     src/app/schema/__fixtures__/manual-workbook.test.ts
-//
-// It also carries the two invariants that matter for a workbook a person will
-// test against, and those run ALWAYS, not only when dumping.
-// ---------------------------------------------------------------------------
-
 import { writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { MANUAL_WORKBOOK } from "./manual-tables.js";

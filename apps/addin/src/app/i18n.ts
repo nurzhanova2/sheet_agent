@@ -1,16 +1,3 @@
-// ---------------------------------------------------------------------------
-// Small typed localization layer for APPLICATION-generated user-facing text
-// (Stage 21.2.5). RU + EN only. Not an i18n framework — a flat keyed table plus
-// a handful of parameterised helpers.
-//
-// RULES
-//  - Application-generated wording follows the user's request language.
-//  - Workbook identifiers (column headers: Plan, Fact, Category, Variance %,
-//    Revenue …) are NEVER translated — they are interpolated verbatim.
-//  - Typed error codes (COLUMN_NOT_AVAILABLE, VISUALIZATION_UNSUPPORTED …) stay
-//    stable English in logic; only their DISPLAY message is localized.
-// ---------------------------------------------------------------------------
-
 import type { ResponseLanguage } from "./language.js";
 
 export type Lang = ResponseLanguage;
@@ -271,6 +258,10 @@ const PROVIDER_ERRORS: Record<string, Record<Lang, string>> = {
   MALFORMED_RESPONSE: {
     en: "The AI provider returned an unreadable response.",
     ru: "AI-провайдер вернул нечитаемый ответ.",
+  },
+  EMPTY_MODEL_OUTPUT: {
+    en: "The AI provider produced no usable answer for this request. Try again.",
+    ru: "AI-провайдер не дал пригодного ответа на этот запрос. Повторите попытку.",
   },
   PROVIDER_ERROR: {
     en: "The AI provider rejected the request.",
