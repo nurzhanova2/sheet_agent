@@ -18,6 +18,7 @@ export interface VerificationInput {
   readonly facts?: NarrationFactSet;
   readonly structural?: ReadonlySet<number>;
   readonly narratorAttempt?: number;
+  readonly requiredFindings?: readonly VerifiedFinding[];
 }
 
 export interface VerificationResult {
@@ -250,7 +251,19 @@ function checkScoreExplained(text: string, findings: readonly VerifiedFinding[],
  * Returns reasons, never a rewritten answer: a failing draft is replaced by
  * the deterministic prose (§57), it is never patched into passing.
  */
-function semanticVerification(draft: string, findings: readonly VerifiedFinding[], locale: NumberLocale): { reasons: string[]; applied: string[] } {
+function checkRankingCoverage(text: string, requiredFindings: readonly VerifiedFinding[] | undefined): readonly string[] {
+  if (!requiredFindings || requiredFindings.length < 2) return [];
+  const missing = requiredFindings.filter((finding) => finding.subject !== "" && !finding.values.some((v) => text.includes(v.text)));
+  if (missing.length === 0) return [];
+  return [`the answer does not represent every requested item — missing: ${missing.map((f) => f.id).join(", ")}`];
+}
+
+function semanticVerification(
+  draft: string,
+  findings: readonly VerifiedFinding[],
+  locale: NumberLocale,
+  requiredFindings?: readonly VerifiedFinding[],
+): { reasons: string[]; applied: string[] } {
   const applied: string[] = [];
   const reasons: string[] = [];
 
@@ -267,6 +280,9 @@ function semanticVerification(draft: string, findings: readonly VerifiedFinding[
   applied.push("score_explained");
   reasons.push(...checkScoreExplained(draft, findings, locale));
 
+  applied.push("ranking_coverage");
+  reasons.push(...checkRankingCoverage(draft, requiredFindings));
+
   return { reasons, applied };
 }
 
@@ -280,7 +296,7 @@ export function verifyNarration(
   const input: VerificationInput = typeof inputOrDraft === "string"
     ? { draft: inputOrDraft, findings: legacyFindings ?? [], locale: legacyLocale ?? "en" }
     : inputOrDraft;
-  const semantic = semanticVerification(input.draft, input.findings, input.locale);
+  const semantic = semanticVerification(input.draft, input.findings, input.locale, input.requiredFindings);
   const applied = [...semantic.applied];
   const reasons = [...semantic.reasons];
   let unsupported: readonly UnsupportedClaim[] = [];
