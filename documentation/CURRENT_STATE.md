@@ -1,3 +1,90 @@
+STAGE 28G - SANDBOX CONSOLIDATION & FINAL ARCHITECTURE CLEANUP - PASS
+
+STAGE 28 IS ARCHITECTURE-COMPLETE. No competing same-domain analytical engine,
+no duplicated semantic ownership, one sandbox orchestration architecture, no
+architecture feature flag, full tests green, nothing in flight.
+
+ONE SANDBOX ORCHESTRATION LOOP
+`sandbox/analysis-runner.ts` -> `sandbox/executor.ts`. The flag-off iterative
+loop is REMOVED: the one-shot executor already carries a failed attempt's code
+and its typed error back to the generator inside `maxAttempts`, which is the
+bounded repair cycle the second architecture existed to provide; its other
+actions duplicated planner-level tool calls and the planner's own clarification
+lifecycle. Removed with it: `iterative-runner`, `analysis-agent`(+prompt,
+decision, observation), `capability/agent-tools`, `debug/agent-trace`,
+`feature-flag`, `ChatClient.decideAnalysisStep`, and the runtime session API
+(`step`/`look`/`inspect`/`finish`/`endSession` plus its `__sa_*` Python
+bootstrap and five worker message types). The `CLARIFICATION_REQUIRED` exit was
+unique to that loop and is recorded as REMOVED, not ported.
+
+SANDBOX SAFETY UNCHANGED
+Vendored Pyodide, no CDN, inline worker URL, AST allow-list, numeric preflight,
+network/filesystem/bridge isolation, hard timeout, cancellation, result schema
+and subject validation, provenance, retry visibility and full attempt retention
+all sit on the surviving path and were not touched. Sandbox retry lifecycles: 1.
+
+NO ARCHITECTURE FEATURE FLAGS
+`VITE_ANALYTICAL_AGENT_LOOP` removed (3 -> 0). `stage-27-4.test.ts` now asserts
+structurally that no source file selects an analytical architecture from an
+environment variable. `VITE_API_BASE_URL` / `VITE_LLM_MODEL` are ordinary
+runtime configuration and stay.
+
+countAsks REMOVED
+Coverage is answered from the planner contract - `PlanDecision.outputs` against
+`CompleteDecision.outputBindings` - by ONE `verifyCoverage`, used by the planner
+loop for its in-loop correction and read by the engine (via `PlannerRun.
+coverage`) for its one bounded retry. No stage after the planner reads the
+request text. Multi-ask coverage is unchanged in strength.
+
+WRITE-ONLY REPRESENTATIONS REMOVED
+`ResultRef.facts`; `ResultRef.resolved` / `PendingClarification.resolved` /
+`ResolvedWorkbookRef`; `SheetRef` / `lastCreatedSheet` / `rememberSheet`;
+`AnalyticalNoteFact` / `AnalyticalNoteStructure` (`financial-note.ts`);
+`SANDBOX_INPUT_RULES`; `resolvePeriod` (the Stage 24 semantic resolver -
+`normalizeDateText` is kept). The duplicate `containsForbiddenLeak` in
+`narration-verifier.ts` was consolidated onto `app/answer-leak.ts` - a safety
+list must have one definition.
+
+use-agent.ts DECOMPOSED  2 969 -> 1 825 LOC, 58 -> 48 imports
+Five modules, each owning a real invariant: `debug-console.ts` (the developer
+surface), `turn-helpers.ts` (per-turn primitives), `result-action-turn.ts` (what
+a write acts on), `analytical-turn.ts` (the V2 bridge), `flat-records-turn.ts`
+(the records / cross-sheet path). No behaviour rewritten - each block moved
+verbatim, verified by normalised token diff. `turn-ownership.test.ts` pins the
+boundaries. The <1 200 LOC objective was NOT reached; what remains is the
+slash-command / general-chat turn and its streaming transcript state machine,
+recorded as debt with its prerequisite named.
+
+METRICS (audit baseline -> after)
+production files 224 -> 201; production LOC 55 619 -> 44 837; live analytical
+engines 6 -> 3; engine identities 8 -> 3; raw-text semantic parsers 19 -> 11
+(none after the planner); period implementations 7 -> 3; registries 4 -> 2;
+representations 11 -> 8; answer-selection stages 9 -> 1; verification stages
+9 -> 7; sandbox loops 2 -> 1; state stores 2 -> 2 (disjoint); architecture
+flags 3 -> 0; production prompts 9 -> 6; use-agent.ts 4 369 -> 1 825 LOC.
+
+VALIDATION
+full add-in 1 903 passed / 25 skipped / 0 failed; root Node 29/29; tsc PASS;
+eslint PASS (one pre-existing unrelated warning). No companion run, no installer
+build, no live Qwen.
+
+REMAINING ARCHITECTURE DEBT
+use-agent.ts at 1 825 LOC; `routeTurn` rule 6; the `period.latest`/`.previous`
+ordering restatement; `PresentedViolations` re-scanning the shipped text; two
+registries and two state stores by domain.
+
+REMAINING PRODUCT CAPABILITY GAPS (not refactor blockers)
+V2 owns no `row_records` projection, no `group_by`/`filter_rows` over records,
+and no cross-sheet scope. Their capability paths are clean and non-duplicative.
+
+Report: documentation/stages/stage28/STAGE_28G_REPORT.md
+Architecture: documentation/stages/stage28/ARCHITECTURE_MAP.md section 0
+Commits: 718f776, f8d6075, 581055a, e74e891, a743863, 778ce9e
+Next: Stage 28H - Final Acceptance & Release Candidate. DO NOT build the
+installer before that session.
+
+READY FOR FINAL ACCEPTANCE.
+
 STAGE 28F - STATE & REGISTRY CONSOLIDATION - PASS
 
 P0 COMPLETE. P1 engine/routing: BLOCKED on 6->1 only (see 28E).
